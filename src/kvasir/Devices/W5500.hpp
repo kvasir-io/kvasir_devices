@@ -1,4 +1,5 @@
 #pragma once
+#include "../chip/core/src/core/SystemControl.hpp"
 #include "kvasir/Atomic/Atomic.hpp"
 #include "kvasir/Atomic/Queue.hpp"
 #include "kvasir/Util/StaticString.hpp"
@@ -7,6 +8,7 @@
 #include "kvasir/Util/using_literals.hpp"
 #include "uc_log/uc_log.hpp"
 
+#include <bit>
 #include <cassert>
 #include <charconv>
 #include <expected>
@@ -144,6 +146,7 @@ struct IPAddress {
         return std::copy(octets.begin(), octets.end(), first);
     }
 
+    constexpr bool       operator==(IPAddress const&) const = default;
     constexpr MacAddress toMulticastMac() const {
         auto mac = "01:00:5e:00:00:00"_mac;
 
@@ -255,7 +258,15 @@ struct ServerIdentifier {
 };
 struct IPAddressLeaseTime {
     static constexpr std::uint8_t ID{51};
-    std::uint64_t                 leaseTime;
+    std::uint32_t                 leaseTime{};
+};
+struct RenewalTimerValue {
+    static constexpr std::uint8_t ID{58};
+    std::uint32_t                 renewalTime{};
+};
+struct RebindTimerValue {
+    static constexpr std::uint8_t ID{59};
+    std::uint32_t                 rebindTime{};
 };
 struct MessageType {
     static constexpr std::uint8_t ID{53};
@@ -447,9 +458,67 @@ parseOptions(std::span<std::byte const> buffer, Callback cb) {
                 cb(mt);
             }
             break;
-
         case OptionFields::Pad::ID:
             {
+            }
+            break;
+        case OptionFields::IPAddressLeaseTime::ID:
+            {
+                if(buffer.empty()) {
+                    return std::nullopt;
+                }
+
+                std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
+                using T                             = OptionFields::IPAddressLeaseTime;
+                static constexpr std::uint8_t TSize = sizeof(T);
+                buffer                              = buffer.subspan(1);
+                UC_LOG_D("buffer: {} {} {::#x}", option, size, buffer.subspan(0, size));
+
+                if(size < TSize && buffer.size() < TSize) {
+                    return std::nullopt;
+                }
+                T mt;
+                std::memcpy(std::addressof(mt), buffer.data(), TSize);
+                buffer = buffer.subspan(size);
+                cb(mt);
+            }
+            break;
+        case OptionFields::RenewalTimerValue::ID:
+            {
+                if(buffer.empty()) {
+                    return std::nullopt;
+                }
+                std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
+                using T                             = OptionFields::RenewalTimerValue;
+                static constexpr std::uint8_t TSize = sizeof(T);
+                buffer                              = buffer.subspan(1);
+
+                if(size < TSize && buffer.size() < TSize) {
+                    return std::nullopt;
+                }
+                T mt;
+                std::memcpy(std::addressof(mt), buffer.data(), TSize);
+                buffer = buffer.subspan(size);
+                cb(mt);
+            }
+            break;
+        case OptionFields::RebindTimerValue::ID:
+            {
+                if(buffer.empty()) {
+                    return std::nullopt;
+                }
+                std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
+                using T                             = OptionFields::RebindTimerValue;
+                static constexpr std::uint8_t TSize = sizeof(T);
+                buffer                              = buffer.subspan(1);
+
+                if(size < TSize && buffer.size() < TSize) {
+                    return std::nullopt;
+                }
+                T mt;
+                std::memcpy(std::addressof(mt), buffer.data(), TSize);
+                buffer = buffer.subspan(size);
+                cb(mt);
             }
             break;
 
@@ -525,7 +594,7 @@ std::optional<std::span<std::byte const>> static dhcp_parse(
         return std::nullopt;
     }
 
-//    std::span<std::byte const> const sname{buffer.subspan(64)};
+    //    std::span<std::byte const> const sname{buffer.subspan(64)};
     buffer = buffer.subspan(64);
 
     if(128 > buffer.size()) {
@@ -533,7 +602,7 @@ std::optional<std::span<std::byte const>> static dhcp_parse(
         return std::nullopt;
     }
 
-  //  std::span<std::byte const> const file{buffer.subspan(128)};
+    //  std::span<std::byte const> const file{buffer.subspan(128)};
     buffer = buffer.subspan(128);
 
     if(4 > buffer.size()) {
@@ -563,7 +632,7 @@ struct DHCPHandler {
 
     DHCPHandler(Chip& c) : chip{c} {}
 
-    enum State { init, wait, sendRequest, waitForOffer, waitForAck, fin };
+    enum State { init, wait, sendRequest, waitForOffer, waitForAck, fin, checkLease };
 
     State s{State::init};
 
@@ -573,9 +642,12 @@ struct DHCPHandler {
 
     using Clock = typename Chip::Clock;
     typename Clock::time_point next{};
+    typename Clock::time_point timeout{};
+    typename Clock::time_point nextLeaseRenew{};
 
     std::optional<IPAddress> dns;
     std::optional<IPAddress> ip;
+    std::optional<IPAddress> oldIp;
 
     void handle() {
         switch(s) {
@@ -594,7 +666,8 @@ struct DHCPHandler {
                     }
                     if(socket) {
                         UC_LOG_D("dhcp socket created");
-                        s = State::sendRequest;
+                        timeout = Clock::now() + 5s;
+                        s       = State::sendRequest;
                     }
                 }
             }
@@ -615,7 +688,8 @@ struct DHCPHandler {
                              std::as_bytes(std::span{std::addressof(dhcp_data), 1})))
                         {
                             UC_LOG_D("dhcp send Request");
-                            s = State::waitForOffer;
+                            timeout = Clock::now() + 5s;
+                            s       = State::waitForOffer;
                         }
                     }
                 }
@@ -623,96 +697,141 @@ struct DHCPHandler {
             break;
         case State::waitForOffer:
             {
-                recvBuffer.resize(recvBuffer.max_size());
-                auto const packet = socket->recv_from(std::span{recvBuffer});
-                if(packet) {
-                    UC_LOG_D("dhcp got offer");
-                    UC_LOG_D(
-                      "recv IP: {}, Port: {}, Data: {::#x}",
-                      std::get<0>(*packet).octets,
-                      std::get<1>(*packet),
-                      std::get<2>(*packet));
-                    std::optional<IPAddress> ownIp;
-                    std::optional<IPAddress> server;
-                    //TODO make checks and timeout and ips...
-
-                    if(dhcp_parse<DHCPMessageType::Offer>(
-                         std::get<2>(*packet),
-                         dhcp_data.xid,
-                         [&]<typename T>(T const& x) {
-                             if constexpr(std::is_same_v<T, OptionFields::ServerIdentifier>) {
-                                 server = x.address;
-                             }
-                             if constexpr(std::is_same_v<T, OptionFields::RequestedIPAddress>) {
-                                 ownIp = x.address;
-                             }
-                         }))
-                    {
-                        if(server && ownIp) {
-                            dhcp_data.change_to_request(*server, *ownIp);
-                            socket->send_to(
-                              ServerAddress,
-                              ServerPort,
-                              std::as_bytes(std::span{std::addressof(dhcp_data), 1}));
-                            s = State::waitForAck;
-                        } else {
-                            UC_LOG_D("foo");
+                if(!(Clock::now() > timeout)) {
+                    recvBuffer.resize(recvBuffer.max_size());
+                    auto const packet = socket->recv_from(std::span{recvBuffer});
+                    if(packet) {
+                        UC_LOG_D("dhcp got offer");
+                        UC_LOG_D(
+                          "recv IP: {}, Port: {}, Data: {::#x}",
+                          std::get<0>(*packet).octets,
+                          std::get<1>(*packet),
+                          std::get<2>(*packet));
+                        std::optional<IPAddress> ownIp;
+                        std::optional<IPAddress> server;
+                        //TODO make checks and timeout and ips...
+                        if(dhcp_parse<DHCPMessageType::Offer>(
+                             std::get<2>(*packet),
+                             dhcp_data.xid,
+                             [&]<typename T>(T const& x) {
+                                 if constexpr(std::is_same_v<T, OptionFields::ServerIdentifier>) {
+                                     server = x.address;
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::RequestedIPAddress>) {
+                                     ownIp = x.address;
+                                 }
+                             }))
+                        {
+                            if(oldIp.has_value() && ownIp.has_value() && (ownIp.value() != oldIp.value())) {
+                                //reset einfügen
+                                UC_LOG_D("Ip changed! Restarting");
+                                apply(Kvasir::SystemControl::SystemReset());
+                            } else {
+                                if(server && ownIp) {
+                                    dhcp_data.change_to_request(*server, *ownIp);
+                                    socket->send_to(
+                                      ServerAddress,
+                                      ServerPort,
+                                      std::as_bytes(std::span{std::addressof(dhcp_data), 1}));
+                                    timeout = Clock::now() + 5s;
+                                    s       = State::waitForAck;
+                                } else {
+                                    UC_LOG_D("foo");
+                                }
+                            }
                         }
                     }
+                } else {
+                    UC_LOG_D("Timeout wait for offer");
+                    s = State::sendRequest;
                 }
             }
             break;
 
         case State::waitForAck:
             {
-                recvBuffer.resize(recvBuffer.max_size());
-                auto const packet = socket->recv_from(std::span{recvBuffer});
-                if(packet) {
-                    UC_LOG_D("dhcp got ack");
-                    UC_LOG_D(
-                      "recv IP: {}, Port: {}, Data: {::#x}",
-                      std::get<0>(*packet).octets,
-                      std::get<1>(*packet),
-                      std::get<2>(*packet));
-                    //TODO make checks and timeout and ips...
+                if(!(Clock::now() > timeout)) {
+                    recvBuffer.resize(recvBuffer.max_size());
+                    auto const packet = socket->recv_from(std::span{recvBuffer});
+                    if(packet) {
+                        UC_LOG_D("dhcp got ack");
+                        UC_LOG_D(
+                          "recv IP: {}, Port: {}, Data: {::#x}",
+                          std::get<0>(*packet).octets,
+                          std::get<1>(*packet),
+                          std::get<2>(*packet));
+                        //TODO make checks and timeout and ips...
 
-                    std::optional<Gateway>    gateway;
-                    std::optional<SubnetMask> subnetMask;
-                    std::optional<IPAddress>  ownIp;
-                    if(dhcp_parse<DHCPMessageType::Ack>(
-                         std::get<2>(*packet),
-                         dhcp_data.xid,
-                         [&]<typename T>(T const& x) {
-                             if constexpr(std::is_same_v<T, OptionFields::Router>) {
-                                 gateway = x.address;
-                             }
-                             if constexpr(std::is_same_v<T, OptionFields::SubnetMask>) {
-                                 subnetMask = x.address;
-                             }
-                             if constexpr(std::is_same_v<T, OptionFields::RequestedIPAddress>) {
-                                 ownIp = x.address;
-                             }
-                             if constexpr(std::is_same_v<T, OptionFields::DomainNameServer>) {
-                                 UC_LOG_D("DNS: {}", x.address.octets);
-                                 dns = x.address;
-                             }
-                         }))
-                    {
-                        if(gateway && subnetMask && ownIp) {
-                            ip = ownIp;
-                            s  = State::fin;
-                            chip.append_ip_config(*ownIp, *gateway, *subnetMask);
-                            ready = true;
-                        } else {
-                            UC_LOG_D("dhcp failed");
+                        std::optional<Gateway>       gateway;
+                        std::optional<SubnetMask>    subnetMask;
+                        std::optional<IPAddress>     ownIp;
+                        std::optional<std::uint32_t> ownLeaseTime;
+                        std::optional<std::uint32_t> ownRenewalTime;
+                        std::optional<std::uint32_t> ownRebindTime;
+                        if(dhcp_parse<DHCPMessageType::Ack>(
+                             std::get<2>(*packet),
+                             dhcp_data.xid,
+                             [&]<typename T>(T const& x) {
+                                 if constexpr(std::is_same_v<T, OptionFields::Router>) {
+                                     gateway = x.address;
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::SubnetMask>) {
+                                     subnetMask = x.address;
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::RequestedIPAddress>) {
+                                     ownIp = x.address;
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::IPAddressLeaseTime>) {
+                                     ownLeaseTime = std::byteswap(x.leaseTime);
+                                     if(ownLeaseTime) {
+                                         nextLeaseRenew
+                                           = Clock::now()
+                                           + std::chrono::seconds(ownLeaseTime.value());
+                                     }
+                                     UC_LOG_D("leaseTime: {}", ownLeaseTime);
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::RebindTimerValue>) {
+                                     ownRebindTime = std::byteswap(x.rebindTime);
+                                     UC_LOG_D("rebindTime: {}", ownRebindTime);
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::RenewalTimerValue>) {
+                                     ownRenewalTime = std::byteswap(x.renewalTime);
+                                     UC_LOG_D("renewTime: {}", ownRenewalTime);
+                                 }
+                                 if constexpr(std::is_same_v<T, OptionFields::DomainNameServer>) {
+                                     UC_LOG_D("DNS: {}", x.address.octets);
+                                     dns = x.address;
+                                 }
+                             }))
+                        {
+                            if(gateway && subnetMask && ownIp) {
+                                ip = ownIp;
+                                s  = State::fin;
+                                chip.append_ip_config(*ownIp, *gateway, *subnetMask);
+                                ready = true;
+                            } else {
+                                UC_LOG_D("dhcp failed");
+                            }
                         }
                     }
+                } else {
+                    UC_LOG_D("Timeout wait for offer");
+                    s = State::sendRequest;
                 }
             }
             break;
         case State::fin:
             {
                 socket.reset();
+                s = State::checkLease;
+            }
+            break;
+        case State::checkLease:
+            {
+                if(Clock::now() > nextLeaseRenew) {
+                    UC_LOG_D("Lease time reached, sending new request");
+                    s = State::init;
+                }
             }
             break;
         }
@@ -1026,7 +1145,6 @@ struct W5500 {
 
                     w5500.command_q.push(
                       typename Commands::Call_Socket{&SocketState::recv_ready, sn});
-
                 } else {
                     w5500.append_yield();
                     auto pos = recv_command_buffer.begin();
@@ -1038,7 +1156,6 @@ struct W5500 {
                         pos = add_read_rx_write(pos, recv_command_buffer.end(), w5500, sn);
                     });
                 }
-
             } else {
                 last_rx_write = rx_write;
                 w5500.selected([&]() {
@@ -1219,7 +1336,6 @@ struct W5500 {
                 });
                 w5500.command_q.push(
                   typename Commands::Call_Socket{&SocketState::check_sock_established, sn});
-
             } else {
                 UC_LOG_D("established");
                 connected         = true;
@@ -1290,7 +1406,6 @@ struct W5500 {
                 });
                 w5500.command_q.push(
                   typename Commands::Call_Socket{&SocketState::check_sock_closed, sn});
-
             } else {
                 UC_LOG_D("closed {}", sn.n);
                 error = false;
@@ -1912,10 +2027,14 @@ struct W5500 {
 
     State state{State::reset};
 
-    typename Clock::time_point timeout{};
+    bool linkDisconnectFlag{false};
 
-    static constexpr auto ResetPulseTime = std::chrono::milliseconds{1};
-    static constexpr auto ResetWaitTime  = std::chrono::milliseconds{2};
+    typename Clock::time_point timeout{};
+    typename Clock::time_point checkWaitTime{};
+
+    static constexpr auto ResetPulseTime    = std::chrono::milliseconds{1};
+    static constexpr auto ResetWaitTime     = std::chrono::milliseconds{2};
+    static constexpr auto CheckLinkWaitTime = std::chrono::seconds{2};
 
     void append_yield() { command_q.push(typename Commands::Yield{}); }
     void append_read_mode() {
@@ -1939,6 +2058,17 @@ struct W5500 {
             command_q.push(typename Commands::Read{commandBuffer.begin(), 1});
         });
         command_q.push(typename Commands::Call_Self{&W5500::check_link});
+    }
+    void append_link_disconnect_check() {
+        auto pos
+          = Header{CommonRegister::PHY_Configuration, Header::ReadWrite::Read, Header::BlockSelect::CommonRegister(), Header::Size::_1}
+              .write(commandBuffer.begin(), commandBuffer.end());
+
+        selected([&]() {
+            command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
+            command_q.push(typename Commands::Read{commandBuffer.begin(), 1});
+        });
+        command_q.push(typename Commands::Call_Self{&W5500::check_link_disconnect});
     }
 
     void append_chip_check() {
@@ -2082,6 +2212,16 @@ struct W5500 {
         }
     }
 
+    void check_link_disconnect() {
+        if((commandBuffer[0] & 0x1_b) == 0x1_b) {
+            UC_LOG_D("link ok");
+            linkDisconnectFlag = false;
+        } else {
+            UC_LOG_D("link not ok");
+            linkDisconnectFlag = true;
+        }
+    }
+
     std::atomic<bool>     command_in_progress = false;
     static constexpr auto dummyRecvByte       = 0xff_b;
 
@@ -2154,8 +2294,10 @@ struct W5500 {
                 }
                 apply(clear(Rst{}), set(Cs{}));
                 timeout              = now + ResetPulseTime;
+                checkWaitTime        = now + CheckLinkWaitTime;
                 state                = State::reset_wait;
                 ready                = false;
+                linkDisconnectFlag   = false;
                 currentEphemeralPort = EphemeralPortRange::min;
             }
             break;
@@ -2171,13 +2313,29 @@ struct W5500 {
         case State::reset_wait2:
             {
                 if(now >= timeout) {
-                    state = State::idle;
+                    timeout = now + ResetWaitTime;
+                    state   = State::idle;
                     append_reset();
                 }
             }
             break;
         case State::idle:
             {
+                //checks every x(2) seconds the link
+                if(now >= checkWaitTime) {
+                    append_link_disconnect_check();
+                    checkWaitTime = now + CheckLinkWaitTime;
+                    //if disconnected more than x seconds reset
+                    if(linkDisconnectFlag) {
+                        //TODO reset after 10 secs when disconnected
+                        if(now >= timeout){
+                            apply(Kvasir::SystemControl::SystemReset());
+                        }
+                    }else{
+                        timeout = now + 10s;
+                    }
+                }
+                //UC_LOG_D("state IDLE\n");
                 processCommandQ();
                 if(ready) {
                     dhcpHandler.handle();
