@@ -722,7 +722,10 @@ struct DHCPHandler {
                                  }
                              }))
                         {
-                            if(oldIp.has_value() && ownIp.has_value() && (ownIp.value() != oldIp.value())) {
+                            if(
+                              oldIp.has_value() && ownIp.has_value()
+                              && (ownIp.value() != oldIp.value()))
+                            {
                                 //reset einfügen
                                 UC_LOG_D("Ip changed! Restarting");
                                 apply(Kvasir::SystemControl::SystemReset());
@@ -1500,19 +1503,6 @@ struct W5500 {
             socket.free  = false;
 
             auto cmdpos = buffer.begin();
-
-            if(multicast) {
-                auto mac = multicast->toMulticastMac();
-                cmdpos
-                  = Header{SocketRegister::DestinationHardwareAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::variable}
-                      .write(cmdpos, buffer.end());
-                cmdpos = mac.write(cmdpos, buffer.end());
-
-                w5500->selected([&]() {
-                    w5500->command_q.push(typename Commands::Write{buffer.begin(), cmdpos});
-                });
-            }
-
             auto pos = cmdpos;
 
             pos
@@ -1532,7 +1522,7 @@ struct W5500 {
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
-
+/* Troubles with this blob while connecting under Windows
             if(multicast) {
                 pos
                   = Header{SocketRegister::DestinationIPAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_4}
@@ -1546,6 +1536,7 @@ struct W5500 {
                 *pos++ = std::byte(port >> 8);
                 *pos++ = std::byte(port & 0xff);
             }
+*/
             pos
               = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
                   .write(pos, buffer.end());
@@ -2328,10 +2319,10 @@ struct W5500 {
                     //if disconnected more than x seconds reset
                     if(linkDisconnectFlag) {
                         //TODO reset after 10 secs when disconnected
-                        if(now >= timeout){
+                        if(now >= timeout) {
                             apply(Kvasir::SystemControl::SystemReset());
                         }
-                    }else{
+                    } else {
                         timeout = now + 10s;
                     }
                 }
