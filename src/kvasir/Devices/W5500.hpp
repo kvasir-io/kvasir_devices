@@ -1,5 +1,4 @@
 #pragma once
-#include "../chip/core/src/core/SystemControl.hpp"
 #include "kvasir/Atomic/Atomic.hpp"
 #include "kvasir/Atomic/Queue.hpp"
 #include "kvasir/Util/StaticString.hpp"
@@ -539,7 +538,7 @@ parseOptions(std::span<std::byte const> buffer, Callback cb) {
 }
 
 template<DHCPMessageType AcceptedMessageType, typename Callback>
-std::optional<std::span<std::byte const>> static dhcp_parse(
+std::optional<std::span<std::byte const>> dhcp_parse(
   std::span<std::byte const> buffer,
   std::uint32_t              xid,
   Callback                   cb) {
