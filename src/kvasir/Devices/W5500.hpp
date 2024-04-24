@@ -98,7 +98,7 @@ struct MacAddress {
     }
 };
 
-constexpr MacAddress operator"" _mac(char const* str, std::size_t n) {
+constexpr MacAddress operator""_mac(char const* str, std::size_t n) {
     return MacAddress{
       std::string_view{str, n}
     };
@@ -160,17 +160,17 @@ struct IPAddress {
 struct SubnetMask : IPAddress {};
 struct Gateway : IPAddress {};
 
-constexpr IPAddress operator"" _ip(char const* str, std::size_t n) {
+constexpr IPAddress operator""_ip(char const* str, std::size_t n) {
     return IPAddress{
       std::string_view{str, n}
     };
 }
-constexpr SubnetMask operator"" _subnetMask(char const* str, std::size_t n) {
+constexpr SubnetMask operator""_subnetMask(char const* str, std::size_t n) {
     return SubnetMask{
       std::string_view{str, n}
     };
 }
-constexpr Gateway operator"" _gateway(char const* str, std::size_t n) {
+constexpr Gateway operator""_gateway(char const* str, std::size_t n) {
     return Gateway{
       std::string_view{str, n}
     };
