@@ -788,7 +788,7 @@ struct DHCPHandler {
                                      if(ownLeaseTime) {
                                          nextLeaseRenew
                                            = Clock::now()
-                                           + std::chrono::seconds(ownLeaseTime.value());
+                                           + std::chrono::seconds(ownLeaseTime.value()) / 2;
                                      }
                                      UC_LOG_D("leaseTime: {}", ownLeaseTime);
                                  }
@@ -808,6 +808,7 @@ struct DHCPHandler {
                         {
                             if(gateway && subnetMask && ownIp) {
                                 ip = ownIp;
+                                oldIp = ip;
                                 s  = State::fin;
                                 chip.append_ip_config(*ownIp, *gateway, *subnetMask);
                                 ready = true;
