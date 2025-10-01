@@ -1,0 +1,76 @@
+name: Trigger Kvasir SDK Rebuild
+
+on:
+    push:
+        branches: [master]
+    workflow_dispatch:
+
+jobs:
+    trigger-kvasir-rebuild:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Trigger Kvasir SDK container rebuild
+              uses: actions/github-script@v7
+              with:
+                github-token: ${{ secrets.CROSS_REPO_TOKEN }}
+                script: |
+                    try {
+                        await github.rest.actions.createWorkflowDispatch({
+                            owner: context.repo.owner,
+                            repo: 'Kvasir_SDK',
+                            workflow_id: 'docker-build.yml',
+                            ref: 'master'
+                        });
+                        console.log('✅ Successfully triggered Kvasir SDK container rebuild');
+                    } catch (error) {
+                        console.log(`❌ Could not trigger Kvasir SDK container rebuild: ${error.message}`);
+                        core.setFailed(error.message);
+                    }
+
+    notify-status:
+        runs-on: ubuntu-latest
+        needs: [trigger-kvasir-rebuild]
+        if: always()
+        steps:
+            - name: Set trigger status
+              run: |
+                if [ "${{ needs.trigger-kvasir-rebuild.result }}" = "success" ]; then
+                  echo "TRIGGER_STATUS=success" >> $GITHUB_ENV
+                  echo "TRIGGER_MESSAGE=✅ Successfully triggered Kvasir SDK rebuild" >> $GITHUB_ENV
+                elif [ "${{ needs.trigger-kvasir-rebuild.result }}" = "failure" ]; then
+                  echo "TRIGGER_STATUS=failure" >> $GITHUB_ENV
+                  echo "TRIGGER_MESSAGE=❌ Failed to trigger Kvasir SDK rebuild" >> $GITHUB_ENV
+                else
+                  echo "TRIGGER_STATUS=cancelled" >> $GITHUB_ENV
+                  echo "TRIGGER_MESSAGE=🚫 Trigger was cancelled" >> $GITHUB_ENV
+                fi
+
+            - name: Update commit status
+              uses: actions/github-script@v7
+              with:
+                script: |
+                    const status = process.env.TRIGGER_STATUS;
+                    const message = process.env.TRIGGER_MESSAGE;
+
+                    let state;
+                    if (status === 'success') state = 'success';
+                    else if (status === 'failure') state = 'failure';
+                    else state = 'error';
+
+                    await github.rest.repos.createCommitStatus({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      sha: context.sha,
+                      state: state,
+                      target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                      description: message,
+                      context: 'Kvasir SDK Trigger'
+                    });
+
+            - name: Create summary
+              run: |-
+                echo "## Kvasir SDK Trigger Status" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "${{ env.TRIGGER_MESSAGE }}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "This workflow triggered a rebuild of the Kvasir SDK container to include the latest kvasir_devices changes." >> $GITHUB_STEP_SUMMARY
