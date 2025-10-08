@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+
 namespace Kvasir {
 template<typename Clock, typename SPI, typename Cs, typename Rvs, typename Rst>
 struct ADS8675 {

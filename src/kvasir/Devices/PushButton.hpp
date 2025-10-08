@@ -80,19 +80,21 @@ struct PushButton {
                 return false;
             }
         }
-        if(
-          !Config::useHit && !Config::useLong && !Config::useShortRelease
-          && !Config::useLongRelease) {
+        if(!Config::useHit && !Config::useLong && !Config::useShortRelease
+           && !Config::useLongRelease)
+        {
             return false;
         }
         return true;
     }
 
-    static_assert(isConfigValid(), "Config Invalid");
+    static_assert(isConfigValid(),
+                  "Config Invalid");
 
     struct EventBaseTime {
         tp time{};
     };
+
     struct EventBaseNoTime {};
 
     using EventBase = std::conditional_t<Config::useTime, EventBaseTime, EventBaseNoTime>;
@@ -117,8 +119,9 @@ struct PushButton {
     enum class Type_R : std::uint8_t { Release_Long };
 
     static constexpr auto Type_ = []() {
-        if constexpr(
-          Config::useHit && Config::useShortRelease && Config::useLong && Config::useLongRelease) {
+        if constexpr(Config::useHit && Config::useShortRelease && Config::useLong
+                     && Config::useLongRelease)
+        {
             return Type_HSLR{};
         } else if constexpr(Config::useShortRelease && Config::useLong && Config::useLongRelease) {
             return Type_SLR{};
@@ -156,10 +159,10 @@ struct PushButton {
 
     static inline Kvasir::Atomic::Queue<Event, EventQSize> queue{};
 
-    using lastTime_t = std::conditional_t<
-      Config::useLong,
-      std::atomic<tp>,
-      std::conditional_t<Config::useTime || Config::useLongRelease, tp, bool>>;
+    using lastTime_t
+      = std::conditional_t<Config::useLong,
+                           std::atomic<tp>,
+                           std::conditional_t<Config::useTime || Config::useLongRelease, tp, bool>>;
 
     static inline lastTime_t lastTime{};
 
@@ -236,6 +239,7 @@ struct PushButton {
             }
         }
     }
+
     template<typename Callback>
     static void handler(Callback cb) {
         if(Event e; queue.pop_into(e)) {

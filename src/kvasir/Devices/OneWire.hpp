@@ -1,7 +1,8 @@
 #pragma once
 #include "kvasir/Atomic/Queue.hpp"
-#include <cstdint>
+
 #include <cassert>
+#include <cstdint>
 
 namespace Kvasir {
 template<typename Clock, typename Pin, std::size_t BufferSize_>
@@ -10,10 +11,10 @@ struct OneWire {
     using tp                                = typename Clock::time_point;
     enum class State { idle, blocked, resetpulse, sending, receiveing };
     enum class OperationState { succeeded, failed, ongoing };
-    inline static tp                                           waitTime_{};
-    inline static tp                                           timeoutTime_{};
-    inline static State                                        state_{State::idle};
-    inline static OperationState                               operationState_{OperationState::succeeded};
+    inline static tp             waitTime_{};
+    inline static tp             timeoutTime_{};
+    inline static State          state_{State::idle};
+    inline static OperationState operationState_{OperationState::succeeded};
     inline static Kvasir::Atomic::Queue<std::byte, BufferSize> buffer_{};
     inline static std::uint8_t                                 receiveSize_{};
     inline static std::uint8_t                                 bitCount_{};
@@ -26,7 +27,8 @@ struct OneWire {
     }
 
     template<typename OIT>
-    static void getReceivedBytes(OIT first, OIT last) {
+    static void getReceivedBytes(OIT first,
+                                 OIT last) {
         while(first != last) {
             assert(!buffer_.empty());
             *first = buffer_.front();
@@ -53,13 +55,15 @@ struct OneWire {
         }
         return false;
     }
+
     static void release() {
         assert(state_ != State::idle);   // TODO
         state_ = State::idle;
     }
 
     template<typename C>
-    static void send(tp const& currentTime, C const& c) {
+    static void send(tp const& currentTime,
+                     C const&  c) {
         //assert(state_ == Kvasir::none_of(State::sending, State::receiveing, State::resetpulse));
         buffer_.clear();
         buffer_.push(c);
@@ -69,7 +73,8 @@ struct OneWire {
         startResetPulse(currentTime);
     }
 
-    static void receive(tp const& currentTime, std::uint8_t size) {
+    static void receive(tp const&    currentTime,
+                        std::uint8_t size) {
         //assert(state_ == Kvasir::none_of(State::sending, State::receiveing, State::resetpulse));
         assert(size <= buffer_.max_size());
         buffer_.clear();
@@ -81,7 +86,9 @@ struct OneWire {
     }
 
     template<typename C>
-    static void send_receive(tp const& currentTime, C const& c, std::uint8_t size) {
+    static void send_receive(tp const&    currentTime,
+                             C const&     c,
+                             std::uint8_t size) {
         //assert(state_ == Kvasir::none_of(State::sending, State::receiveing, State::resetpulse));
         assert(size <= buffer_.max_size());
         buffer_.clear();
@@ -97,58 +104,66 @@ struct OneWire {
         auto const currentTime = Clock::now();
         switch(state_) {
         case State::idle:
-        case State::blocked: {
-        } break;
-        case State::resetpulse: {
-            if(currentTime > waitTime_) {
-                pinSet();
-                Clock::template delay<std::chrono::microseconds, 70>();
-                if(pinRead()) {
-                    state_          = State::blocked;
-                    operationState_ = OperationState::failed;
-                } else {
-                    waitTime_ = currentTime + 410us;
-                    bitCount_ = 0;
-                    state_    = State::sending;
-                }
+        case State::blocked:
+            {
             }
-        } break;
-        case State::sending: {
-            if(currentTime > waitTime_) {
-                if(buffer_.empty()) {
-                    state_ = State::receiveing;
-                } else {
-                    auto b   = buffer_.front();
-                    auto bit = ((b >> bitCount_) & 1_b) == 1_b;
-                    write_bit(bit);
-                    ++bitCount_;
-                    if(bitCount_ == 8) {
+            break;
+        case State::resetpulse:
+            {
+                if(currentTime > waitTime_) {
+                    pinSet();
+                    Clock::template delay<std::chrono::microseconds, 70>();
+                    if(pinRead()) {
+                        state_          = State::blocked;
+                        operationState_ = OperationState::failed;
+                    } else {
+                        waitTime_ = currentTime + 410us;
                         bitCount_ = 0;
-                        buffer_.pop();
+                        state_    = State::sending;
                     }
-                    waitTime_ = currentTime + 64us;
                 }
             }
-        } break;
-        case State::receiveing: {
-            if(currentTime > waitTime_) {
-                if(receiveSize_ == 0) {
-                    operationState_ = OperationState::succeeded;
-                    state_          = State::blocked;
-                } else {
-                    auto b = std::byte(read_bit());
-                    currentByte_ |= b << bitCount_;
-                    ++bitCount_;
-                    if(bitCount_ == 8) {
-                        bitCount_ = 0;
-                        buffer_.push(currentByte_);
-                        currentByte_ = 0_b;
-                        --receiveSize_;
+            break;
+        case State::sending:
+            {
+                if(currentTime > waitTime_) {
+                    if(buffer_.empty()) {
+                        state_ = State::receiveing;
+                    } else {
+                        auto b   = buffer_.front();
+                        auto bit = ((b >> bitCount_) & 1_b) == 1_b;
+                        write_bit(bit);
+                        ++bitCount_;
+                        if(bitCount_ == 8) {
+                            bitCount_ = 0;
+                            buffer_.pop();
+                        }
+                        waitTime_ = currentTime + 64us;
                     }
-                    waitTime_ = currentTime + 64us;
                 }
             }
-        } break;
+            break;
+        case State::receiveing:
+            {
+                if(currentTime > waitTime_) {
+                    if(receiveSize_ == 0) {
+                        operationState_ = OperationState::succeeded;
+                        state_          = State::blocked;
+                    } else {
+                        auto b = std::byte(read_bit());
+                        currentByte_ |= b << bitCount_;
+                        ++bitCount_;
+                        if(bitCount_ == 8) {
+                            bitCount_ = 0;
+                            buffer_.push(currentByte_);
+                            currentByte_ = 0_b;
+                            --receiveSize_;
+                        }
+                        waitTime_ = currentTime + 64us;
+                    }
+                }
+            }
+            break;
         }
     }
 
@@ -156,8 +171,11 @@ struct OneWire {
         pinClear();
         waitTime_ = currentTime + 480us;
     }
+
     static void pinSet() { apply(makeInput(Pin{})); }
+
     static void pinClear() { apply(makeOutput(Pin{}), clear(Pin{})); }
+
     static bool pinRead() { return apply(read(Pin{})); }
 
     static void write_bit(bool v) {
@@ -181,7 +199,8 @@ struct OneWire {
     }
 
     template<typename IIT>
-    static std::byte crc(IIT first, IIT last) {
+    static std::byte crc(IIT first,
+                         IIT last) {
         static constexpr std::array crcTable{0x00_b,
                                              0x9D_b,
                                              0x23_b,

@@ -5,8 +5,11 @@
 
 namespace Kvasir { namespace _11AA02E48 {
 
-    template<typename Clock, typename Pin>
-    std::optional<std::array<std::byte, 6>> readMacBlocking() {
+    template<typename Clock,
+             typename Pin>
+    std::optional<std::array<std::byte,
+                             6>>
+    readMacBlocking() {
         static constexpr std::size_t CLKPeriod = 50;
         bool                         error     = false;
 
@@ -95,8 +98,11 @@ namespace Kvasir { namespace _11AA02E48 {
         return mac;
     }
 
-    template<typename Clock, typename Pin>
-    std::optional<std::array<std::byte, 6>> readMacBlockingRetry(std::size_t retrys) {
+    template<typename Clock,
+             typename Pin>
+    std::optional<std::array<std::byte,
+                             6>>
+    readMacBlockingRetry(std::size_t retrys) {
         std::optional<std::array<std::byte, 6>> mac;
         while(!mac && retrys != 0) {
             mac = readMacBlocking<Clock, Pin>();

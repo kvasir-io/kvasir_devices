@@ -5,11 +5,11 @@
 
 #include <array>
 #include <bitset>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <optional>
 #include <variant>
-#include <cassert>
 
 namespace Kvasir {
 template<typename I2C, typename Clock>
@@ -25,14 +25,18 @@ struct Pca9956b : SharedBusDevice<I2C> {
 
     struct Init {
         explicit Init(tp t) : timeout{t} {}
+
         tp timeout{};
     };
+
     struct Idle {
         tp timeout{};
     };
+
     struct SendWait {
         bool* reseter;
     };
+
     struct ReadWait {};
 
     struct Registers {
@@ -70,11 +74,13 @@ struct Pca9956b : SharedBusDevice<I2C> {
     static constexpr auto error_read_interval{1000ms};
     static constexpr auto error_read_interval_after_set{10ms};
 
-    static_assert(
-      I2C::BufferSize >= std::max({ledOutSize, irefSize, pwmSize}),
-      "I2C buffer to small");
+    static_assert(I2C::BufferSize >= std::max({ledOutSize,
+                                               irefSize,
+                                               pwmSize}),
+                  "I2C buffer to small");
 
-    constexpr Pca9956b(std::uint8_t address, std::uint16_t rExt)
+    constexpr Pca9956b(std::uint8_t  address,
+                       std::uint16_t rExt)
       : st_{Init{tp{} + startup_time}}
       , i2caddress{address}
       , rExt_{rExt}
@@ -90,34 +96,32 @@ struct Pca9956b : SharedBusDevice<I2C> {
       , pwmChanged_{false} {}
 
     template<typename PWM>
-    void
-      setPwmAll(PWM pwm) {
+    void setPwmAll(PWM pwm) {
         pwmAllChanged_ = true;
         pwmAll_        = std::byte(pwm);
         std::generate(std::next(begin(pwm_)), end(pwm_), [&] { return pwmAll_; });
     }
 
-    constexpr std::byte
-      calcIref(std::uint16_t rExt, std::uint16_t current) {
+    constexpr std::byte calcIref(std::uint16_t rExt,
+                                 std::uint16_t current) {
         return std::byte((current * rExt * 4U) / 9000U);
     }
 
-    void
-      setCurrentAll(std::uint16_t current) {
+    void setCurrentAll(std::uint16_t current) {
         irefAllChanged_ = true;
         irefAll_        = calcIref(rExt_, current);
         std::generate(std::next(begin(iref_)), end(iref_), [&] { return irefAll_; });
     }
 
-    void
-      setLedOut(std::array<std::byte, 6> const& ledOut) {
+    void setLedOut(std::array<std::byte,
+                              6> const& ledOut) {
         ledOutChanged_ = true;
         std::copy(begin(ledOut), end(ledOut), std::next(begin(ledOut_)));
     }
 
     template<typename PWM>
-    void
-      setPwm(std::size_t index, PWM pwm) {
+    void setPwm(std::size_t index,
+                PWM         pwm) {
         assert(pwm_.size() > index + 1);
         if(pwm_[index + 1] == std::byte(pwm)) {
             return;
@@ -126,8 +130,8 @@ struct Pca9956b : SharedBusDevice<I2C> {
         pwm_[index + 1] = std::byte(pwm);
     }
 
-    void
-      setCurrent(std::size_t index, std::uint16_t current) {
+    void setCurrent(std::size_t   index,
+                    std::uint16_t current) {
         assert(iref_.size() > index + 1);
         auto ir = calcIref(rExt_, current);
         if(iref_[index + 1] == ir) {
@@ -138,20 +142,25 @@ struct Pca9956b : SharedBusDevice<I2C> {
     }
 
     struct Resetter {
-        Resetter(bool& a_, bool& b_, bool& c_, bool& d_, bool& e_)
+        Resetter(bool& a_,
+                 bool& b_,
+                 bool& c_,
+                 bool& d_,
+                 bool& e_)
           : a{a_}
           , b{b_}
           , c{c_}
           , d{d_}
           , e{e_} {}
-        void
-          reset() {
+
+        void reset() {
             a = true;
             b = true;
             c = true;
             d = false;
             e = false;
         }
+
         bool& a;
         bool& b;
         bool& c;
@@ -164,15 +173,17 @@ struct Pca9956b : SharedBusDevice<I2C> {
         using Ts::operator()...;
     };
     template<class... Ts>
-    overloaded(Ts...)->overloaded<Ts...>;
+    overloaded(Ts...) -> overloaded<Ts...>;
 
-    template<typename Variant, typename... Matchers>
-    auto match(Variant&& variant, Matchers&&... matchers) {
-        return std::visit(overloaded{std::forward<Matchers>(matchers)...}, std::forward<Variant>(variant));
+    template<typename Variant,
+             typename... Matchers>
+    auto match(Variant&& variant,
+               Matchers&&... matchers) {
+        return std::visit(overloaded{std::forward<Matchers>(matchers)...},
+                          std::forward<Variant>(variant));
     }
 
-    void
-      handler() {
+    void handler() {
         auto const currentTime = Clock::now();
         if(auto r
            = Resetter{ledOutChanged_, pwmChanged_, irefChanged_, irefAllChanged_, pwmAllChanged_};

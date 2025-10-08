@@ -12,7 +12,8 @@ struct Ads131m0x {
     static constexpr auto MaxChannels = 8;
     // needed config
     // numChannels
-    static_assert(MaxChannels >= Config::numChannels && Config::numChannels != 0, "wrong channels");
+    static_assert(MaxChannels >= Config::numChannels && Config::numChannels != 0,
+                  "wrong channels");
 
     using tp = typename Clock::time_point;
 

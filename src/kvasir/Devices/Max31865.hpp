@@ -1,5 +1,6 @@
 #include <array>
 #include <optional>
+
 namespace Kvasir {
 
 template<typename Clock, typename SPI, typename CsPin, typename DrdyPin>
@@ -27,6 +28,7 @@ struct Max31865 {
     std::array<std::byte, 3>                  readoutBuffer{};
 
     std::optional<dtT> t_{};
+
     std::optional<dtT> t() const { return t_; }
 
     void handler() {
@@ -81,11 +83,12 @@ struct Max31865 {
                     apply(set(CsPin{}));
                     st_ = State::idle;
 
-                    float const tt = static_cast<float>(((std::to_integer<std::uint32_t>(readoutBuffer[1]) << 8U
-                                         | std::to_integer<std::uint32_t>(readoutBuffer[2]))
-                                        >> 1U)
-                                       * 1000)
-                                    / 32767.0f;
+                    float const tt
+                      = static_cast<float>(((std::to_integer<std::uint32_t>(readoutBuffer[1]) << 8U
+                                             | std::to_integer<std::uint32_t>(readoutBuffer[2]))
+                                            >> 1U)
+                                           * 1000)
+                      / 32767.0f;
 
                     static constexpr auto b = 1.95415f;
                     static constexpr auto a = 0.00028875f;

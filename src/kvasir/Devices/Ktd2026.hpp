@@ -1,13 +1,14 @@
 #pragma once
 
 #include "kvasir/Devices/SharedBusDevice.hpp"
+#include "kvasir/Devices/utils.hpp"
 #include "kvasir/Util/using_literals.hpp"
 
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <variant>
-#include <cassert>
 
 namespace Kvasir {
 template<typename I2C, typename Clock>
@@ -24,10 +25,12 @@ struct Ktd2026 : SharedBusDevice<I2C> {
 
     struct Init {
         explicit Init(tp t) : timeout{t} {}
+
         tp timeout{};
     };
 
     struct Idle {};
+
     using nsv = std::variant<Init, Idle>;
 
     struct SendWait {
@@ -40,10 +43,13 @@ struct Ktd2026 : SharedBusDevice<I2C> {
         static constexpr std::byte ChannelControl{0x04};
     };
 
-    static constexpr std::size_t initSize{5};
-    static constexpr std::size_t colorSize{6};
-    static constexpr std::array<std::byte, initSize>
-      initOut{Registers::EnRst, 0x1C_b, 0_b, 0_b, 0_b};
+    static constexpr std::size_t                     initSize{5};
+    static constexpr std::size_t                     colorSize{6};
+    static constexpr std::array<std::byte, initSize> initOut{Registers::EnRst,
+                                                             0x1C_b,
+                                                             0_b,
+                                                             0_b,
+                                                             0_b};
 
     static constexpr dt startup_time{std::chrono::milliseconds(500)};
     static constexpr dt reset_time{std::chrono::microseconds(800)};
@@ -51,8 +57,7 @@ struct Ktd2026 : SharedBusDevice<I2C> {
 
     using sv = std::variant<Init, Idle, SendWait>;
 
-    static constexpr sv
-      toSv(nsv const& ns) {
+    static constexpr sv toSv(nsv const& ns) {
         if(std::holds_alternative<Init>(ns)) {
             return std::get<Init>(ns);
         }
@@ -68,24 +73,33 @@ struct Ktd2026 : SharedBusDevice<I2C> {
     std::array<std::byte, colorSize> colorOut_;
     bool                             colorChanged_;
 
-    static_assert(I2C::BufferSize >= std::max(initSize, colorSize), "I2C buffer to small");
+    static_assert(I2C::BufferSize >= std::max(initSize,
+                                              colorSize),
+                  "I2C buffer to small");
 
     constexpr explicit Ktd2026(std::uint8_t address)
       : st_{Init{tp{} + startup_time}}
       , i2caddress{address}
-      , colorOut_{Registers::ChannelControl, 0x00_b, 0x00_b, 0x00_b, 0x00_b, 0x00_b}
+      , colorOut_{Registers::ChannelControl,
+                  0x00_b,
+                  0x00_b,
+                  0x00_b,
+                  0x00_b,
+                  0x00_b}
       , colorChanged_{true} {}
 
     constexpr Ktd2026() : Ktd2026(0x30) {}
 
-    template<typename RT, typename GT, typename BT>
-    void
-      set(RT R, GT G, BT B) {
+    template<typename RT,
+             typename GT,
+             typename BT>
+    void set(RT R,
+             GT G,
+             BT B) {
         auto      cc      = [](auto c) { return std::byte(c != 0 ? c - 1 : c); };
         std::byte onState = (R != 0 ? 1_b : 0_b) | (B != 0 ? 4_b : 0_b) | (G != 0 ? 0x10_b : 0_b);
-        if(
-          cc(R) != colorOut_[3] || cc(B) != colorOut_[4] || cc(G) != colorOut_[5]
-          || colorOut_[1] != onState)
+        if(cc(R) != colorOut_[3] || cc(B) != colorOut_[4] || cc(G) != colorOut_[5]
+           || colorOut_[1] != onState)
         {
             colorChanged_ = true;
             colorOut_[1]  = onState;
@@ -96,40 +110,25 @@ struct Ktd2026 : SharedBusDevice<I2C> {
     }
 
     template<typename C>
-    void
-      set(C const& c) {
+    void set(C const& c) {
         set(c.r, c.g, c.b);
     }
 
     struct Resetter {
         explicit Resetter(bool& a_) : a{a_} {}
-        void
-          reset() {
-            a = true;
-        }
+
+        void reset() { a = true; }
+
         bool& a;
     };
 
-    template<class... Ts>
-    struct overloaded : Ts... {
-        using Ts::operator()...;
-    };
-    template<class... Ts>
-    overloaded(Ts...)->overloaded<Ts...>;
-
-    template<typename Variant, typename... Matchers>
-    auto match(Variant&& variant, Matchers&&... matchers) {
-        return std::visit(overloaded{std::forward<Matchers>(matchers)...}, std::forward<Variant>(variant));
-    }
-
-    void
-      handler() {
+    void handler() {
         auto const currentTime = Clock::now();
         if(auto r = Resetter{colorChanged_}; resetHandler(r)) {
             st_.template emplace<Init>(currentTime + startup_time);
         }
 
-        st_ = match(
+        st_ = Kvasir::SM::match(
           st_,
           [&](Init const& state) -> sv {
               if(currentTime > state.timeout && acquire()) {

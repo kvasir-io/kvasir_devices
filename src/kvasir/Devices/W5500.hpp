@@ -19,16 +19,20 @@ struct Header {
     enum class Size { variable = 0, _1 = 1, _2 = 2, _4 = 3 };
 
     struct BlockSelect {
-        std::uint8_t                 bs;
+        std::uint8_t bs;
+
         static constexpr BlockSelect CommonRegister() { return BlockSelect{0}; }
+
         static constexpr BlockSelect SocketRegister(std::size_t n) {
             assert(7 >= n);
             return BlockSelect{static_cast<std::uint8_t>(4 * n + 1)};
         }
+
         static constexpr BlockSelect SocketTxBuffer(std::size_t n) {
             assert(7 >= n);
             return BlockSelect{static_cast<std::uint8_t>(4 * n + 2)};
         }
+
         static constexpr BlockSelect SocketRxBuffer(std::size_t n) {
             assert(7 >= n);
             return BlockSelect{static_cast<std::uint8_t>(4 * n + 3)};
@@ -37,22 +41,38 @@ struct Header {
 
     enum class ReadWrite { Read, Write };
 
-    constexpr Header(std::uint16_t address_, ReadWrite rw, BlockSelect const& bs, Size size)
+    constexpr Header(std::uint16_t      address_,
+                     ReadWrite          rw,
+                     BlockSelect const& bs,
+                     Size               size)
       : address{address_}
-      , control{static_cast<std::uint8_t>(
-          bs.bs << 3 | ((rw == ReadWrite::Read ? 0 : 1) << 2) | static_cast<int>(size))} {}
+      , control{static_cast<std::uint8_t>(bs.bs << 3 | ((rw == ReadWrite::Read ? 0 : 1) << 2)
+                                          | static_cast<int>(size))} {}
 
-    constexpr Header(std::byte address_, ReadWrite rw, BlockSelect const& bs, Size size)
-      : Header{static_cast<std::uint16_t>(address_), rw, bs, size} {}
+    constexpr Header(std::byte          address_,
+                     ReadWrite          rw,
+                     BlockSelect const& bs,
+                     Size               size)
+      : Header{static_cast<std::uint16_t>(address_),
+               rw,
+               bs,
+               size} {}
 
     template<typename A>
-    constexpr Header(A address_, ReadWrite rw, BlockSelect const& bs, Size size)
-      : Header{static_cast<std::uint16_t>(address_), rw, bs, size} {
+    constexpr Header(A                  address_,
+                     ReadWrite          rw,
+                     BlockSelect const& bs,
+                     Size               size)
+      : Header{static_cast<std::uint16_t>(address_),
+               rw,
+               bs,
+               size} {
         static_assert(sizeof(std::uint16_t) >= sizeof(A));
     }
 
     template<typename I>
-    constexpr I write(I first, I last) const {
+    constexpr I write(I first,
+                      I last) const {
         using T = std::remove_cvref_t<decltype(*first)>;
         assert(std::distance(first, last) >= 3);
         *first++ = static_cast<T>((address & 0xff00) >> 8);
@@ -64,7 +84,8 @@ struct Header {
 
 struct MacAddress {
     std::array<std::byte, 6> octets;
-    static constexpr auto    address_string_to_octets(std::string_view address_string) {
+
+    static constexpr auto address_string_to_octets(std::string_view address_string) {
         std::array<std::byte, 6> octets;
 
         auto pos = address_string.begin();
@@ -91,14 +112,17 @@ struct MacAddress {
       : octets{address_string_to_octets(address_string)} {}
 
     constexpr MacAddress() = default;
+
     template<typename I>
-    constexpr I write(I first, I last) const {
+    constexpr I write(I first,
+                      I last) const {
         assert(static_cast<std::size_t>(std::distance(first, last)) >= octets.size());
         return std::copy(octets.begin(), octets.end(), first);
     }
 };
 
-constexpr MacAddress operator""_mac(char const* str, std::size_t n) {
+constexpr MacAddress operator""_mac(char const* str,
+                                    std::size_t n) {
     return MacAddress{
       std::string_view{str, n}
     };
@@ -130,7 +154,8 @@ struct IPAddress {
     }
 
     template<typename I>
-    constexpr IPAddress(I first, I last) {
+    constexpr IPAddress(I first,
+                        I last) {
         assert(static_cast<std::size_t>(std::distance(first, last)) >= octets.size());
         std::memcpy(octets.data(), first, 4);
     }
@@ -139,13 +164,16 @@ struct IPAddress {
       : octets{address_string_to_octets(address_string)} {}
 
     constexpr IPAddress() = default;
+
     template<typename I>
-    constexpr I write(I first, I last) const {
+    constexpr I write(I first,
+                      I last) const {
         assert(static_cast<std::size_t>(std::distance(first, last)) >= octets.size());
         return std::copy(octets.begin(), octets.end(), first);
     }
 
-    constexpr bool       operator==(IPAddress const&) const = default;
+    constexpr bool operator==(IPAddress const&) const = default;
+
     constexpr MacAddress toMulticastMac() const {
         auto mac = "01:00:5e:00:00:00"_mac;
 
@@ -158,19 +186,25 @@ struct IPAddress {
 };
 
 struct SubnetMask : IPAddress {};
+
 struct Gateway : IPAddress {};
 
-constexpr IPAddress operator""_ip(char const* str, std::size_t n) {
+constexpr IPAddress operator""_ip(char const* str,
+                                  std::size_t n) {
     return IPAddress{
       std::string_view{str, n}
     };
 }
-constexpr SubnetMask operator""_subnetMask(char const* str, std::size_t n) {
+
+constexpr SubnetMask operator""_subnetMask(char const* str,
+                                           std::size_t n) {
     return SubnetMask{
       std::string_view{str, n}
     };
 }
-constexpr Gateway operator""_gateway(char const* str, std::size_t n) {
+
+constexpr Gateway operator""_gateway(char const* str,
+                                     std::size_t n) {
     return Gateway{
       std::string_view{str, n}
     };
@@ -184,7 +218,9 @@ struct StaticIpConfig {
 
 struct DhcpIpConfig : StaticIpConfig {
     constexpr DhcpIpConfig()
-      : StaticIpConfig{"0.0.0.0"_ip, "0.0.0.0"_gateway, "0.0.0.0"_subnetMask} {}
+      : StaticIpConfig{"0.0.0.0"_ip,
+                       "0.0.0.0"_gateway,
+                       "0.0.0.0"_subnetMask} {}
 };
 
 enum class DHCPMessageType : std::uint8_t {
@@ -225,15 +261,20 @@ enum class DHCPOptions : std::uint8_t {
 namespace OptionFields {
 struct Pad {
     static constexpr std::uint8_t ID{0};
-    static constexpr auto         parse() {}
+
+    static constexpr auto parse() {}
 };
+
 struct End {
     static constexpr std::uint8_t ID{255};
-    static constexpr auto         parse() {}
+
+    static constexpr auto parse() {}
 };
+
 struct Unknown {
     static constexpr auto parse() {}
 };
+
 struct Router {
     static constexpr std::uint8_t ID{3};
     Gateway                       address;
@@ -243,34 +284,42 @@ struct RequestedIPAddress {
     static constexpr std::uint8_t ID{50};
     IPAddress                     address;
 };
+
 struct DomainNameServer {
     static constexpr std::uint8_t ID{6};
     IPAddress                     address;
 };
+
 struct SubnetMask {
     static constexpr std::uint8_t ID{1};
     ::SubnetMask                  address;
 };
+
 struct ServerIdentifier {
     static constexpr std::uint8_t ID{54};
     IPAddress                     address;
 };
+
 struct IPAddressLeaseTime {
     static constexpr std::uint8_t ID{51};
     std::uint32_t                 leaseTime{};
 };
+
 struct RenewalTimerValue {
     static constexpr std::uint8_t ID{58};
     std::uint32_t                 renewalTime{};
 };
+
 struct RebindTimerValue {
     static constexpr std::uint8_t ID{59};
     std::uint32_t                 rebindTime{};
 };
+
 struct MessageType {
     static constexpr std::uint8_t ID{53};
     DHCPMessageType               messageType;
 };
+
 struct ParameterRequestList {
     static constexpr std::uint8_t ID{55};
     std::vector<DHCPOptions>      options;
@@ -297,24 +346,18 @@ struct dhcp {
     std::uint32_t                 giaddr{};
     std::array<std::byte, 16>     chaddr{};
     std::array<std::uint8_t, 64>  sname{};
-    std::array<std::uint8_t, 128> file{
-      53, 1, 1,
+    std::array<std::uint8_t, 128> file{53, 1, 1, 57, 2, 0x02, 0x40, 22, 2,  0x02, 0x40,
 
-      57, 2, 0x02, 0x40,
-
-      22, 2, 0x02, 0x40,
-
-      55, 8, 1,    3,    6, 42, 51, 54, 58, 59,
-
-      255
-
-    };
-    std::uint32_t               magic_cookie{MagicCookie};
-    std::array<std::uint8_t, 4> dhcp_options{52, 1, 1, 255};
+                                       55, 8, 1, 3,  6, 42,   51,   54, 58, 59,   255};
+    std::uint32_t                 magic_cookie{MagicCookie};
+    std::array<std::uint8_t, 4>   dhcp_options{52, 1, 1, 255};
 
     dhcp() {}
 
-    dhcp(std::uint32_t xid_, std::string_view hostname, MacAddress mac) : xid{xid_} {
+    dhcp(std::uint32_t    xid_,
+         std::string_view hostname,
+         MacAddress       mac)
+      : xid{xid_} {
         std::copy(mac.octets.begin(), mac.octets.end(), chaddr.begin());
         if(hostname.empty() || hostname.size() > (sname.size() - 4)) {
             return;
@@ -326,7 +369,8 @@ struct dhcp {
         sname[2 + hostname.size()] = 255;
     }
 
-    void change_to_request(IPAddress server, IPAddress myIp) {
+    void change_to_request(IPAddress server,
+                           IPAddress myIp) {
         file[2] = 3;
         auto it = file.data() + 21;
         *it     = 54;
@@ -345,9 +389,10 @@ struct dhcp {
     }
 };
 
-template<DHCPMessageType AcceptedMessageType, typename Callback>
-std::optional<std::span<std::byte const>>
-parseOptions(std::span<std::byte const> buffer, Callback cb) {
+template<DHCPMessageType AcceptedMessageType,
+         typename Callback>
+std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const> buffer,
+                                                       Callback                   cb) {
     bool finished = false;
     while(!finished && !buffer.empty()) {
         std::uint8_t const option = static_cast<std::uint8_t>(buffer[0]);
@@ -537,11 +582,11 @@ parseOptions(std::span<std::byte const> buffer, Callback cb) {
     return buffer;
 }
 
-template<DHCPMessageType AcceptedMessageType, typename Callback>
-std::optional<std::span<std::byte const>> dhcp_parse(
-  std::span<std::byte const> buffer,
-  std::uint32_t              xid,
-  Callback                   cb) {
+template<DHCPMessageType AcceptedMessageType,
+         typename Callback>
+std::optional<std::span<std::byte const>> dhcp_parse(std::span<std::byte const> buffer,
+                                                     std::uint32_t              xid,
+                                                     Callback                   cb) {
     if(buffer.empty()) {
         UC_LOG_D("empty {}", __LINE__);
         return std::nullopt;
@@ -677,14 +722,12 @@ struct DHCPHandler {
                     next = Clock::now() + 100ms;
                     if(socket->send_ready()) {
                         auto const xid = next.time_since_epoch().count();
-                        dhcp_data      = dhcp{
-                          static_cast<std::uint32_t>(xid),
-                          Chip::Config::Hostname(),
-                          Chip::Config::Mac()};
-                        if(socket->send_to(
-                             ServerAddress,
-                             ServerPort,
-                             std::as_bytes(std::span{std::addressof(dhcp_data), 1})))
+                        dhcp_data      = dhcp{static_cast<std::uint32_t>(xid),
+                                         Chip::Config::Hostname(),
+                                         Chip::Config::Mac()};
+                        if(socket->send_to(ServerAddress,
+                                           ServerPort,
+                                           std::as_bytes(std::span{std::addressof(dhcp_data), 1})))
                         {
                             UC_LOG_D("dhcp send Request");
                             timeout = Clock::now() + 5s;
@@ -701,11 +744,10 @@ struct DHCPHandler {
                     auto const packet = socket->recv_from(std::span{recvBuffer});
                     if(packet) {
                         UC_LOG_D("dhcp got offer");
-                        UC_LOG_D(
-                          "recv IP: {}, Port: {}, Data: {::#x}",
-                          std::get<0>(*packet).octets,
-                          std::get<1>(*packet),
-                          std::get<2>(*packet));
+                        UC_LOG_D("recv IP: {}, Port: {}, Data: {::#x}",
+                                 std::get<0>(*packet).octets,
+                                 std::get<1>(*packet),
+                                 std::get<2>(*packet));
                         std::optional<IPAddress> ownIp;
                         std::optional<IPAddress> server;
                         //TODO make checks and timeout and ips...
@@ -721,9 +763,8 @@ struct DHCPHandler {
                                  }
                              }))
                         {
-                            if(
-                              oldIp.has_value() && ownIp.has_value()
-                              && (ownIp.value() != oldIp.value()))
+                            if(oldIp.has_value() && ownIp.has_value()
+                               && (ownIp.value() != oldIp.value()))
                             {
                                 //reset einfügen
                                 UC_LOG_D("Ip changed! Restarting");
@@ -757,11 +798,10 @@ struct DHCPHandler {
                     auto const packet = socket->recv_from(std::span{recvBuffer});
                     if(packet) {
                         UC_LOG_D("dhcp got ack");
-                        UC_LOG_D(
-                          "recv IP: {}, Port: {}, Data: {::#x}",
-                          std::get<0>(*packet).octets,
-                          std::get<1>(*packet),
-                          std::get<2>(*packet));
+                        UC_LOG_D("recv IP: {}, Port: {}, Data: {::#x}",
+                                 std::get<0>(*packet).octets,
+                                 std::get<1>(*packet),
+                                 std::get<2>(*packet));
                         //TODO make checks and timeout and ips...
 
                         std::optional<Gateway>       gateway;
@@ -807,9 +847,9 @@ struct DHCPHandler {
                              }))
                         {
                             if(gateway && subnetMask && ownIp) {
-                                ip = ownIp;
+                                ip    = ownIp;
                                 oldIp = ip;
-                                s  = State::fin;
+                                s     = State::fin;
                                 chip.append_ip_config(*ownIp, *gateway, *subnetMask);
                                 ready = true;
                             } else {
@@ -844,6 +884,7 @@ struct DHCPHandler {
 template<typename Chip>
 struct EmptyDHCPHandler {
     EmptyDHCPHandler(Chip&) {}
+
     void handle() {}
 };
 
@@ -914,9 +955,11 @@ struct W5500 {
 
     struct SocketNumber {
         std::uint8_t n;
+
         SocketNumber(std::uint8_t n_) : n{n_} { assert(NSockets > n); }
 
         bool isInvalid() const { return n >= NSockets; }
+
         void setInvalid() { n = NSockets; }
     };
 
@@ -954,7 +997,8 @@ struct W5500 {
             ready             = true;
         }
 
-        void reset(W5500& w5500, SocketNumber sn) {
+        void reset(W5500&       w5500,
+                   SocketNumber sn) {
             reset_raw();
             error = true;
             ready = false;
@@ -962,9 +1006,11 @@ struct W5500 {
             w5500.clear_commands_of(sn);
 
             auto pos = command_buffer.begin();
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, command_buffer.end());
+            pos      = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, command_buffer.end());
 
             *pos++ = 0x1_b;
 
@@ -976,14 +1022,19 @@ struct W5500 {
         }
 
         template<typename I>
-        static I add_read_state(I first, I last, W5500& w5500, SocketNumber sn) {
+        static I add_read_state(I            first,
+                                I            last,
+                                W5500&       w5500,
+                                SocketNumber sn) {
             assert(std::distance(first, last) >= 3);
 
             auto& socket = w5500.sockets[sn.n];
 
-            auto pos
-              = Header{SocketRegister::Status, Header::ReadWrite::Read, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(first, last);
+            auto pos = Header{SocketRegister::Status,
+                              Header::ReadWrite::Read,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_1}
+                         .write(first, last);
 
             w5500.command_q.push(typename Commands::Write{first, pos});
 
@@ -995,14 +1046,19 @@ struct W5500 {
         }
 
         template<typename I>
-        static I add_read_ir(I first, I last, W5500& w5500, SocketNumber sn) {
+        static I add_read_ir(I            first,
+                             I            last,
+                             W5500&       w5500,
+                             SocketNumber sn) {
             assert(std::distance(first, last) >= 3);
 
             auto& socket = w5500.sockets[sn.n];
 
-            auto pos
-              = Header{SocketRegister::Interrupt, Header::ReadWrite::Read, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(first, last);
+            auto pos = Header{SocketRegister::Interrupt,
+                              Header::ReadWrite::Read,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_1}
+                         .write(first, last);
 
             w5500.command_q.push(typename Commands::Write{first, pos});
 
@@ -1014,10 +1070,15 @@ struct W5500 {
         }
 
         template<typename I>
-        static I add_clear_ir(I first, I last, W5500& w5500, SocketNumber sn) {
-            auto pos
-              = Header{SocketRegister::Interrupt, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(first, last);
+        static I add_clear_ir(I            first,
+                              I            last,
+                              W5500&       w5500,
+                              SocketNumber sn) {
+            auto pos = Header{SocketRegister::Interrupt,
+                              Header::ReadWrite::Write,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_1}
+                         .write(first, last);
 
             *pos++ = 0x1f_b;
             w5500.command_q.push(typename Commands::Write{first, pos});
@@ -1025,12 +1086,17 @@ struct W5500 {
         }
 
         template<typename I>
-        static I add_read_tx_write(I first, I last, W5500& w5500, SocketNumber sn) {
+        static I add_read_tx_write(I            first,
+                                   I            last,
+                                   W5500&       w5500,
+                                   SocketNumber sn) {
             auto& socket = w5500.sockets[sn.n];
 
-            auto pos
-              = Header{SocketRegister::TX_WritePointer, Header::ReadWrite::Read, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(first, last);
+            auto pos = Header{SocketRegister::TX_WritePointer,
+                              Header::ReadWrite::Read,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_2}
+                         .write(first, last);
             w5500.command_q.push(typename Commands::Write{first, pos});
             w5500.command_q.push(typename Commands::Read{first, 2});
             socket.last_read_pos = first;
@@ -1040,12 +1106,17 @@ struct W5500 {
         }
 
         template<typename I>
-        static I add_read_rx_write(I first, I last, W5500& w5500, SocketNumber sn) {
+        static I add_read_rx_write(I            first,
+                                   I            last,
+                                   W5500&       w5500,
+                                   SocketNumber sn) {
             auto& socket = w5500.sockets[sn.n];
 
-            auto pos
-              = Header{SocketRegister::RX_WritePointer, Header::ReadWrite::Read, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(first, last);
+            auto pos = Header{SocketRegister::RX_WritePointer,
+                              Header::ReadWrite::Read,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_2}
+                         .write(first, last);
             w5500.command_q.push(typename Commands::Write{first, pos});
             w5500.command_q.push(typename Commands::Read{first, 2});
             socket.last_read_pos_recv = first;
@@ -1055,12 +1126,17 @@ struct W5500 {
         }
 
         template<typename I>
-        static I add_read_rx_read(I first, I last, W5500& w5500, SocketNumber sn) {
+        static I add_read_rx_read(I            first,
+                                  I            last,
+                                  W5500&       w5500,
+                                  SocketNumber sn) {
             auto& socket = w5500.sockets[sn.n];
 
-            auto pos
-              = Header{SocketRegister::RX_ReadPointer, Header::ReadWrite::Read, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(first, last);
+            auto pos = Header{SocketRegister::RX_ReadPointer,
+                              Header::ReadWrite::Read,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_2}
+                         .write(first, last);
             w5500.command_q.push(typename Commands::Write{first, pos});
             w5500.command_q.push(typename Commands::Read{first, 2});
             socket.last_read_pos_recv = first;
@@ -1069,28 +1145,30 @@ struct W5500 {
             return pos;
         }
 
-        void read_tx_write(W5500&, SocketNumber) {
+        void read_tx_write(W5500&,
+                           SocketNumber) {
             if(!ready || free) {
                 return;
             }
             auto old_tx_write = tx_write;
 
-            tx_write = static_cast<std::uint16_t>(
-              (static_cast<std::uint32_t>(last_read_pos[0]) << 8)
-              | static_cast<std::uint32_t>(last_read_pos[1]));
+            tx_write
+              = static_cast<std::uint16_t>((static_cast<std::uint32_t>(last_read_pos[0]) << 8)
+                                           | static_cast<std::uint32_t>(last_read_pos[1]));
 
             if(old_tx_write) {
                 UC_LOG_D("read {} assume {}", tx_write, old_tx_write);
             }
         }
 
-        void read_rx_write(W5500& w5500, SocketNumber sn) {
+        void read_rx_write(W5500&       w5500,
+                           SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
-            auto const rx_write = static_cast<std::uint16_t>(
-              (static_cast<std::uint32_t>(last_read_pos_recv[0]) << 8)
-              | static_cast<std::uint32_t>(last_read_pos_recv[1]));
+            auto const rx_write
+              = static_cast<std::uint16_t>((static_cast<std::uint32_t>(last_read_pos_recv[0]) << 8)
+                                           | static_cast<std::uint32_t>(last_read_pos_recv[1]));
 
             if(last_rx_write && *last_rx_write == rx_write) {
                 last_rx_write.reset();
@@ -1104,13 +1182,12 @@ struct W5500 {
                 }();
 
                 if(bytes_to_read > 1024) {
-                    UC_LOG_C(
-                      "to many bytes on {} .... {} {} {} {}",
-                      sn.n,
-                      *last_rx_write,
-                      rx_write,
-                      rx_read,
-                      bytes_to_read);
+                    UC_LOG_C("to many bytes on {} .... {} {} {} {}",
+                             sn.n,
+                             *last_rx_write,
+                             rx_write,
+                             rx_read,
+                             bytes_to_read);
                 }
 
                 if(bytes_to_read != 0 && tmp_recv_buffer.empty()) {
@@ -1118,9 +1195,11 @@ struct W5500 {
 
                     tmp_recv_buffer.resize(std::min(bytes_to_read, tmp_recv_buffer.max_size()));
 
-                    auto pos
-                      = Header{*rx_read, Header::ReadWrite::Read, Header::BlockSelect::SocketRxBuffer(sn.n), Header::Size::variable}
-                          .write(recv_command_buffer.begin(), recv_command_buffer.end());
+                    auto pos = Header{*rx_read,
+                                      Header::ReadWrite::Read,
+                                      Header::BlockSelect::SocketRxBuffer(sn.n),
+                                      Header::Size::variable}
+                                 .write(recv_command_buffer.begin(), recv_command_buffer.end());
 
                     w5500.selected([&]() {
                         w5500.command_q.push(
@@ -1130,21 +1209,24 @@ struct W5500 {
                     });
 
                     auto cmdpos = pos;
-                    pos
-                      = Header{SocketRegister::RX_ReadPointer, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                          .write(pos, recv_command_buffer.end());
+                    pos         = Header{SocketRegister::RX_ReadPointer,
+                                 Header::ReadWrite::Write,
+                                 Header::BlockSelect::SocketRegister(sn.n),
+                                 Header::Size::_2}
+                            .write(pos, recv_command_buffer.end());
                     *rx_read += tmp_recv_buffer.size();
                     *pos++ = std::byte(*tx_write >> 8);
                     *pos++ = std::byte(*tx_write & 0xff);
 
-                    pos
-                      = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                          .write(pos, recv_command_buffer.end());
+                    pos = Header{SocketRegister::Command,
+                                 Header::ReadWrite::Write,
+                                 Header::BlockSelect::SocketRegister(sn.n),
+                                 Header::Size::_1}
+                            .write(pos, recv_command_buffer.end());
                     *pos++ = 0x40_b;
 
-                    w5500.selected([&]() {
-                        w5500.command_q.push(typename Commands::Write{cmdpos, pos});
-                    });
+                    w5500.selected(
+                      [&]() { w5500.command_q.push(typename Commands::Write{cmdpos, pos}); });
 
                     w5500.command_q.push(
                       typename Commands::Call_Socket{&SocketState::recv_ready, sn});
@@ -1162,26 +1244,25 @@ struct W5500 {
             } else {
                 last_rx_write = rx_write;
                 w5500.selected([&]() {
-                    add_read_rx_write(
-                      recv_command_buffer.begin(),
-                      recv_command_buffer.end(),
-                      w5500,
-                      sn);
+                    add_read_rx_write(recv_command_buffer.begin(),
+                                      recv_command_buffer.end(),
+                                      w5500,
+                                      sn);
                 });
             }
         }
 
-        void recv_ready(W5500& w5500, SocketNumber sn) {
+        void recv_ready(W5500&       w5500,
+                        SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
 
             w5500.selected([&]() {
-                add_read_rx_write(
-                  recv_command_buffer.begin(),
-                  recv_command_buffer.end(),
-                  w5500,
-                  sn);
+                add_read_rx_write(recv_command_buffer.begin(),
+                                  recv_command_buffer.end(),
+                                  w5500,
+                                  sn);
             });
 
             auto const old_size = recv_buffer.size();
@@ -1190,29 +1271,30 @@ struct W5500 {
                 return;
             }
             recv_buffer.resize(old_size + tmp_recv_buffer.size());
-            std::copy(
-              tmp_recv_buffer.begin(),
-              tmp_recv_buffer.end(),
-              recv_buffer.begin() + old_size);
+            std::copy(tmp_recv_buffer.begin(),
+                      tmp_recv_buffer.end(),
+                      recv_buffer.begin() + old_size);
             tmp_recv_buffer.clear();
         }
 
-        void read_rx_read(W5500&, SocketNumber) {
+        void read_rx_read(W5500&,
+                          SocketNumber) {
             if(!ready || free) {
                 return;
             }
             auto old_rx_read = rx_read;
 
-            rx_read = static_cast<std::uint16_t>(
-              (static_cast<std::uint32_t>(last_read_pos_recv[0]) << 8)
-              | static_cast<std::uint32_t>(last_read_pos_recv[1]));
+            rx_read
+              = static_cast<std::uint16_t>((static_cast<std::uint32_t>(last_read_pos_recv[0]) << 8)
+                                           | static_cast<std::uint32_t>(last_read_pos_recv[1]));
 
             if(old_rx_read) {
                 UC_LOG_D("read {} assume {}", rx_read, old_rx_read);
             }
         }
 
-        void check_send_ready(W5500& w5500, SocketNumber sn) {
+        void check_send_ready(W5500&       w5500,
+                              SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1233,7 +1315,9 @@ struct W5500 {
                 send_in_progress = false;
             }
         }
-        void check_sock_init(W5500& w5500, SocketNumber sn) {
+
+        void check_sock_init(W5500&       w5500,
+                             SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1248,9 +1332,11 @@ struct W5500 {
                   typename Commands::Call_Socket{&SocketState::check_sock_init, sn});
             } else {
                 UC_LOG_D("sock init");
-                auto pos
-                  = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                      .write(command_buffer.begin(), command_buffer.end());
+                auto pos = Header{SocketRegister::Command,
+                                  Header::ReadWrite::Write,
+                                  Header::BlockSelect::SocketRegister(sn.n),
+                                  Header::Size::_1}
+                             .write(command_buffer.begin(), command_buffer.end());
 
                 *pos++ = 0x4_b;
 
@@ -1262,7 +1348,9 @@ struct W5500 {
                   typename Commands::Call_Socket{&SocketState::check_sock_established, sn});
             }
         }
-        void check_sock_init_server(W5500& w5500, SocketNumber sn) {
+
+        void check_sock_init_server(W5500&       w5500,
+                                    SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1277,9 +1365,11 @@ struct W5500 {
                   typename Commands::Call_Socket{&SocketState::check_sock_init_server, sn});
             } else {
                 UC_LOG_D("sock init");
-                auto pos
-                  = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                      .write(command_buffer.begin(), command_buffer.end());
+                auto pos = Header{SocketRegister::Command,
+                                  Header::ReadWrite::Write,
+                                  Header::BlockSelect::SocketRegister(sn.n),
+                                  Header::Size::_1}
+                             .write(command_buffer.begin(), command_buffer.end());
 
                 *pos++ = 0x2_b;
 
@@ -1292,14 +1382,16 @@ struct W5500 {
             }
         }
 
-        void print_sock_state(W5500& w5500, SocketNumber sn) {
+        void print_sock_state(W5500&       w5500,
+                              SocketNumber sn) {
             if(expectedSockState != *last_state_pos) {
                 UC_LOG_T("sockstate {} != {} on {}", *last_state_pos, expectedSockState, sn.n);
                 reset(w5500, sn);
             }
         }
 
-        void check_sock_udp(W5500& w5500, SocketNumber sn) {
+        void check_sock_udp(W5500&       w5500,
+                            SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1317,17 +1409,17 @@ struct W5500 {
                 connected         = true;
                 expectedSockState = 0x22_b;
                 w5500.selected([&]() {
-                    auto pos = add_read_rx_write(
-                      recv_command_buffer.begin(),
-                      recv_command_buffer.end(),
-                      w5500,
-                      sn);
+                    auto pos = add_read_rx_write(recv_command_buffer.begin(),
+                                                 recv_command_buffer.end(),
+                                                 w5500,
+                                                 sn);
                     add_read_tx_write(pos, recv_command_buffer.end(), w5500, sn);
                 });
             }
         }
 
-        void check_sock_established(W5500& w5500, SocketNumber sn) {
+        void check_sock_established(W5500&       w5500,
+                                    SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1344,17 +1436,17 @@ struct W5500 {
                 connected         = true;
                 expectedSockState = 0x17_b;
                 w5500.selected([&]() {
-                    auto pos = add_read_rx_write(
-                      recv_command_buffer.begin(),
-                      recv_command_buffer.end(),
-                      w5500,
-                      sn);
+                    auto pos = add_read_rx_write(recv_command_buffer.begin(),
+                                                 recv_command_buffer.end(),
+                                                 w5500,
+                                                 sn);
                     add_read_tx_write(pos, recv_command_buffer.end(), w5500, sn);
                 });
             }
         }
 
-        void check_sock_listen(W5500& w5500, SocketNumber sn) {
+        void check_sock_listen(W5500&       w5500,
+                               SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1380,7 +1472,8 @@ struct W5500 {
             }
         }
 
-        void check_sock_accept(W5500& w5500, SocketNumber sn) {
+        void check_sock_accept(W5500&       w5500,
+                               SocketNumber sn) {
             if(!ready || free) {
                 return;
             }
@@ -1400,7 +1493,8 @@ struct W5500 {
             }
         }
 
-        void check_sock_closed(W5500& w5500, SocketNumber sn) {
+        void check_sock_closed(W5500&       w5500,
+                               SocketNumber sn) {
             if(*last_state_pos != 0x00_b) {
                 //       UC_LOG_D("not closed {}  {}", *last_read_pos, sn.n);
                 w5500.append_yield();
@@ -1421,35 +1515,57 @@ struct W5500 {
 
     struct Commands {
         struct Reset {};
+
         struct Yield {};
+
         struct Select {};
+
         struct Deselect {};
+
         struct Write {
             std::byte const* buffer;
             std::uint16_t    size;
 
             template<Kvasir::contiguous_byte_iterator I>
-            Write(I first, I last) : Write{first, std::distance(first, last)} {}
-            template<Kvasir::contiguous_byte_iterator I, typename S>
-            Write(I first, S size_)
+            Write(I first,
+                  I last)
+              : Write{first,
+                      std::distance(first,
+                                    last)} {}
+
+            template<Kvasir::contiguous_byte_iterator I,
+                     typename S>
+            Write(I first,
+                  S size_)
               : buffer{reinterpret_cast<std::byte const*>(first)}
               , size{static_cast<std::uint16_t>(size_)} {}
         };
+
         struct Read {
             std::byte*    buffer;
             std::uint16_t size;
 
             template<Kvasir::contiguous_byte_iterator I>
-            Read(I first, I last) : Read(first, std::distance(first, last)) {}
-            template<Kvasir::contiguous_byte_iterator I, typename S>
-            Read(I first, S size_)
+            Read(I first,
+                 I last)
+              : Read(first,
+                     std::distance(first,
+                                   last)) {}
+
+            template<Kvasir::contiguous_byte_iterator I,
+                     typename S>
+            Read(I first,
+                 S size_)
               : buffer{reinterpret_cast<std::byte*>(first)}
               , size{static_cast<std::uint16_t>(size_)} {}
         };
+
         struct Call_Socket {
-            void (SocketState::*function)(W5500&, SocketNumber);
+            void (SocketState::*function)(W5500&,
+                                          SocketNumber);
             SocketNumber n;
         };
+
         struct Call_Self {
             void (W5500::*function)();
         };
@@ -1464,10 +1580,13 @@ struct W5500 {
         W5500*       w5500{};
         SocketNumber sn{};
 
-        SocketState&       getSocket() { return w5500->sockets[sn.n]; }
+        SocketState& getSocket() { return w5500->sockets[sn.n]; }
+
         SocketState const& getSocket() const { return w5500->sockets[sn.n]; }
-        bool               send_ready() const { return !getSocket().send_in_progress; }
-        auto&              getRecvBuffer() { return getSocket().recv_buffer; }
+
+        bool send_ready() const { return !getSocket().send_in_progress; }
+
+        auto& getRecvBuffer() { return getSocket().recv_buffer; }
 
         ~UDPSocket_() {
             if(!sn.isInvalid()) {
@@ -1480,7 +1599,11 @@ struct W5500 {
         UDPSocket_& operator=(UDPSocket_ const&) = delete;
         UDPSocket_(UDPSocket_ const&)            = delete;
 
-        UDPSocket_(UDPSocket_&& other) : w5500{other.w5500}, sn{other.sn} { other.sn.setInvalid(); }
+        UDPSocket_(UDPSocket_&& other)
+          : w5500{other.w5500}
+          , sn{other.sn} {
+            other.sn.setInvalid();
+        }
 
         UDPSocket_& operator=(UDPSocket_&& other) {
             if(std::addressof(other) != this) {
@@ -1491,11 +1614,10 @@ struct W5500 {
             return *this;
         }
 
-        UDPSocket_(
-          W5500&                   w5500_,
-          SocketNumber             sn_,
-          std::uint16_t            port,
-          std::optional<IPAddress> multicast)
+        UDPSocket_(W5500&                   w5500_,
+                   SocketNumber             sn_,
+                   std::uint16_t            port,
+                   std::optional<IPAddress> multicast)
           : w5500{std::addressof(w5500_)}
           , sn{sn_} {
             auto& socket = getSocket();
@@ -1503,11 +1625,13 @@ struct W5500 {
             socket.free  = false;
 
             auto cmdpos = buffer.begin();
-            auto pos = cmdpos;
+            auto pos    = cmdpos;
 
-            pos
-              = Header{SocketRegister::Mode, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Mode,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
             std::byte v = 2_b;
 
             if(multicast) {
@@ -1516,13 +1640,15 @@ struct W5500 {
 
             *pos++ = v;
 
-            pos
-              = Header{SocketRegister::SourcePort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::SourcePort,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
-/* Troubles with this blob while connecting under Windows
+            /* Troubles with this blob while connecting under Windows
             if(multicast) {
                 pos
                   = Header{SocketRegister::DestinationIPAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_4}
@@ -1537,9 +1663,11 @@ struct W5500 {
                 *pos++ = std::byte(port & 0xff);
             }
 */
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
 
             *pos++ = 0x1_b;
 
@@ -1556,7 +1684,10 @@ struct W5500 {
             w5500->command_q.push(typename Commands::Call_Socket{&SocketState::check_sock_udp, sn});
         }
 
-        std::expected<std::tuple<IPAddress, std::uint16_t, std::span<std::byte>>, std::errc>
+        std::expected<std::tuple<IPAddress,
+                                 std::uint16_t,
+                                 std::span<std::byte>>,
+                      std::errc>
         recv_from(std::span<std::byte> buffer) {
             auto& packet = getRecvBuffer();
             if(packet.size() < 8) {
@@ -1587,7 +1718,9 @@ struct W5500 {
             return std::make_tuple(senderIp, senderPort, std::span{buffer.begin(), payloadSize});
         }
 
-        bool send_multi(IPAddress address, std::uint16_t port, std::span<std::byte const> data) {
+        bool send_multi(IPAddress                  address,
+                        std::uint16_t              port,
+                        std::span<std::byte const> data) {
             auto& socket = getSocket();
             if(!socket.connected || socket.send_in_progress) {
                 return false;
@@ -1595,9 +1728,11 @@ struct W5500 {
             auto& buffer            = socket.command_buffer;
             socket.send_in_progress = true;
             auto pos                = buffer.begin();
-            pos
-              = Header{*socket.tx_write, Header::ReadWrite::Write, Header::BlockSelect::SocketTxBuffer(sn.n), Header::Size::variable}
-                  .write(pos, buffer.end());
+            pos                     = Header{*socket.tx_write,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketTxBuffer(sn.n),
+                         Header::Size::variable}
+                    .write(pos, buffer.end());
 
             w5500->selected([&]() {
                 w5500->command_q.push(typename Commands::Write{buffer.begin(), pos});
@@ -1607,82 +1742,100 @@ struct W5500 {
             auto const cmdpos1 = pos;
 
             auto const mac = address.toMulticastMac();
-            pos
-              = Header{SocketRegister::DestinationHardwareAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::variable}
-                  .write(pos, buffer.end());
+            pos            = Header{SocketRegister::DestinationHardwareAddress,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::variable}
+                    .write(pos, buffer.end());
             pos = mac.write(pos, buffer.end());
 
-            w5500->selected([&]() {
-                w5500->command_q.push(typename Commands::Write{cmdpos1, pos});
-            });
+            w5500->selected(
+              [&]() { w5500->command_q.push(typename Commands::Write{cmdpos1, pos}); });
 
             auto const cmdpos2 = pos;
 
-            pos
-              = Header{SocketRegister::DestinationIPAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_4}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::DestinationIPAddress,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_4}
+                    .write(pos, buffer.end());
             pos = address.write(pos, buffer.end());
 
-            pos
-              = Header{SocketRegister::DestinationPort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::DestinationPort,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
 
-            pos
-              = Header{SocketRegister::SourcePort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::SourcePort,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
 
-            pos
-              = Header{SocketRegister::TX_WritePointer, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::TX_WritePointer,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
             *socket.tx_write += data.size();
             *pos++ = std::byte(*socket.tx_write >> 8);
             *pos++ = std::byte(*socket.tx_write & 0xff);
 
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
             *pos++ = 0x21_b;
 
             pos = socket.add_read_ir(pos, buffer.end(), *w5500, sn);
             //            pos = socket.add_read_tx_write(pos, buffer.end(), *w5500, sn);
 
-            w5500->selected([&]() {
-                w5500->command_q.push(typename Commands::Write{cmdpos2, pos});
-            });
+            w5500->selected(
+              [&]() { w5500->command_q.push(typename Commands::Write{cmdpos2, pos}); });
             w5500->command_q.push(
               typename Commands::Call_Socket{&SocketState::check_send_ready, sn});
             return true;
         }
 
-        bool send_to(IPAddress address, std::uint16_t port, std::span<std::byte const> data) {
+        bool send_to(IPAddress                  address,
+                     std::uint16_t              port,
+                     std::span<std::byte const> data) {
             auto& socket = getSocket();
             if(!socket.connected || socket.send_in_progress) {
                 return false;
             }
             auto& buffer            = socket.command_buffer;
             socket.send_in_progress = true;
-            auto pos
-              = Header{SocketRegister::DestinationPort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(buffer.begin(), buffer.end());
+            auto pos                = Header{SocketRegister::DestinationPort,
+                              Header::ReadWrite::Write,
+                              Header::BlockSelect::SocketRegister(sn.n),
+                              Header::Size::_2}
+                         .write(buffer.begin(), buffer.end());
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
 
-            pos
-              = Header{SocketRegister::DestinationIPAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_4}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::DestinationIPAddress,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_4}
+                    .write(pos, buffer.end());
 
             pos = address.write(pos, buffer.end());
 
-            pos
-              = Header{*socket.tx_write, Header::ReadWrite::Write, Header::BlockSelect::SocketTxBuffer(sn.n), Header::Size::variable}
-                  .write(pos, buffer.end());
+            pos = Header{*socket.tx_write,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketTxBuffer(sn.n),
+                         Header::Size::variable}
+                    .write(pos, buffer.end());
 
             w5500->selected([&]() {
                 w5500->command_q.push(typename Commands::Write{buffer.begin(), pos});
@@ -1690,24 +1843,27 @@ struct W5500 {
             });
 
             auto cmdpos = pos;
-            pos
-              = Header{SocketRegister::TX_WritePointer, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos         = Header{SocketRegister::TX_WritePointer,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
             *socket.tx_write += data.size();
             *pos++ = std::byte(*socket.tx_write >> 8);
             *pos++ = std::byte(*socket.tx_write & 0xff);
 
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
             *pos++ = 0x20_b;
 
             pos = socket.add_read_ir(pos, buffer.end(), *w5500, sn);
             //            pos = socket.add_read_tx_write(pos, buffer.end(), *w5500, sn);
 
-            w5500->selected([&]() {
-                w5500->command_q.push(typename Commands::Write{cmdpos, pos});
-            });
+            w5500->selected(
+              [&]() { w5500->command_q.push(typename Commands::Write{cmdpos, pos}); });
             w5500->command_q.push(
               typename Commands::Call_Socket{&SocketState::check_send_ready, sn});
             return true;
@@ -1718,9 +1874,12 @@ struct W5500 {
         W5500*       w5500{};
         SocketNumber sn{};
 
-        SocketState&       getSocket() { return w5500->sockets[sn.n]; }
+        SocketState& getSocket() { return w5500->sockets[sn.n]; }
+
         SocketState const& getSocket() const { return w5500->sockets[sn.n]; }
-        bool  send_ready() const { return getSocket().connected && !getSocket().send_in_progress; }
+
+        bool send_ready() const { return getSocket().connected && !getSocket().send_in_progress; }
+
         auto& getRecvBuffer() { return getSocket().recv_buffer; }
 
         ~TCPSocket_() {
@@ -1734,7 +1893,11 @@ struct W5500 {
         TCPSocket_& operator=(TCPSocket_ const&) = delete;
         TCPSocket_(TCPSocket_ const&)            = delete;
 
-        TCPSocket_(TCPSocket_&& other) : w5500{other.w5500}, sn{other.sn} { other.sn.setInvalid(); }
+        TCPSocket_(TCPSocket_&& other)
+          : w5500{other.w5500}
+          , sn{other.sn} {
+            other.sn.setInvalid();
+        }
 
         TCPSocket_& operator=(TCPSocket_&& other) {
             if(std::addressof(other) != this) {
@@ -1745,7 +1908,10 @@ struct W5500 {
             return *this;
         }
 
-        TCPSocket_(W5500& w5500_, SocketNumber sn_) : w5500{std::addressof(w5500_)}, sn{sn_} {
+        TCPSocket_(W5500&       w5500_,
+                   SocketNumber sn_)
+          : w5500{std::addressof(w5500_)}
+          , sn{sn_} {
             auto& socket = getSocket();
             auto& buffer = socket.command_buffer;
             socket.free  = false;
@@ -1764,12 +1930,11 @@ struct W5500 {
               typename Commands::Call_Socket{&SocketState::check_sock_established, sn});
         }
 
-        TCPSocket_(
-          W5500&        w5500_,
-          SocketNumber  sn_,
-          IPAddress     peer,
-          std::uint16_t port,
-          std::uint16_t localPort)
+        TCPSocket_(W5500&        w5500_,
+                   SocketNumber  sn_,
+                   IPAddress     peer,
+                   std::uint16_t port,
+                   std::uint16_t localPort)
           : w5500{std::addressof(w5500_)}
           , sn{sn_} {
             auto& socket = getSocket();
@@ -1777,34 +1942,44 @@ struct W5500 {
             socket.free  = false;
 
             auto pos = buffer.begin();
-            pos
-              = Header{SocketRegister::Mode, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos      = Header{SocketRegister::Mode,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
             *pos++ = 1_b;
 
-            pos
-              = Header{SocketRegister::SourcePort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::SourcePort,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
 
             *pos++ = std::byte(localPort >> 8);
             *pos++ = std::byte(localPort & 0xff);
 
-            pos
-              = Header{SocketRegister::DestinationIPAddress, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_4}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::DestinationIPAddress,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_4}
+                    .write(pos, buffer.end());
 
             pos = peer.write(pos, buffer.end());
 
-            pos
-              = Header{SocketRegister::DestinationPort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::DestinationPort,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
 
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
 
             *pos++ = 0x1_b;
 
@@ -1839,9 +2014,11 @@ struct W5500 {
             }
             auto& buffer            = socket.command_buffer;
             socket.send_in_progress = true;
-            auto pos
-              = Header{*socket.tx_write, Header::ReadWrite::Write, Header::BlockSelect::SocketTxBuffer(sn.n), Header::Size::variable}
-                  .write(buffer.begin(), buffer.end());
+            auto pos                = Header{*socket.tx_write,
+                              Header::ReadWrite::Write,
+                              Header::BlockSelect::SocketTxBuffer(sn.n),
+                              Header::Size::variable}
+                         .write(buffer.begin(), buffer.end());
 
             w5500->selected([&]() {
                 w5500->command_q.push(typename Commands::Write{buffer.begin(), pos});
@@ -1849,24 +2026,27 @@ struct W5500 {
             });
             //           UC_LOG_D("send on {} {}", socket.tx_write, span);
             auto cmdpos = pos;
-            pos
-              = Header{SocketRegister::TX_WritePointer, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos         = Header{SocketRegister::TX_WritePointer,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
             *socket.tx_write += data.size();
             *pos++ = std::byte(*socket.tx_write >> 8);
             *pos++ = std::byte(*socket.tx_write & 0xff);
 
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
             *pos++ = 0x20_b;
 
             pos = socket.add_read_ir(pos, buffer.end(), *w5500, sn);
             //            pos = socket.add_read_tx_write(pos, buffer.end(), *w5500, sn);
 
-            w5500->selected([&]() {
-                w5500->command_q.push(typename Commands::Write{cmdpos, pos});
-            });
+            w5500->selected(
+              [&]() { w5500->command_q.push(typename Commands::Write{cmdpos, pos}); });
             w5500->command_q.push(
               typename Commands::Call_Socket{&SocketState::check_send_ready, sn});
             return true;
@@ -1887,14 +2067,18 @@ struct W5500 {
     };
 
     using TCPSocket = TCPSocket_;
+
     struct TCPServerSocket_ {
         W5500*        w5500{};
         SocketNumber  sn{};
         std::uint16_t port;
 
-        SocketState&       getSocket() { return w5500->sockets[sn.n]; }
+        SocketState& getSocket() { return w5500->sockets[sn.n]; }
+
         SocketState const& getSocket() const { return w5500->sockets[sn.n]; }
-        bool  send_ready() const { return getSocket().connected && !getSocket().send_in_progress; }
+
+        bool send_ready() const { return getSocket().connected && !getSocket().send_in_progress; }
+
         auto& getRecvBuffer() { return getSocket().recv_buffer; }
 
         ~TCPServerSocket_() {
@@ -1925,7 +2109,9 @@ struct W5500 {
             return *this;
         }
 
-        TCPServerSocket_(W5500& w5500_, SocketNumber sn_, std::uint16_t port_)
+        TCPServerSocket_(W5500&        w5500_,
+                         SocketNumber  sn_,
+                         std::uint16_t port_)
           : w5500{std::addressof(w5500_)}
           , sn{sn_}
           , port{port_} {
@@ -1934,21 +2120,27 @@ struct W5500 {
             socket.free  = false;
 
             auto pos = buffer.begin();
-            pos
-              = Header{SocketRegister::Mode, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos      = Header{SocketRegister::Mode,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
             *pos++ = 1_b;
 
-            pos
-              = Header{SocketRegister::SourcePort, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_2}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::SourcePort,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_2}
+                    .write(pos, buffer.end());
 
             *pos++ = std::byte(port >> 8);
             *pos++ = std::byte(port & 0xff);
 
-            pos
-              = Header{SocketRegister::Command, Header::ReadWrite::Write, Header::BlockSelect::SocketRegister(sn.n), Header::Size::_1}
-                  .write(pos, buffer.end());
+            pos = Header{SocketRegister::Command,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::SocketRegister(sn.n),
+                         Header::Size::_1}
+                    .write(pos, buffer.end());
 
             *pos++ = 0x1_b;
 
@@ -2004,9 +2196,11 @@ struct W5500 {
     auto selected(F&& f) {
         struct Selector {
             W5500& w5500;
+
             Selector(W5500& w5500_) : w5500{w5500_} {
                 w5500.command_q.push(typename Commands::Select{});
             }
+
             ~Selector() { w5500.command_q.push(typename Commands::Deselect{}); }
         };
 
@@ -2028,10 +2222,13 @@ struct W5500 {
     static constexpr auto CheckLinkWaitTime = std::chrono::seconds{2};
 
     void append_yield() { command_q.push(typename Commands::Yield{}); }
+
     void append_read_mode() {
-        auto pos
-          = Header{CommonRegister::Mode, Header::ReadWrite::Read, Header::BlockSelect::CommonRegister(), Header::Size::_1}
-              .write(commandBuffer.begin(), commandBuffer.end());
+        auto pos = Header{CommonRegister::Mode,
+                          Header::ReadWrite::Read,
+                          Header::BlockSelect::CommonRegister(),
+                          Header::Size::_1}
+                     .write(commandBuffer.begin(), commandBuffer.end());
 
         selected([&]() {
             command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
@@ -2040,9 +2237,11 @@ struct W5500 {
     }
 
     void append_link_check() {
-        auto pos
-          = Header{CommonRegister::PHY_Configuration, Header::ReadWrite::Read, Header::BlockSelect::CommonRegister(), Header::Size::_1}
-              .write(commandBuffer.begin(), commandBuffer.end());
+        auto pos = Header{CommonRegister::PHY_Configuration,
+                          Header::ReadWrite::Read,
+                          Header::BlockSelect::CommonRegister(),
+                          Header::Size::_1}
+                     .write(commandBuffer.begin(), commandBuffer.end());
 
         selected([&]() {
             command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
@@ -2050,10 +2249,13 @@ struct W5500 {
         });
         command_q.push(typename Commands::Call_Self{&W5500::check_link});
     }
+
     void append_link_disconnect_check() {
-        auto pos
-          = Header{CommonRegister::PHY_Configuration, Header::ReadWrite::Read, Header::BlockSelect::CommonRegister(), Header::Size::_1}
-              .write(commandBuffer.begin(), commandBuffer.end());
+        auto pos = Header{CommonRegister::PHY_Configuration,
+                          Header::ReadWrite::Read,
+                          Header::BlockSelect::CommonRegister(),
+                          Header::Size::_1}
+                     .write(commandBuffer.begin(), commandBuffer.end());
 
         selected([&]() {
             command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
@@ -2063,9 +2265,11 @@ struct W5500 {
     }
 
     void append_chip_check() {
-        auto pos
-          = Header{CommonRegister::ChipVersion, Header::ReadWrite::Read, Header::BlockSelect::CommonRegister(), Header::Size::_1}
-              .write(commandBuffer.begin(), commandBuffer.end());
+        auto pos = Header{CommonRegister::ChipVersion,
+                          Header::ReadWrite::Read,
+                          Header::BlockSelect::CommonRegister(),
+                          Header::Size::_1}
+                     .write(commandBuffer.begin(), commandBuffer.end());
 
         selected([&]() {
             command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
@@ -2075,9 +2279,11 @@ struct W5500 {
     }
 
     void append_read_common_regs() {
-        auto pos
-          = Header{CommonRegister::Mode, Header::ReadWrite::Read, Header::BlockSelect::CommonRegister(), Header::Size::variable}
-              .write(commandBuffer.begin(), commandBuffer.end());
+        auto pos = Header{CommonRegister::Mode,
+                          Header::ReadWrite::Read,
+                          Header::BlockSelect::CommonRegister(),
+                          Header::Size::variable}
+                     .write(commandBuffer.begin(), commandBuffer.end());
 
         selected([&]() {
             command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
@@ -2087,9 +2293,11 @@ struct W5500 {
     }
 
     void append_reset() {
-        auto pos
-          = Header{CommonRegister::Mode, Header::ReadWrite::Write, Header::BlockSelect::CommonRegister(), Header::Size::_1}
-              .write(commandBuffer.begin(), commandBuffer.end());
+        auto pos = Header{CommonRegister::Mode,
+                          Header::ReadWrite::Write,
+                          Header::BlockSelect::CommonRegister(),
+                          Header::Size::_1}
+                     .write(commandBuffer.begin(), commandBuffer.end());
 
         *pos++ = 0x80_b;
         selected([&]() { command_q.push(typename Commands::Write{commandBuffer.begin(), pos}); });
@@ -2101,47 +2309,60 @@ struct W5500 {
     }
 
     template<typename I>
-    constexpr auto
-    writeIpConfig(I first, I last, IPAddress ownIp, IPAddress gateway, IPAddress subnetMask) {
+    constexpr auto writeIpConfig(I         first,
+                                 I         last,
+                                 IPAddress ownIp,
+                                 IPAddress gateway,
+                                 IPAddress subnetMask) {
         auto pos = first;
-        pos
-          = Header{CommonRegister::GatewayAddress, Header::ReadWrite::Write, Header::BlockSelect::CommonRegister(), Header::Size::_4}
-              .write(pos, last);
+        pos      = Header{CommonRegister::GatewayAddress,
+                     Header::ReadWrite::Write,
+                     Header::BlockSelect::CommonRegister(),
+                     Header::Size::_4}
+                .write(pos, last);
         pos = gateway.write(pos, last);
 
-        pos
-          = Header{CommonRegister::SubnetMaskAddress, Header::ReadWrite::Write, Header::BlockSelect::CommonRegister(), Header::Size::_4}
-              .write(pos, last);
+        pos = Header{CommonRegister::SubnetMaskAddress,
+                     Header::ReadWrite::Write,
+                     Header::BlockSelect::CommonRegister(),
+                     Header::Size::_4}
+                .write(pos, last);
         pos = subnetMask.write(pos, last);
 
-        pos
-          = Header{CommonRegister::SourceIpAddress, Header::ReadWrite::Write, Header::BlockSelect::CommonRegister(), Header::Size::_4}
-              .write(pos, last);
+        pos = Header{CommonRegister::SourceIpAddress,
+                     Header::ReadWrite::Write,
+                     Header::BlockSelect::CommonRegister(),
+                     Header::Size::_4}
+                .write(pos, last);
         pos = ownIp.write(pos, last);
 
         return pos;
     }
+
     void append_mac_config(MacAddress const& mac) {
         auto pos = commandBuffer.begin();
         selected([&]() {
-            pos
-              = Header{CommonRegister::SourceHardwareAddress, Header::ReadWrite::Write, Header::BlockSelect::CommonRegister(), Header::Size::variable}
-                  .write(pos, commandBuffer.end());
+            pos = Header{CommonRegister::SourceHardwareAddress,
+                         Header::ReadWrite::Write,
+                         Header::BlockSelect::CommonRegister(),
+                         Header::Size::variable}
+                    .write(pos, commandBuffer.end());
             pos = mac.write(pos, commandBuffer.end());
             command_q.push(typename Commands::Write{commandBuffer.begin(), pos});
         });
         command_q.push(typename Commands::Call_Self{&W5500::mac_set});
     }
 
-    void append_ip_config(IPAddress ownIp, IPAddress gateway, IPAddress subnetMask) {
+    void append_ip_config(IPAddress ownIp,
+                          IPAddress gateway,
+                          IPAddress subnetMask) {
         auto pos = commandBuffer.begin();
         selected([&]() {
-            UC_LOG_D(
-              "ip config ip: {} gw: {} sm: {} hasDHCP: {}",
-              ownIp.octets,
-              gateway.octets,
-              subnetMask.octets,
-              hasDHCP);
+            UC_LOG_D("ip config ip: {} gw: {} sm: {} hasDHCP: {}",
+                     ownIp.octets,
+                     gateway.octets,
+                     subnetMask.octets,
+                     hasDHCP);
 
             pos = writeIpConfig(pos, commandBuffer.end(), ownIp, gateway, subnetMask);
 
@@ -2151,10 +2372,9 @@ struct W5500 {
     }
 
     void mac_set() {
-        append_ip_config(
-          Config::IpConfig.ownIp,
-          Config::IpConfig.gateway,
-          Config::IpConfig.subnetMask);
+        append_ip_config(Config::IpConfig.ownIp,
+                         Config::IpConfig.gateway,
+                         Config::IpConfig.subnetMask);
     }
 
     void ip_set() {
@@ -2237,15 +2457,18 @@ struct W5500 {
     void handle(typename Commands::Yield) {
         //   UC_LOG_D("yield");
     }
+
     void handle(typename Commands::Select) {
         //     UC_LOG_D("select");
         apply(clear(Cs{}));
     }
+
     void handle(typename Commands::Deselect) {
         //   UC_LOG_D("deselect");
         apply(set(Cs{}));
         Clock::template delay<std::chrono::nanoseconds, 35>();
     }
+
     void handle(typename Commands::Write const& c) {
         // UC_LOG_D("write");
         command_in_progress = true;
@@ -2259,14 +2482,17 @@ struct W5500 {
             command_in_progress = false;
         });
     }
+
     void handle(typename Commands::Call_Self const& c) {
         //  UC_LOG_D("call self");
         std::invoke(c.function, this);
     }
+
     void handle(typename Commands::Call_Socket const& c) {
         // UC_LOG_D("call socket");
         std::invoke(c.function, sockets[c.n.n], *this, c.n);
     }
+
     void handle(typename Commands::Reset) {
         // UC_LOG_D("reset request");
         state               = State::reset;
@@ -2337,6 +2563,7 @@ struct W5500 {
     }
 
     std::uint16_t currentEphemeralPort{};
+
     std::uint16_t nextEphemeralPort() {
         auto ret    = currentEphemeralPort;
         auto isFree = [](std::uint16_t) { return true; };   //TODO
@@ -2357,7 +2584,8 @@ struct W5500 {
 
     DHCPHandler_t dhcpHandler{*this};
 
-    std::optional<TCPSocket> tcpSocket(IPAddress const& ip, std::uint16_t port) {
+    std::optional<TCPSocket> tcpSocket(IPAddress const& ip,
+                                       std::uint16_t    port) {
         if(!ready) {
             return std::nullopt;
         }
@@ -2424,7 +2652,8 @@ struct W5500 {
         return {};
     }
 
-    std::optional<UDPSocket> udpMulticastSocket(std::uint16_t port, IPAddress multicast) {
+    std::optional<UDPSocket> udpMulticastSocket(std::uint16_t port,
+                                                IPAddress     multicast) {
         if(!ready) {
             UC_LOG_D("not ready");
             return std::nullopt;

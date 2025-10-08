@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.28)
 
 if(TARGET kvasir_devices)
-  return()
+    return()
 endif()
 
 add_library(kvasir_devices INTERFACE)
