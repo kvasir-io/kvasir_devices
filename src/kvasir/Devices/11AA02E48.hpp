@@ -27,9 +27,7 @@ namespace Kvasir { namespace _11AA02E48 {
                 first = false;
                 return;
             }
-            if(start_bit != false || bit != true) {
-                error = true;
-            }
+            if(start_bit != false || bit != true) { error = true; }
         };
 
         auto out_bit = [&](bool v) {
@@ -46,9 +44,7 @@ namespace Kvasir { namespace _11AA02E48 {
         };
 
         auto out_byte = [&](std::byte v, bool mak) {
-            for(std::size_t i{}; i < 8; ++i) {
-                out_bit((v & (1_b << (7 - i))) != 0x0_b);
-            }
+            for(std::size_t i{}; i < 8; ++i) { out_bit((v & (1_b << (7 - i))) != 0x0_b); }
             out_bit(mak);
             check_sak();
         };
@@ -87,14 +83,10 @@ namespace Kvasir { namespace _11AA02E48 {
         out_byte(std::byte{0xFF - (N - 1)}, true);
 
         std::array<std::byte, N> mac{};
-        for(std::size_t i{}; i < N; ++i) {
-            mac[i] = in_byte(true);
-        }
+        for(std::size_t i{}; i < N; ++i) { mac[i] = in_byte(true); }
 
         set_pin();
-        if(error) {
-            return std::nullopt;
-        }
+        if(error) { return std::nullopt; }
         return mac;
     }
 

@@ -359,9 +359,7 @@ struct dhcp {
          MacAddress       mac)
       : xid{xid_} {
         std::copy(mac.octets.begin(), mac.octets.end(), chaddr.begin());
-        if(hostname.empty() || hostname.size() > (sname.size() - 4)) {
-            return;
-        }
+        if(hostname.empty() || hostname.size() > (sname.size() - 4)) { return; }
         dhcp_options[2] = 3;
         sname[0]        = 12;
         sname[1]        = static_cast<std::uint8_t>(hostname.size());
@@ -406,39 +404,29 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::MessageType::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::MessageType;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size != TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size != TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
                 cb(mt);
-                if(mt.messageType != AcceptedMessageType) {
-                    return std::nullopt;
-                }
+                if(mt.messageType != AcceptedMessageType) { return std::nullopt; }
             }
             break;
         case OptionFields::SubnetMask::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::SubnetMask;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size != TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size != TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -447,17 +435,13 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::DomainNameServer::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::DomainNameServer;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size < TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size < TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -466,17 +450,13 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::Router::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::Router;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size < TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size < TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -485,17 +465,13 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::ServerIdentifier::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::ServerIdentifier;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size < TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size < TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -508,9 +484,7 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::IPAddressLeaseTime::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
 
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::IPAddressLeaseTime;
@@ -518,9 +492,7 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
                 buffer                              = buffer.subspan(1);
                 UC_LOG_D("buffer: {} {} {::#x}", option, size, buffer.subspan(0, size));
 
-                if(size < TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size < TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -529,17 +501,13 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::RenewalTimerValue::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::RenewalTimerValue;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size < TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size < TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -548,17 +516,13 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
             break;
         case OptionFields::RebindTimerValue::ID:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size             = static_cast<std::uint8_t>(buffer[0]);
                 using T                             = OptionFields::RebindTimerValue;
                 static constexpr std::uint8_t TSize = sizeof(T);
                 buffer                              = buffer.subspan(1);
 
-                if(size < TSize && buffer.size() < TSize) {
-                    return std::nullopt;
-                }
+                if(size < TSize && buffer.size() < TSize) { return std::nullopt; }
                 T mt;
                 std::memcpy(std::addressof(mt), buffer.data(), TSize);
                 buffer = buffer.subspan(size);
@@ -568,9 +532,7 @@ std::optional<std::span<std::byte const>> parseOptions(std::span<std::byte const
 
         default:
             {
-                if(buffer.empty()) {
-                    return std::nullopt;
-                }
+                if(buffer.empty()) { return std::nullopt; }
                 std::uint8_t const size = static_cast<std::uint8_t>(buffer[0]);
                 buffer                  = buffer.subspan(1);
                 UC_LOG_D("Unknown DHCP option {} {} {}", option, size, buffer.subspan(0, size));
@@ -705,9 +667,7 @@ struct DHCPHandler {
             {
                 if(Clock::now() > next) {
                     next = Clock::now() + 100ms;
-                    if(!socket) {
-                        socket = chip.udpSocket(ClientPort);
-                    }
+                    if(!socket) { socket = chip.udpSocket(ClientPort); }
                     if(socket) {
                         UC_LOG_D("dhcp socket created");
                         timeout = Clock::now() + 5s;
@@ -1147,25 +1107,19 @@ struct W5500 {
 
         void read_tx_write(W5500&,
                            SocketNumber) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             auto old_tx_write = tx_write;
 
             tx_write
               = static_cast<std::uint16_t>((static_cast<std::uint32_t>(last_read_pos[0]) << 8)
                                            | static_cast<std::uint32_t>(last_read_pos[1]));
 
-            if(old_tx_write) {
-                UC_LOG_D("read {} assume {}", tx_write, old_tx_write);
-            }
+            if(old_tx_write) { UC_LOG_D("read {} assume {}", tx_write, old_tx_write); }
         }
 
         void read_rx_write(W5500&       w5500,
                            SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             auto const rx_write
               = static_cast<std::uint16_t>((static_cast<std::uint32_t>(last_read_pos_recv[0]) << 8)
                                            | static_cast<std::uint32_t>(last_read_pos_recv[1]));
@@ -1254,9 +1208,7 @@ struct W5500 {
 
         void recv_ready(W5500&       w5500,
                         SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
 
             w5500.selected([&]() {
                 add_read_rx_write(recv_command_buffer.begin(),
@@ -1279,25 +1231,19 @@ struct W5500 {
 
         void read_rx_read(W5500&,
                           SocketNumber) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             auto old_rx_read = rx_read;
 
             rx_read
               = static_cast<std::uint16_t>((static_cast<std::uint32_t>(last_read_pos_recv[0]) << 8)
                                            | static_cast<std::uint32_t>(last_read_pos_recv[1]));
 
-            if(old_rx_read) {
-                UC_LOG_D("read {} assume {}", rx_read, old_rx_read);
-            }
+            if(old_rx_read) { UC_LOG_D("read {} assume {}", rx_read, old_rx_read); }
         }
 
         void check_send_ready(W5500&       w5500,
                               SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             //   UC_LOG_D("ir {}", *last_read_pos);
             if(((*last_read_pos) & 0x10_b) != 0_b) {
                 w5500.append_yield();
@@ -1318,9 +1264,7 @@ struct W5500 {
 
         void check_sock_init(W5500&       w5500,
                              SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             if(*last_state_pos != 0x13_b) {
                 UC_LOG_D("not init {}", *last_state_pos);
 
@@ -1351,9 +1295,7 @@ struct W5500 {
 
         void check_sock_init_server(W5500&       w5500,
                                     SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             if(*last_state_pos != 0x13_b) {
                 UC_LOG_D("not init {}", *last_state_pos);
 
@@ -1392,9 +1334,7 @@ struct W5500 {
 
         void check_sock_udp(W5500&       w5500,
                             SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             if(*last_state_pos != 0x22_b) {
                 UC_LOG_D("not init {}", *last_state_pos);
 
@@ -1420,9 +1360,7 @@ struct W5500 {
 
         void check_sock_established(W5500&       w5500,
                                     SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             if(*last_state_pos != 0x17_b) {
                 UC_LOG_D("not established {}", *last_read_pos);
                 w5500.append_yield();
@@ -1447,9 +1385,7 @@ struct W5500 {
 
         void check_sock_listen(W5500&       w5500,
                                SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             if(*last_state_pos != 0x14_b) {
                 UC_LOG_D("not listen {}", *last_read_pos);
                 w5500.append_yield();
@@ -1474,9 +1410,7 @@ struct W5500 {
 
         void check_sock_accept(W5500&       w5500,
                                SocketNumber sn) {
-            if(!ready || free) {
-                return;
-            }
+            if(!ready || free) { return; }
             if(*last_state_pos == 0x00_b) {
                 UC_LOG_D("failed");
                 connected = false;
@@ -1690,9 +1624,7 @@ struct W5500 {
                       std::errc>
         recv_from(std::span<std::byte> buffer) {
             auto& packet = getRecvBuffer();
-            if(packet.size() < 8) {
-                return std::unexpected{std::errc::no_message_available};
-            }
+            if(packet.size() < 8) { return std::unexpected{std::errc::no_message_available}; }
 
             IPAddress senderIp{packet.begin(), packet.end()};
 
@@ -1708,9 +1640,7 @@ struct W5500 {
                 return std::unexpected{std::errc::no_message_available};
             }
 
-            if(buffer.size() < payloadSize) {
-                return std::unexpected{std::errc::no_buffer_space};
-            }
+            if(buffer.size() < payloadSize) { return std::unexpected{std::errc::no_buffer_space}; }
             std::copy(packet.begin() + 8, packet.begin() + 8 + payloadSize, buffer.begin());
 
             packet.erase(packet.begin(), packet.begin() + 8 + payloadSize);
@@ -1722,9 +1652,7 @@ struct W5500 {
                         std::uint16_t              port,
                         std::span<std::byte const> data) {
             auto& socket = getSocket();
-            if(!socket.connected || socket.send_in_progress) {
-                return false;
-            }
+            if(!socket.connected || socket.send_in_progress) { return false; }
             auto& buffer            = socket.command_buffer;
             socket.send_in_progress = true;
             auto pos                = buffer.begin();
@@ -1809,9 +1737,7 @@ struct W5500 {
                      std::uint16_t              port,
                      std::span<std::byte const> data) {
             auto& socket = getSocket();
-            if(!socket.connected || socket.send_in_progress) {
-                return false;
-            }
+            if(!socket.connected || socket.send_in_progress) { return false; }
             auto& buffer            = socket.command_buffer;
             socket.send_in_progress = true;
             auto pos                = Header{SocketRegister::DestinationPort,
@@ -2000,18 +1926,14 @@ struct W5500 {
         enum class OperationState { succeeded, failed, ongoing };
 
         bool has_error() {
-            if(sn.isInvalid()) {
-                return true;
-            }
+            if(sn.isInvalid()) { return true; }
             auto& socket = getSocket();
             return socket.error;
         }
 
         bool send(std::span<std::byte const> data) {
             auto& socket = getSocket();
-            if(!socket.connected || socket.send_in_progress) {
-                return false;
-            }
+            if(!socket.connected || socket.send_in_progress) { return false; }
             auto& buffer            = socket.command_buffer;
             socket.send_in_progress = true;
             auto pos                = Header{*socket.tx_write,
@@ -2054,9 +1976,7 @@ struct W5500 {
 
         std::optional<std::span<std::byte>> recv(std::span<std::byte> buffer) {
             auto& packet = getRecvBuffer();
-            if(packet.empty() || buffer.empty()) {
-                return std::nullopt;
-            }
+            if(packet.empty() || buffer.empty()) { return std::nullopt; }
             std::size_t const size = std::min(buffer.size(), packet.size());
 
             std::copy(packet.begin(), packet.begin() + size, buffer.begin());
@@ -2157,29 +2077,21 @@ struct W5500 {
         }
 
         bool has_error() {
-            if(sn.isInvalid()) {
-                return true;
-            }
+            if(sn.isInvalid()) { return true; }
             auto& socket = getSocket();
             return socket.error;
         }
 
         bool has_pending_connection() {
-            if(sn.isInvalid()) {
-                return false;
-            }
+            if(sn.isInvalid()) { return false; }
             auto& socket = getSocket();
             return socket.rdyAccept;
         }
 
         std::optional<TCPSocket> accept() {
-            if(sn.isInvalid()) {
-                return std::nullopt;
-            }
+            if(sn.isInvalid()) { return std::nullopt; }
             auto& socket = getSocket();
-            if(!socket.rdyAccept) {
-                return std::nullopt;
-            }
+            if(!socket.rdyAccept) { return std::nullopt; }
             auto client = TCPSocket_{*w5500, sn};
             sn.setInvalid();
             auto newServer = w5500->tcpServerSocket(port);
@@ -2446,9 +2358,7 @@ struct W5500 {
             auto const cmd = command_q.front();
             command_q.pop();
 
-            if(std::holds_alternative<typename Commands::Yield>(cmd)) {
-                return;
-            }
+            if(std::holds_alternative<typename Commands::Yield>(cmd)) { return; }
 
             std::visit([&](auto const& v) { return handle(v); }, cmd);
         }
@@ -2506,9 +2416,7 @@ struct W5500 {
             {
                 command_in_progress = false;
                 command_q.clear();
-                for(auto& socket : sockets) {
-                    socket.reset_raw();
-                }
+                for(auto& socket : sockets) { socket.reset_raw(); }
                 apply(clear(Rst{}), set(Cs{}));
                 timeout              = now + ResetPulseTime;
                 checkWaitTime        = now + CheckLinkWaitTime;
@@ -2545,18 +2453,14 @@ struct W5500 {
                     //if disconnected more than x seconds reset
                     if(linkDisconnectFlag) {
                         //TODO reset after 10 secs when disconnected
-                        if(now >= timeout) {
-                            apply(Kvasir::SystemControl::SystemReset());
-                        }
+                        if(now >= timeout) { apply(Kvasir::SystemControl::SystemReset()); }
                     } else {
                         timeout = now + 10s;
                     }
                 }
                 //UC_LOG_D("state IDLE\n");
                 processCommandQ();
-                if(ready) {
-                    dhcpHandler.handle();
-                }
+                if(ready) { dhcpHandler.handle(); }
             }
             break;
         }
@@ -2586,14 +2490,10 @@ struct W5500 {
 
     std::optional<TCPSocket> tcpSocket(IPAddress const& ip,
                                        std::uint16_t    port) {
-        if(!ready) {
-            return std::nullopt;
-        }
+        if(!ready) { return std::nullopt; }
 
         if constexpr(hasDHCP) {
-            if(!dhcpHandler.ready) {
-                return std::nullopt;
-            }
+            if(!dhcpHandler.ready) { return std::nullopt; }
         }
 
         std::uint8_t n{};
@@ -2609,14 +2509,10 @@ struct W5500 {
     }
 
     std::optional<TCPServerSocket> tcpServerSocket(std::uint16_t port) {
-        if(!ready) {
-            return std::nullopt;
-        }
+        if(!ready) { return std::nullopt; }
 
         if constexpr(hasDHCP) {
-            if(!dhcpHandler.ready) {
-                return std::nullopt;
-            }
+            if(!dhcpHandler.ready) { return std::nullopt; }
         }
 
         std::uint8_t n{};
@@ -2631,14 +2527,10 @@ struct W5500 {
     }
 
     std::optional<UDPSocket> udpSocket(std::uint16_t port) {
-        if(!ready) {
-            return std::nullopt;
-        }
+        if(!ready) { return std::nullopt; }
 
         if constexpr(hasDHCP) {
-            if(!dhcpHandler.ready && port != DHCPHandler_t::ClientPort) {
-                return std::nullopt;
-            }
+            if(!dhcpHandler.ready && port != DHCPHandler_t::ClientPort) { return std::nullopt; }
         }
 
         std::uint8_t n{};

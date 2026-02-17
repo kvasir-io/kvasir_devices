@@ -71,14 +71,10 @@ struct PushButton {
 
     static constexpr bool isConfigValid() {
         if(Config::useLong || Config::useLongRelease) {
-            if(!Config::hasLongPressTime) {
-                return false;
-            }
+            if(!Config::hasLongPressTime) { return false; }
         }
         if(Config::hasLongPressTime) {
-            if(!Config::useLong && !Config::useLongRelease) {
-                return false;
-            }
+            if(!Config::useLong && !Config::useLongRelease) { return false; }
         }
         if(!Config::useHit && !Config::useLong && !Config::useShortRelease
            && !Config::useLongRelease)
@@ -213,29 +209,19 @@ struct PushButton {
         };
 
         if(pin) {
-            if constexpr(Config::useHit) {
-                pushTimed(Event::Type::Hit);
-            }
-            if constexpr(Config::useLong) {
-                isHit.store(true, std::memory_order_relaxed);
-            }
+            if constexpr(Config::useHit) { pushTimed(Event::Type::Hit); }
+            if constexpr(Config::useLong) { isHit.store(true, std::memory_order_relaxed); }
         } else {
-            if constexpr(Config::useLong) {
-                isHit.store(false, std::memory_order_relaxed);
-            }
+            if constexpr(Config::useLong) { isHit.store(false, std::memory_order_relaxed); }
 
             if constexpr(Config::useLongRelease) {
                 if(diff > Config::longPressTime) {
                     pushTimed(Event::Type::Release_Long);
                 } else {
-                    if constexpr(Config::useShortRelease) {
-                        pushTimed(Event::Type::Release_Short);
-                    }
+                    if constexpr(Config::useShortRelease) { pushTimed(Event::Type::Release_Short); }
                 }
             } else {
-                if constexpr(Config::useShortRelease) {
-                    pushTimed(Event::Type::Release_Short);
-                }
+                if constexpr(Config::useShortRelease) { pushTimed(Event::Type::Release_Short); }
             }
         }
     }

@@ -18,7 +18,7 @@ struct Ktd2026 : SharedBusDevice<I2C> {
     using SharedBusDevice<I2C>::acquire;
     using SharedBusDevice<I2C>::release;
     using SharedBusDevice<I2C>::isOwner;
-    using SharedBusDevice<I2C>::incementErrorCount;
+    using SharedBusDevice<I2C>::incrementErrorCount;
     using SharedBusDevice<I2C>::resetErrorCount;
     using SharedBusDevice<I2C>::resetHandler;
     using OS = typename I2C::OperationState;
@@ -58,12 +58,8 @@ struct Ktd2026 : SharedBusDevice<I2C> {
     using sv = std::variant<Init, Idle, SendWait>;
 
     static constexpr sv toSv(nsv const& ns) {
-        if(std::holds_alternative<Init>(ns)) {
-            return std::get<Init>(ns);
-        }
-        if(std::holds_alternative<Idle>(ns)) {
-            return std::get<Idle>(ns);
-        }
+        if(std::holds_alternative<Init>(ns)) { return std::get<Init>(ns); }
+        if(std::holds_alternative<Idle>(ns)) { return std::get<Idle>(ns); }
         assert(false);
     }
 
@@ -161,7 +157,7 @@ struct Ktd2026 : SharedBusDevice<I2C> {
               case OS::failed:
                   {
                       release();
-                      incementErrorCount();
+                      incrementErrorCount();
                       colorChanged_ = true;
                       return toSv(state.failState);
                   }

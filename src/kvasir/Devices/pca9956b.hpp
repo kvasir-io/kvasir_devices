@@ -18,7 +18,7 @@ struct Pca9956b : SharedBusDevice<I2C> {
     using SharedBusDevice<I2C>::acquire;
     using SharedBusDevice<I2C>::release;
     using SharedBusDevice<I2C>::isOwner;
-    using SharedBusDevice<I2C>::incementErrorCount;
+    using SharedBusDevice<I2C>::incrementErrorCount;
     using SharedBusDevice<I2C>::resetErrorCount;
     using SharedBusDevice<I2C>::resetHandler;
     using OS = typename I2C::OperationState;
@@ -123,9 +123,7 @@ struct Pca9956b : SharedBusDevice<I2C> {
     void setPwm(std::size_t index,
                 PWM         pwm) {
         assert(pwm_.size() > index + 1);
-        if(pwm_[index + 1] == std::byte(pwm)) {
-            return;
-        }
+        if(pwm_[index + 1] == std::byte(pwm)) { return; }
         pwmChanged_     = true;
         pwm_[index + 1] = std::byte(pwm);
     }
@@ -134,9 +132,7 @@ struct Pca9956b : SharedBusDevice<I2C> {
                     std::uint16_t current) {
         assert(iref_.size() > index + 1);
         auto ir = calcIref(rExt_, current);
-        if(iref_[index + 1] == ir) {
-            return;
-        }
+        if(iref_[index + 1] == ir) { return; }
         irefChanged_     = true;
         iref_[index + 1] = ir;
     }
@@ -194,9 +190,7 @@ struct Pca9956b : SharedBusDevice<I2C> {
         st_ = match(
           st_,
           [&](Init const& state) -> sv {
-              if(currentTime > state.timeout) {
-                  return Idle{currentTime};
-              }
+              if(currentTime > state.timeout) { return Idle{currentTime}; }
               return state;
           },
           [&](Idle const& state) -> sv {
@@ -243,7 +237,7 @@ struct Pca9956b : SharedBusDevice<I2C> {
               case OS::failed:
                   {
                       release();
-                      incementErrorCount();
+                      incrementErrorCount();
                       return Idle{currentTime + fail_retry_time};
                   }
               }
@@ -268,7 +262,7 @@ struct Pca9956b : SharedBusDevice<I2C> {
               case OS::failed:
                   {
                       release();
-                      incementErrorCount();
+                      incrementErrorCount();
                       return Idle{currentTime + fail_retry_time};
                   }
               }

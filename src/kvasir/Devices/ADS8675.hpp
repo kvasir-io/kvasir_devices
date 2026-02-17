@@ -28,9 +28,7 @@ struct ADS8675 {
 
     void sampleCallback() {
         if(ready) {
-            if(dma_running) {
-                UC_LOG_W("bad");
-            }
+            if(dma_running) { UC_LOG_W("bad"); }
             apply(set(Cs{}));
         }
     }
@@ -101,9 +99,7 @@ struct ADS8675 {
             break;
         case State::wait_init_data:
             {
-                if(!dma_running) {
-                    s = State::idle;
-                }
+                if(!dma_running) { s = State::idle; }
             }
             break;
         case State::idle:

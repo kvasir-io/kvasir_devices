@@ -3,13 +3,12 @@
 #include "kvasir/Devices/SharedBusDevice.hpp"
 #include "kvasir/Devices/utils.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <utility>
 #include <variant>
 
 namespace Kvasir {
@@ -34,9 +33,7 @@ struct I2CScanner : SharedBusDevice<I2C> {
 
     static constexpr std::uint8_t nextNonReservedAddr(std::uint8_t addr) {
         ++addr;
-        while(addr <= MaxValidAddr && isReservedAddr(addr)) {
-            ++addr;
-        }
+        while(addr <= MaxValidAddr && isReservedAddr(addr)) { ++addr; }
         return addr;
     }
 
@@ -82,18 +79,14 @@ struct I2CScanner : SharedBusDevice<I2C> {
     }
 
     void reset() {
-        if(isOwner()) {
-            release();
-        }
+        if(isOwner()) { release(); }
         state      = Idle{};
         foundCount = 0;
     }
 
 private:
     void addFoundAddress(std::uint8_t addr) {
-        if(foundCount < MaxDevices) {
-            foundAddresses[foundCount++] = addr;
-        }
+        if(foundCount < MaxDevices) { foundAddresses[foundCount++] = addr; }
     }
 
 public:
