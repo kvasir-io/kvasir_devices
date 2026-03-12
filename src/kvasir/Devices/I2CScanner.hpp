@@ -15,7 +15,27 @@
 namespace Kvasir {
 
 namespace detail {
-    template<typename Derived, typename I2C, typename Clock>
+
+    template<typename I2C, typename Clock>
+    struct DefaultScanProbe {
+        static void probe(typename Clock::time_point t,
+                          std::uint8_t               addr) {
+            I2C::receive(t, addr, 1);
+        }
+    };
+
+    template<typename I2C, typename Clock, std::byte RegisterByte = std::byte{0x00}>
+    struct SendReceiveScanProbe {
+        static void probe(typename Clock::time_point t,
+                          std::uint8_t               addr) {
+            I2C::send_receive(t, addr, std::array<std::byte, 1>{RegisterByte}, 1);
+        }
+    };
+
+    template<typename Derived,
+             typename I2C,
+             typename Clock,
+             typename Probe = DefaultScanProbe<I2C, Clock>>
     struct I2CScannerBase : SharedBusDevice<I2C> {
     private:
         using OS = typename I2C::OperationState;
@@ -23,10 +43,6 @@ namespace detail {
         using SharedBusDevice<I2C>::acquire;
         using SharedBusDevice<I2C>::release;
         using SharedBusDevice<I2C>::isOwner;
-
-        static constexpr std::uint8_t MinValidAddr = 0x08;
-        static constexpr std::uint8_t MaxValidAddr = 0x77;
-        static constexpr std::size_t  MaxDevices   = MaxValidAddr - MinValidAddr + 1u;
 
         struct Probing {
             std::uint8_t currentAddr;
@@ -43,6 +59,10 @@ namespace detail {
         State state{Done{}};
 
     public:
+        static constexpr std::uint8_t MinValidAddr = 0x08;
+        static constexpr std::uint8_t MaxValidAddr = 0x77;
+        static constexpr std::size_t  MaxDevices   = MaxValidAddr - MinValidAddr + 1u;
+
         bool isDone() const { return std::holds_alternative<Done>(state); }
 
         void handler() {
@@ -54,7 +74,7 @@ namespace detail {
               [](Done const& st) -> State { return st; },
               [&](Probing const& st) -> State {
                   if(acquire()) {
-                      I2C::receive(currentTime, st.currentAddr, 1);
+                      Probe::probe(currentTime, st.currentAddr);
                       return ReceiveWait{st.currentAddr};
                   }
                   return st;
@@ -88,9 +108,10 @@ namespace detail {
     };
 }   // namespace detail
 
-template<typename I2C, typename Clock>
-struct I2CScannerRange : detail::I2CScannerBase<I2CScannerRange<I2C, Clock>, I2C, Clock> {
-    using Base = detail::I2CScannerBase<I2CScannerRange<I2C, Clock>, I2C, Clock>;
+template<typename I2C, typename Clock, typename Probe = detail::DefaultScanProbe<I2C, Clock>>
+struct I2CScannerRange
+  : detail::I2CScannerBase<I2CScannerRange<I2C, Clock, Probe>, I2C, Clock, Probe> {
+    using Base = detail::I2CScannerBase<I2CScannerRange<I2C, Clock, Probe>, I2C, Clock, Probe>;
 
     friend Base;
 
@@ -133,9 +154,13 @@ private:
     }
 };
 
-template<typename I2C, typename Clock, std::size_t Size>
-struct I2CScannerList : detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size>, I2C, Clock> {
-    using Base = detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size>, I2C, Clock>;
+template<typename I2C,
+         typename Clock,
+         std::size_t Size,
+         typename Probe = detail::DefaultScanProbe<I2C, Clock>>
+struct I2CScannerList
+  : detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size, Probe>, I2C, Clock, Probe> {
+    using Base = detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size, Probe>, I2C, Clock, Probe>;
 
     friend Base;
 
