@@ -14,31 +14,37 @@
 
 namespace Kvasir {
 
-namespace detail {
-
+struct DefaultScanProbe {
     template<typename I2C, typename Clock>
-    struct DefaultScanProbe {
+    struct type {
         static void probe(typename Clock::time_point t,
                           std::uint8_t               addr) {
             I2C::receive(t, addr, 1);
         }
     };
+};
 
-    template<typename I2C, typename Clock, std::byte RegisterByte = std::byte{0x00}>
-    struct SendReceiveScanProbe {
+template<std::byte RegisterByte = std::byte{0x00}>
+struct SendReceiveScanProbe {
+    template<typename I2C, typename Clock>
+    struct type {
         static void probe(typename Clock::time_point t,
                           std::uint8_t               addr) {
             I2C::send_receive(t, addr, std::array<std::byte, 1>{RegisterByte}, 1);
         }
     };
+};
+
+namespace detail {
 
     template<typename Derived,
              typename I2C,
              typename Clock,
-             typename Probe = DefaultScanProbe<I2C, Clock>>
+             typename ProbePolicy = DefaultScanProbe>
     struct I2CScannerBase : SharedBusDevice<I2C> {
     private:
-        using OS = typename I2C::OperationState;
+        using OS    = typename I2C::OperationState;
+        using Probe = typename ProbePolicy::template type<I2C, Clock>;
 
         using SharedBusDevice<I2C>::acquire;
         using SharedBusDevice<I2C>::release;
@@ -108,10 +114,11 @@ namespace detail {
     };
 }   // namespace detail
 
-template<typename I2C, typename Clock, typename Probe = detail::DefaultScanProbe<I2C, Clock>>
+template<typename I2C, typename Clock, typename ProbePolicy = DefaultScanProbe>
 struct I2CScannerRange
-  : detail::I2CScannerBase<I2CScannerRange<I2C, Clock, Probe>, I2C, Clock, Probe> {
-    using Base = detail::I2CScannerBase<I2CScannerRange<I2C, Clock, Probe>, I2C, Clock, Probe>;
+  : detail::I2CScannerBase<I2CScannerRange<I2C, Clock, ProbePolicy>, I2C, Clock, ProbePolicy> {
+    using Base
+      = detail::I2CScannerBase<I2CScannerRange<I2C, Clock, ProbePolicy>, I2C, Clock, ProbePolicy>;
 
     friend Base;
 
@@ -154,13 +161,11 @@ private:
     }
 };
 
-template<typename I2C,
-         typename Clock,
-         std::size_t Size,
-         typename Probe = detail::DefaultScanProbe<I2C, Clock>>
+template<typename I2C, typename Clock, std::size_t Size, typename ProbePolicy = DefaultScanProbe>
 struct I2CScannerList
-  : detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size, Probe>, I2C, Clock, Probe> {
-    using Base = detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size, Probe>, I2C, Clock, Probe>;
+  : detail::I2CScannerBase<I2CScannerList<I2C, Clock, Size, ProbePolicy>, I2C, Clock, ProbePolicy> {
+    using Base = detail::
+      I2CScannerBase<I2CScannerList<I2C, Clock, Size, ProbePolicy>, I2C, Clock, ProbePolicy>;
 
     friend Base;
 
