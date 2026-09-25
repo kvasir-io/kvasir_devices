@@ -1,108 +1,142 @@
 #pragma once
+#include "Log.hpp"
+#include "kvasir/Util/using_literals.hpp"
+
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <optional>
 
-namespace Kvasir { namespace _11AA02E48 {
+namespace Kvasir { namespace Eeprom11AA02E48 {
+    /// The UNI/O timing. `HalfBit` is half a UNI/O bit period: every bit is Manchester coded
+    /// as two halves of `HalfBit` each, so the bit period T_E is 2 x HalfBit. The UNI/O bus
+    /// specification allows T_E from 10 us to 100 us (the 11AA02E48 data sheet's "Bit
+    /// Period"), and the device learns it from the header's 0x55. 25 us puts T_E at 50 us,
+    /// the middle of the range; a HalfBit of 50 us would run at T_E(max), where a slow edge
+    /// or a delay a little long overruns the specification. Another timing is a
+    /// type with its own `static constexpr std::chrono::microseconds HalfBit`.
+    struct DefaultTiming {
+        static constexpr std::chrono::microseconds HalfBit{25};
+    };
 
+    /// Read the six-byte EUI-48 of a Microchip 11AA02E48 (UNI/O, one wire) blocking, bit
+    /// banged on `Pin` with Clock::delay. The whole read is timed by delays alone, so the
+    /// caller masks interrupts around it: a stretched half bit is a Manchester violation the
+    /// part answers by going idle.
     template<typename Clock,
-             typename Pin>
+             typename Pin,
+             typename Timing = DefaultTiming>
     std::optional<std::array<std::byte,
                              6>>
     readMacBlocking() {
-        static constexpr std::size_t CLKPeriod = 50;
-        bool                         error     = false;
+        using std::chrono::microseconds;
+        static constexpr microseconds HalfBit = Timing::HalfBit;
+        static_assert(HalfBit >= microseconds{5} && HalfBit <= microseconds{50},
+                      "UNI/O bit period T_E = 2 x HalfBit is 10 .. 100 us");
+        bool error = false;
 
-        auto set_pin = []() { apply(makeInput(Pin{})); };
+        auto setPin = []() { apply(makeInput(Pin{})); };
 
-        auto clear_pin = []() { apply(makeOutput(Pin{}), clear(Pin{})); };
+        auto clearPin = []() { apply(makeOutput(Pin{}), clear(Pin{})); };
 
-        auto check_sak = [&, first = true]() mutable {
-            Clock::template delay<std::chrono::microseconds, CLKPeriod / 2>();
-            bool const start_bit = apply(read(Pin{}));
-            Clock::template delay<std::chrono::microseconds, CLKPeriod>();
+        // Each half bit is sampled a quarter bit into it, and the bit's remainder is waited out
+        // from that sample on, so the sample point does not drift when HalfBit is odd.
+        static constexpr microseconds Quarter = HalfBit / 2;
+        static constexpr microseconds Rest    = HalfBit - Quarter;
+
+        // The SAK is the part's to drive: the line is released first, since a NoMAK before it
+        // leaves the master driving low.
+        auto checkSak = [&, first = true]() mutable {
+            setPin();
+            Clock::delay(Quarter);
+            bool const startBit = apply(read(Pin{}));
+            Clock::delay(HalfBit);
             bool const bit = apply(read(Pin{}));
-            Clock::template delay<std::chrono::microseconds, CLKPeriod / 2>();
+            Clock::delay(Rest);
             if(first) {
                 first = false;
                 return;
             }
-            if(start_bit != false || bit != true) { error = true; }
+            if(startBit != false || bit != true) { error = true; }
         };
 
-        auto out_bit = [&](bool v) {
+        auto outBit = [&](bool v) {
             if(v) {
-                clear_pin();
-                Clock::template delay<std::chrono::microseconds, CLKPeriod>();
-                set_pin();
+                clearPin();
+                Clock::delay(HalfBit);
+                setPin();
             } else {
-                set_pin();
-                Clock::template delay<std::chrono::microseconds, CLKPeriod>();
-                clear_pin();
+                setPin();
+                Clock::delay(HalfBit);
+                clearPin();
             }
-            Clock::template delay<std::chrono::microseconds, CLKPeriod>();
+            Clock::delay(HalfBit);
         };
 
-        auto out_byte = [&](std::byte v, bool mak) {
-            for(std::size_t i{}; i < 8; ++i) { out_bit((v & (1_b << (7 - i))) != 0x0_b); }
-            out_bit(mak);
-            check_sak();
+        auto outByte = [&](std::byte v, bool mak) {
+            for(std::size_t i{}; i < 8; ++i) { outBit((v & (1_b << (7 - i))) != 0x0_b); }
+            outBit(mak);
+            checkSak();
         };
 
-        auto in_byte = [&](bool mak) {
+        auto inByte = [&](bool mak) {
             std::byte v{};
             for(std::size_t i{}; i < 8; ++i) {
-                Clock::template delay<std::chrono::microseconds, CLKPeriod / 2>();
-                bool const start_bit = apply(read(Pin{}));
-                Clock::template delay<std::chrono::microseconds, CLKPeriod>();
+                Clock::delay(Quarter);
+                bool const startBit = apply(read(Pin{}));
+                Clock::delay(HalfBit);
                 bool const bit = apply(read(Pin{}));
                 v |= (bit ? 0x1_b : 0x0_b) << (7 - i);
-                Clock::template delay<std::chrono::microseconds, CLKPeriod / 2>();
-                if(start_bit == bit) {
-                    UC_LOG_C("bad read");
+                Clock::delay(Rest);
+                if(startBit == bit) {
+                    UC_LOG_W("11AA02E48: Manchester violation, start bit equals data bit");
                     error = true;
                 }
             }
-            out_bit(mak);
-            check_sak();
+            outBit(mak);
+            checkSak();
             return v;
         };
 
-        clear_pin();
-        Clock::template delay<std::chrono::microseconds, 1000>();
-        set_pin();
-        Clock::template delay<std::chrono::microseconds, 600>();
-        clear_pin();
-        Clock::template delay<std::chrono::microseconds, 10>();
-        out_byte(0x55_b, true);
-        out_byte(0xA0_b, true);
-        out_byte(0x03_b, true);
+        clearPin();
+        Clock::delay(microseconds{1000});
+        setPin();
+        Clock::delay(microseconds{650});   // standby pulse: TSTBY is 600 us minimum
+        clearPin();
+        Clock::delay(microseconds{10});
+        outByte(0x55_b, true);
+        outByte(0xA0_b, true);
+        outByte(0x03_b, true);
 
         static constexpr std::size_t N = 6;
-        out_byte(0x00_b, true);
-        out_byte(std::byte{0xFF - (N - 1)}, true);
+        outByte(0x00_b, true);
+        outByte(std::byte{0xFF - (N - 1)}, true);
 
         std::array<std::byte, N> mac{};
-        for(std::size_t i{}; i < N; ++i) { mac[i] = in_byte(true); }
+        // MAK after each byte but the last, which gets NoMAK: that ends the READ (4.1) and
+        // the part answers it with its SAK and returns to standby, leaving the line to the master.
+        for(std::size_t i{}; i < N; ++i) { mac[i] = inByte(i + 1 < N); }
 
-        set_pin();
+        setPin();
         if(error) { return std::nullopt; }
         return mac;
     }
 
+    /// readMacBlocking(), up to `retrys` times until one read checks out.
     template<typename Clock,
-             typename Pin>
+             typename Pin,
+             typename Timing = DefaultTiming>
     std::optional<std::array<std::byte,
                              6>>
     readMacBlockingRetry(std::size_t retrys) {
         std::optional<std::array<std::byte, 6>> mac;
         while(!mac && retrys != 0) {
-            mac = readMacBlocking<Clock, Pin>();
-            Clock::template delay<std::chrono::microseconds, 10>();
+            mac = readMacBlocking<Clock, Pin, Timing>();
+            Clock::delay(std::chrono::microseconds{10});
             --retrys;
         }
 
         return mac;
     }
 
-}}   // namespace Kvasir::_11AA02E48
+}}   // namespace Kvasir::Eeprom11AA02E48

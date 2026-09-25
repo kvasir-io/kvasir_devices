@@ -1,0 +1,21 @@
+Guard the wide-character hash specialisation.
+
+The SDK's libc++ is configured with _LIBCPP_HAS_WIDE_CHARACTERS=0, which leaves
+std::char_traits<wchar_t> undefined. fixed_string.h already avoids std::wstring_view for
+that reason, but std::basic_string_view<wchar_t> still needs the traits, so the
+specialisation below is a hard error in this configuration. Nothing mp-units offers to the
+examples instantiates fixed_wstring, so the specialisation is simply left out there.
+
+--- a/src/core/include/mp-units/ext/fixed_string.h
++++ b/src/core/include/mp-units/ext/fixed_string.h
+@@ -304,8 +304,10 @@
+ // available when the macro _LIBCPP_HAS_WIDE_CHARACTERS is set to 1. The `wchar_t` type can continue to be used
+ // without that macro definition. To avoid requiring an additional macro, we simply use std::basic_string_view<wchar_t>,
+ // which is the underlying definition of std::wstring_view.
++#if !defined(_LIBCPP_HAS_WIDE_CHARACTERS) || _LIBCPP_HAS_WIDE_CHARACTERS
+ template<std::size_t N>
+ struct std::hash<mp_units::fixed_wstring<N>> : std::hash<std::basic_string_view<wchar_t>> {};
++#endif
+ 
+ #if MP_UNITS_HOSTED
+ // formatting support

@@ -1,0 +1,58 @@
+name: CI
+
+on:
+    workflow_dispatch:
+    push:
+        branches:
+            - master
+    pull_request:
+        branches:
+            - master
+
+jobs:
+    build-and-test:
+        runs-on: ubuntu-latest
+        container:
+            image: archlinux:latest
+        # The two configurations of `just test-all`: clang builds every suite with -Weverything and
+        # asan+ubsan (test/i2c/CMakeLists.txt, test/usb/CMakeLists.txt), gcc with -Wall -Wextra -Wconversion
+        # - they catch different things. Warnings are errors here: the build must be warning-free.
+        strategy:
+            fail-fast: false
+            matrix:
+                compiler:
+                    - {cc: gcc, cxx: g++}
+                    - {cc: clang, cxx: clang++}
+
+        steps:
+            - name: Set up C++ environment
+              run: |
+                pacman -Syu --noconfirm --disable-download-timeout
+                pacman -S --noconfirm --disable-download-timeout git cmake base-devel ${{ matrix.compiler.cc == 'clang' && 'clang' || '' }}
+
+            - name: Checkout repository
+              uses: actions/checkout@v5
+
+            # The tests use the SDK header-only (kvasir::sdk, kvasir::test_support) and the USB suite
+            # string_constant from uc_log/remote_fmt - only that submodule chain, not the SDK's libc/libc++.
+            # A plain git clone rather than a second actions/checkout: act cannot run a JS action for another
+            # repository in the bare archlinux container (no node).
+            - name: Checkout Kvasir SDK
+              run: |
+                git clone --depth 1 https://github.com/kvasir-io/Kvasir_SDK.git "$GITHUB_WORKSPACE/../Kvasir_SDK"
+                cd "$GITHUB_WORKSPACE/../Kvasir_SDK"
+                git submodule update --init --depth 1 uc_log
+                git -C uc_log submodule update --init --depth 1 remote_fmt
+                git -C uc_log/remote_fmt submodule update --init --depth 1 string_constant
+
+            - name: Configure CMake
+              run: cmake -S test -B build -DCMAKE_COMPILE_WARNING_AS_ERROR=ON -DKVASIR_ROOT="$(realpath "$GITHUB_WORKSPACE/../Kvasir_SDK")"
+              env:
+                CC: ${{ matrix.compiler.cc }}
+                CXX: ${{ matrix.compiler.cxx }}
+
+            - name: Build tests
+              run: cmake --build build -j"$(nproc)"
+
+            - name: Run tests
+              run: cd build && ctest --output-on-failure
