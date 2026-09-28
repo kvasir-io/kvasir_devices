@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Device.hpp"
+#include "../Groups.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -60,7 +61,9 @@ namespace Adt7420Detail {
 /// `Adt7420<>` is the 13-bit reset default, 1/16 degC; `Adt7420<Resolution::bits16>` is 16-bit,
 /// 1/128 degC.
 /// Setpoints are always the 13-bit format, left-aligned by three. 0x48..0x4B by A1 A0.
-template<Adt7420Detail::Resolution Res = Adt7420Detail::Resolution::bits13>
+/// `Timing::LimitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
+template<Adt7420Detail::Resolution Res = Adt7420Detail::Resolution::bits13,
+         typename Timing               = DefaultTiming>
 struct Adt7420 {
     static constexpr std::string_view Name = "ADT7420";
     /// Analog Devices ADT7420. ADT7420.md:592, :739: ID (0x0B) is 0xCB, the manufacturer in 7:3 and
@@ -157,7 +160,7 @@ struct Adt7420 {
     };
 
     /// THIGH, TLOW then TCRIT, always the 13-bit format (1/16 degC).
-    struct Limits {
+    struct Limits : Groups::LimitsReadBack<Timing> {
         using Value                        = CentiDegC;
         static constexpr std::size_t Items = 3;
         static constexpr std::size_t Bytes = 2;

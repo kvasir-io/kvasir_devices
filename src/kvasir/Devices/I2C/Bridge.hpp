@@ -605,8 +605,10 @@ private:
     bool                           holding_{};
 };
 
-/// Device `D` behind bridge `B`: the same device, its gate wrapped.
-///     using Light = BehindBridge<ExtPort, OnChannel<Chips::Veml7700, 2>>;
+/// Device `D` behind bridge `B`, its gate wrapped. `OnChannel` is an application alias:
+///     template<typename C, std::uint8_t Ch>
+///     using OnChannel = Device<I2c1, Clock, C, DefaultConfig, NoReset, MuxGate<Switch, Ch>>;
+///     using Light     = BehindBridge<ExtPort, OnChannel<Chips::Veml7700, 2>>;
 template<typename B, typename D>
 using BehindBridge = Device<typename D::I2cBus,
                             typename D::ClockT,

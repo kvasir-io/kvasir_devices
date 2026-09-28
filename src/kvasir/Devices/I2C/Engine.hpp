@@ -575,9 +575,13 @@ struct Engine {
         for(std::uint8_t w = 0; w < static_cast<std::uint8_t>(ops.writes.size()); ++w) {
             auto&       s  = ops.writeSlot(e, w);
             auto const& gi = ops.writes[w];
-            if(gi.periodMs != 0 && now >= s.due) {   // a periodic write: everything again
+            if(gi.periodMs != 0 && now >= s.due) {
+                // Only `known` items: one never set keeps the chip's power-on value (an
+                // MCP4725's EEPROM level).
                 advanceDue(s.due, now, ms(gi.periodMs));
-                s.dirty.store(gi.allItems, std::memory_order_relaxed);
+                if(auto const told = gi.allItems & s.known; told != 0) {
+                    s.dirty.fetch_or(told, std::memory_order_relaxed);
+                }
             }
             auto const d = s.dirty.load(std::memory_order_acquire);
             if(d == 0) { continue; }
@@ -874,6 +878,10 @@ struct Engine {
         typename I2c::Request req{};
         req.address  = ops.address;
         req.callback = e.pending_.callback();
+        // SPI/Transport.hpp turns the register byte into the chip's command.
+        if constexpr(requires { req.registerBytes; }) {
+            req.registerBytes = static_cast<std::uint8_t>(s.hasRegister ? n : 0U);
+        }
         if(s.kind == Step::Kind::write) {
             for(std::size_t i = 0; i < s.count; ++i) {
                 tx[n + i] = s.fromBuffer ? buf[s.offset + i] : std::byte{s.bytes[i]};

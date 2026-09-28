@@ -700,6 +700,252 @@ void asASwitch() {
     checkEq(bothOn, std::size_t{0}, "still never both");
 }
 
+// -- disabled by the application (Config::enabled()) -------------------------------------------
+
+/// Whether the module the part sits on is fitted, as the application knows it.
+struct Fitted {
+    static inline bool yes{false};
+};
+
+struct Enabled {
+    static constexpr std::uint8_t Address = 0x23;
+
+    static bool enabled() { return Fitted::yes; }
+};
+
+struct EnabledKeeping : Enabled {
+    static constexpr auto WhileDisabled = Kvasir::I2C::WhileOff::disconnected;
+};
+
+struct EnabledSwitch {
+    static bool enabled() { return Fitted::yes; }
+};
+
+using ModuleLight      = Dev<Chips::Bh1750, Enabled>;
+using KeptLight        = Dev<Chips::Bh1750, EnabledKeeping>;
+using ModuleSwitch     = Dev<Chips::Tca9548a, EnabledSwitch>;
+using CutModuleLight   = BehindBridge<Cut, Dev<Chips::Bh1750, Enabled>>;
+using CutKeptLight     = BehindBridge<Cut, Dev<Chips::Bh1750, EnabledKeeping>>;
+using SplitModuleLight = BehindBridge<Split, Dev<Chips::Bh1750, Enabled>>;
+
+static_assert(ModuleLight::Enableable && !ModuleLight::Bridged && ModuleLight::Switchable);
+static_assert(!Dev<Chips::Bh1750>::Switchable);
+
+void disabled() {
+    testCase("enabled(): disabled from the start, the part is offline and left alone");
+    fresh();
+    Fitted::yes      = false;
+    FakeBus::respond = zeros;
+    {
+        ModuleLight light{};
+        runFor(light, 2s);
+        check(light.link() == Link::offline, "offline");
+        checkEq(transactionsTo(ModuleLight::Address), std::size_t{0}, "silent");
+        checkEq(light.errors(), 0U, "nothing counted");
+
+        testCase("enabled(): enabled, the part comes up");
+        Fitted::yes = true;
+        check(runUntil(light, [&] { return light.valid(); }, 2s), "delivers");
+        checkEq(light.bringUps(), 1U, "one bring-up");
+
+        testCase("enabled(): disabled mid-transaction, the transaction is waited for, not cut");
+        bool pendingSeen = false;
+        for(int i = 0; i < 1000 && !pendingSeen; ++i) {
+            light.handler();
+            pendingSeen = !FakeBus::pending.empty();
+            if(!pendingSeen) {
+                FakeBus::complete();
+                FakeClock::current += 1ms;
+            }
+        }
+        check(pendingSeen, "a transaction is on the wire");
+        Fitted::yes = false;
+        light.handler();
+        check(!FakeBus::pending.empty(), "still on the wire: not abandoned");
+        runFor(light, 1s);
+        check(light.link() == Link::offline, "offline");
+        checkEq(light.errors(), 0U, "nothing counted against the part");
+        check(!light.valid(), "and not valid");
+
+        testCase("enabled(): enabled again, brought up from the start (unpowered)");
+        Fitted::yes = true;
+        check(runUntil(light, [&] { return light.valid(); }, 2s), "back");
+        checkEq(light.bringUps(), 2U, "through a second bring-up");
+    }
+
+    testCase("enabled(): WhileDisabled = disconnected keeps the bring-up");
+    fresh();
+    Fitted::yes      = true;
+    FakeBus::respond = zeros;
+    {
+        KeptLight light{};
+        check(runUntil(light, [&] { return light.valid(); }, 2s), "up");
+        Fitted::yes = false;
+        runFor(light, 1s);
+        check(light.offline(), "offline");
+        Fitted::yes = true;
+        check(runUntil(light, [&] { return light.valid(); }, 2s), "back");
+        checkEq(light.bringUps(), 1U, "no second bring-up");
+    }
+
+    testCase("enabled(): what is set while disabled is sent when enabled");
+    fresh();
+    Fitted::yes      = false;
+    FakeBus::respond = zeros;
+    {
+        ModuleSwitch mux{};
+        mux.set<Chips::Tca9548a::Channels>(0x04);
+        runFor(mux, 1s);
+        checkEq(transactionsTo(ModuleSwitch::Address), std::size_t{0}, "nothing goes out");
+        Fitted::yes = true;
+        check(runUntil(mux, [&] { return !mux.pending<Chips::Tca9548a::Channels>(); }, 1s), "sent");
+        check(hasWrite({0x04}), "the control byte is on the wire");
+    }
+
+    testCase("enabled(): behind a bridge, offline while either says so");
+    fresh();
+    Cut::clear();
+    Fitted::yes      = false;
+    FakeBus::respond = zeros;
+    {
+        BridgeLine<FakeClock, Cut> line{};
+        CutModuleLight             light{};
+        light.gate().bind(line);
+        auto both = all(line, light);
+        line.on();
+        runFor(both, 1s);
+        check(light.offline(), "bridge on, disabled: offline");
+        Fitted::yes = true;
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "both: up");
+        line.off();
+        runFor(both, 1s);
+        check(light.offline(), "bridge off, enabled: offline");
+        line.on();
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "both again: up");
+        checkEq(light.errors(), 0U, "nothing counted");
+    }
+
+    testCase("enabled(): disabled (kept), then the bridge cuts the power: a bring-up");
+    fresh();
+    Cut::clear();
+    Fitted::yes      = true;
+    FakeBus::respond = zeros;
+    {
+        BridgeLine<FakeClock, Cut> line{};
+        CutKeptLight               light{};
+        light.gate().bind(line);
+        auto both = all(line, light);
+        line.on();
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "up");
+        Fitted::yes = false;
+        runFor(both, 1s);
+        line.off();
+        runFor(both, 1s);
+        line.on();
+        Fitted::yes = true;
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "back");
+        checkEq(light.bringUps(), 2U, "brought up again");
+    }
+
+    testCase("enabled(): disabled (kept), the bridge off and on unseen: a bring-up");
+    fresh();
+    Cut::clear();
+    Fitted::yes      = true;
+    FakeBus::respond = zeros;
+    {
+        BridgeLine<FakeClock, Cut> line{};
+        CutKeptLight               light{};
+        light.gate().bind(line);
+        auto both = all(line, light);
+        line.on();
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "up");
+        Fitted::yes = false;
+        runFor(both, 1s);
+        line.off();   // only the line runs: the device never sees it off
+        runFor(line, 100ms);
+        line.on();
+        runFor(line, 100ms);
+        Fitted::yes = true;
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "back");
+        checkEq(light.bringUps(), 2U, "brought up again");
+    }
+
+    testCase("enabled(): disabled (kept) behind a bridge that stays on: no bring-up");
+    fresh();
+    Cut::clear();
+    Fitted::yes      = true;
+    FakeBus::respond = zeros;
+    {
+        BridgeLine<FakeClock, Cut> line{};
+        CutKeptLight               light{};
+        light.gate().bind(line);
+        auto both = all(line, light);
+        line.on();
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "up");
+        Fitted::yes = false;
+        runFor(both, 1s);
+        Fitted::yes = true;
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "back");
+        checkEq(light.bringUps(), 1U, "registers kept");
+    }
+
+    testCase("enabled(): a disconnecting bridge off, then disabled (unpowered): a bring-up");
+    fresh();
+    Split::clear();
+    Fitted::yes      = true;
+    FakeBus::respond = zeros;
+    {
+        BridgeLine<FakeClock, Split> line{};
+        SplitModuleLight             light{};
+        light.gate().bind(line);
+        auto both = all(line, light);
+        line.on();
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "up");
+        line.off();
+        runFor(both, 1s);
+        Fitted::yes = false;
+        runFor(both, 1s);
+        line.on();
+        Fitted::yes = true;
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "back");
+        checkEq(light.bringUps(), 2U, "the module was out: brought up again");
+    }
+
+    testCase("enabled(): each reason logs its own transitions");
+    fresh();
+    Cut::clear();
+    Fitted::yes      = true;
+    FakeBus::respond = zeros;
+    {
+        BridgeLine<FakeClock, Cut> line{};
+        CutKeptLight               light{};
+        light.gate().bind(line);
+        auto both = all(line, light);
+        line.on();
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "up");
+        auto       before = Kvasir::Test::Log::infos;
+        auto const lines  = [&] {
+            auto const n = Kvasir::Test::Log::infos - before;
+            before       = Kvasir::Test::Log::infos;
+            return n;
+        };
+        Fitted::yes = false;
+        runFor(both, 1s);
+        checkEq(lines(), 1, "disabled: one line");
+        line.off();
+        runFor(both, 1s);
+        checkEq(lines(),
+                2,
+                "the bridge off: the line's and the part's, although the part is offline already");
+        line.on();
+        runFor(both, 1s);
+        checkEq(lines(), 2, "the bridge back: the line's and the part's, the part still disabled");
+        Fitted::yes = true;
+        check(runUntil(both, [&] { return light.valid(); }, 2s), "back");
+        check(lines() >= 1, "enabled: its line, then the bring-up's own");
+    }
+}
+
 }   // namespace
 
 int main() {
@@ -714,5 +960,6 @@ int main() {
     throughAPart();
     oneAtATime();
     asASwitch();
+    disabled();
     return finish();
 }

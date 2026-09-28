@@ -120,6 +120,13 @@ struct Cy15b064j {
         }
     };
 
+    /// The memory interface (Eeprom24aa025e48).
+    using Write                                  = Store;
+    static constexpr std::size_t WritableBytes   = Capacity;
+    static constexpr std::size_t ReadChunkBytes  = ChunkBytes;
+    static constexpr std::size_t WriteChunkBytes = ChunkBytes;
+    static constexpr std::size_t WritePageBytes  = 0;
+
     using Reads  = List<Block>;
     using Writes = List<Store>;
 };

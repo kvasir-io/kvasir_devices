@@ -2,6 +2,7 @@
 
 #include "../Link.hpp"
 #include "../Log.hpp"
+#include "../ResetLine.hpp"
 #include "Bytes.hpp"
 #include "Concepts.hpp"
 #include "Engine.hpp"
@@ -51,7 +52,8 @@
 /// What a write group may add beyond Value/Bytes/encode:
 ///   Items         -- one dirty bit and one Value each: set<W>(i, v)
 ///   Initial       -- written after every bring-up unless the application set one first
-///   Period        -- rewritten cyclically
+///   Period        -- rewritten cyclically: the items set so far (all of them with Initial);
+///                    one never set is left at the chip's own value
 ///   Transient     -- a one-shot command, not a state: NOT re-sent after a reset. Everything
 ///                    else the application has written is, because the chip came back at its
 ///                    defaults (an EEPROM page write and setting a clock are the exceptions).
@@ -93,6 +95,12 @@
 ///                    that noticed. A group with the decode above keeps it anyway, together
 ///                    with unchanged<G>(); every other read group carries neither and pays
 ///                    nothing for them.
+///
+///   ConfirmChange -- `static constexpr std::uint8_t ConfirmChange = N;` (or the Config's, for
+///                    the groups in its `using Confirm = List<...>;`): a changed reading is
+///                    decoded only once a second read agrees, or after N that did not. For
+///                    level registers (an expander's inputs), where a bad read is a burst of
+///                    false edges. The re-reads are the run's retries: N <= MaxRetries.
 ///
 /// What a description may add for a part that NAKs while it wakes:
 ///   WakeRetries   -- `static constexpr std::uint8_t WakeRetries = N;`: a NAKed transaction is
@@ -214,18 +222,8 @@ namespace detail {
     concept BridgedGate = requires { requires G::Bridged; };
 }   // namespace detail
 
-/// No reset line, which is the common case.
-///
-/// `NoLine` is the marker `HasResetLine` below tests for. It is a marker rather than a type
-/// comparison because more than one identical `NoReset` exists across the SDK, and a device
-/// handed the wrong one would take the reset path and pulse nothing.
-struct NoReset {
-    static constexpr bool NoLine = true;
-
-    static void hold() {}
-
-    static void release() {}
-};
+/// No reset line (../ResetLine.hpp); `NoLine` is the marker `HasResetLine` tests for.
+using NoReset = Kvasir::NoReset;
 
 /// Where a device is with the part on the wire (Device::link()): `starting` while nothing has
 /// been acknowledged since the device (re)started, `answering` once it is through its bring-up
@@ -365,6 +363,21 @@ namespace detail {
         /// two periods or more.
         Duration      longestGap{};
         std::uint32_t lateGaps{};
+    };
+
+    /// Per read group that confirms changes: the bytes last taken and the ones awaiting a match.
+    template<std::size_t Bytes, bool Enable>
+    struct ConfirmSlot {};
+
+    template<std::size_t Bytes>
+    struct ConfirmSlot<Bytes, true> {
+        std::array<std::byte, Bytes> taken{};
+        std::array<std::byte, Bytes> candidate{};
+        std::uint8_t                 takenBytes{};
+        std::uint8_t                 candidateBytes{};
+        bool                         hasCandidate{};
+        std::uint8_t                 unconfirmed{};
+        std::uint32_t                disagreements{};
     };
 
     /// A cyclic read group whose next deadline follows the reading: a touch controller
@@ -516,15 +529,19 @@ namespace detail {
         std::uint32_t retries{};   ///< over the device's life
     };
 
-    /// A part behind a bridge (BridgedGate): whether the engine has put it offline, and the
-    /// bridge's generation it last came back in. An empty member for every other device.
+    /// A part behind a bridge or one the Config can disable: each offline reason on its own,
+    /// since they come and go independently. Empty for every other device.
     template<bool Enable>
     struct BridgeSlot {};
 
     template<>
     struct BridgeSlot<true> {
-        bool          offline{};
+        bool          gateOff{};     ///< offline because the bridge is not active
+        bool          disabled{};    ///< offline because Config::enabled() is false
+        bool          lostPower{};   ///< reset_() done since the part went offline
         std::uint32_t generation{};
+
+        [[nodiscard]] bool offline() const { return gateOff || disabled; }
     };
 
     constexpr bool hasCheck(std::span<Step const> steps) {
@@ -715,6 +732,82 @@ namespace detail {
         using type = std::tuple_element_t<I, std::tuple<Gs...>>;
     };
 
+    template<typename G,
+             typename... Gs>
+    constexpr bool inList(List<Gs...>*) {
+        return (std::is_same_v<G, Gs> || ...);
+    }
+
+    template<typename G,
+             typename Config>
+    constexpr bool confirmListed() {
+        if constexpr(requires { typename Config::Confirm; }) {
+            return inList<G>(static_cast<typename Config::Confirm*>(nullptr));
+        } else {
+            return false;
+        }
+    }
+
+    /// A group's ConfirmChange (see the file comment): its own, 0 included, else the Config's
+    /// for the groups it names. An I2C read cannot tell a good byte from a bad one: a part
+    /// losing its supply mid-read gives 0xFF, one clamping SDA 0x00, and the transfer succeeds.
+    ///     struct Config {
+    ///         using Confirm = List<Chips::Tca9555::Pins>;
+    ///         static constexpr std::uint8_t ConfirmChange = 3;
+    ///     };
+    /// Named, not every group: a FIFO, a stream or a clear-on-read status cannot be read twice.
+    template<typename G,
+             typename Config>
+    constexpr std::uint8_t confirmChangeOf() {
+        if constexpr(!HasSample<G>) {
+            return 0;
+        } else if constexpr(requires { G::ConfirmChange; }) {
+            return static_cast<std::uint8_t>(G::ConfirmChange);
+        } else if constexpr(requires { Config::ConfirmChange; }) {
+            return confirmListed<G, Config>() ? static_cast<std::uint8_t>(Config::ConfirmChange)
+                                              : std::uint8_t{0};
+        } else {
+            return 0;
+        }
+    }
+
+    /// What is wrong with a Config's ConfirmChange for a part with read groups `Reads`
+    /// (Device static_asserts `ok`; a function so a test can ask it for a bad Config).
+    enum class ConfirmConfig : std::uint8_t {
+        ok,
+        unnamed,     ///< ConfirmChange without a Confirm list
+        uncounted,   ///< a Confirm list without ConfirmChange
+        foreign,     ///< Confirm names a group that is not one of the part's reads
+        counted,     ///< a confirming group has a counted read: it cannot be read twice
+    };
+
+    template<typename Config,
+             typename Reads>
+    constexpr ConfirmConfig checkConfirmConfig() {
+        constexpr bool hasCount = requires { Config::ConfirmChange; };
+        constexpr bool hasList  = requires { typename Config::Confirm; };
+        if constexpr(hasCount && !hasList) {
+            return ConfirmConfig::unnamed;
+        } else if constexpr(hasList && !hasCount) {
+            return ConfirmConfig::uncounted;
+        } else {
+            if constexpr(hasList) {
+                bool const allReads = []<typename... Cs>(List<Cs...>*) {
+                    return (inList<Cs>(static_cast<Reads*>(nullptr)) && ...);
+                }(static_cast<typename Config::Confirm*>(nullptr));
+                if(!allReads) { return ConfirmConfig::foreign; }
+            }
+            bool counted = false;
+            forEach<Reads>([&](auto i) {
+                using G = typename Nth<Reads>::template type<decltype(i)::value>;
+                if constexpr(confirmChangeOf<G, Config>() != 0) {
+                    counted = counted || hasCounted(std::span<Step const>{G::Steps});
+                }
+            });
+            return counted ? ConfirmConfig::counted : ConfirmConfig::ok;
+        }
+    }
+
     template<typename L>
     [[nodiscard]] constexpr std::size_t maxPayloadOf() {
         std::size_t n = 0;
@@ -763,14 +856,11 @@ namespace detail {
         return any;
     }
 
-    /// The reset line's pin claim, if it has one, becomes the driver's.
-    template<typename R>
-    struct ResetClaims {};
+    using Kvasir::detail::ResetClaims;
 
-    template<HasClaims R>
-    struct ResetClaims<R> {
-        using Claims = typename R::Claims;
-    };
+    /// An SPI part's transport (SPI/Transport.hpp) rather than an I2C master: no I2C address.
+    template<typename B>
+    concept SpiTransport = requires { requires B::IsSpi; };
 }   // namespace detail
 
 /// The driver. `Chip` is the description (chips/); `Config` may set `Address`, the presence
@@ -784,10 +874,11 @@ namespace detail {
 /// rate the bus load is computed from).
 template<typename I2c,
          typename Clock,
-         Chip ChipT,
+         typename ChipT,
          typename Config = DefaultConfig,
          typename Reset  = NoReset,
          typename Gate   = NoGate>
+    requires Chip<ChipT> || detail::SpiTransport<I2c>
 struct Device
   : detail::EngineState<I2c, Clock>
   , detail::ResetClaims<Reset> {
@@ -848,8 +939,32 @@ struct Device
     /// Behind a bridge that can be switched off (Bridge.hpp): link() can say `offline`.
     static constexpr bool Bridged = detail::BridgedGate<Gate>;
 
+    /// Config's `static bool enabled();` takes the part offline for a reason the bus cannot see
+    /// (a module not fitted), as an inactive bridge would, and combines with one. It comes back
+    /// as `WhileDisabled` says: `unpowered` (default, brought up again) or `disconnected`.
+    ///     struct Config {
+    ///         static constexpr std::uint8_t Address = 0x49;
+    ///         static bool enabled() { return slots.fitted(2); }
+    ///     };
+    static constexpr bool Enableable = requires {
+        { Config::enabled() } -> std::convertible_to<bool>;
+    };
+
+    static constexpr bool Switchable = Bridged || Enableable;
+
+    static constexpr WhileOff WhileDisabled = [] {
+        if constexpr(requires { Config::WhileDisabled; }) {
+            return Config::WhileDisabled;
+        } else {
+            return WhileOff::unpowered;
+        }
+    }();
+
+    /// The part's I2C address; on an SPI transport, its chip-select GPIO (for the log).
     static constexpr std::uint8_t Address = [] {
-        if constexpr(requires { Config::Address; }) {
+        if constexpr(detail::SpiTransport<I2c>) {
+            return I2c::LogId;
+        } else if constexpr(requires { Config::Address; }) {
             return static_cast<std::uint8_t>(Config::Address);
         } else {
             return static_cast<std::uint8_t>(Chip::Address);
@@ -910,6 +1025,40 @@ struct Device
             return EngineDefaults::MaxRetries;
         }
     }();
+
+    template<typename G>
+    static constexpr std::uint8_t ConfirmChange = detail::confirmChangeOf<G, Config>();
+
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::unnamed,
+                  "Config::ConfirmChange names no read group: add `using Confirm = List<...>;` "
+                  "with the groups whose changes are confirmed");
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::uncounted,
+                  "Config::Confirm without Config::ConfirmChange confirms nothing");
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::foreign,
+                  "Config::Confirm names a group that is not one of this part's reads");
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::counted,
+                  "a read group with a counted read (a stream, a FIFO) cannot confirm changes: the "
+                  "confirming read is a second read at once");
+
+    static_assert(
+      [] {
+          bool ok = true;
+          detail::forEach<Reads>([&](auto i) {
+              using G = typename detail::Nth<Reads>::template type<decltype(i)::value>;
+              ok      = ok && ConfirmChange<G> <= MaxRetries;
+          });
+          return ok;
+      }(),
+      "a read group's ConfirmChange is over MaxRetries: its confirming re-reads are the run's "
+      "retries, and a run out of retries rejects the reading");
 
     static constexpr std::chrono::milliseconds FaultBackoff = [] {
         if constexpr(requires { Config::FaultBackoff; }) {
@@ -989,7 +1138,7 @@ struct Device
       "bytes inside an earlier read, or a first transaction that may NAK (it is the probe)");
     static_assert(
       [] {
-          if constexpr(detail::HasAddresses<Chip>) {
+          if constexpr(detail::HasAddresses<Chip> && !detail::SpiTransport<I2c>) {
               for(auto const a : Chip::Addresses) {
                   if(a == Address) { return true; }
               }
@@ -1075,6 +1224,7 @@ struct Device
         Sample                                                                        sample{};
         Request                                                                       request{};
         [[no_unique_address]] detail::HistorySlot<detail::KeepsHistory<G>, TimePoint> history{};
+        [[no_unique_address]] detail::ConfirmSlot<Bytes, ConfirmChange<G> != 0>       confirm{};
     };
 
     template<typename G>
@@ -1221,7 +1371,7 @@ private:
       .inFlightTimeoutMs = static_cast<std::uint32_t>(InFlightTimeout.count()),
       .wakeRetry         = [](EngineStateT& e, TimePoint now) { return self_(e).wakeRetry_(now); },
       .bridgeTurn        = [](EngineStateT& e, TimePoint now) -> bool {
-          if constexpr(Bridged) {
+          if constexpr(Switchable) {
               return self_(e).bridgeTurn_(now);
           } else {
               static_cast<void>(e);
@@ -1287,6 +1437,12 @@ private:
               [&](auto i) {
                   using G = typename detail::Nth<Reads>::template type<decltype(i)::value>;
                   auto& s = std::get<decltype(i)::value>(d.reads_);
+                  if constexpr(ConfirmChange<G> != 0) {
+                      if(!d.template confirmed_<G>(s)) {
+                          r = {detail::DecodeKind::retry, 0};
+                          return;
+                      }
+                  }
                   if constexpr(detail::HasSample<G>) {
                       auto const outcome = d.template decode_<G>(s);
                       using Result       = std::remove_cvref_t<decltype(outcome)>;
@@ -1334,7 +1490,8 @@ private:
         },
       .afterWrite =
         [](EngineStateT& e, std::uint8_t w, std::uint8_t item, TimePoint now) {
-            auto& d = self_(e);
+            auto& d            = self_(e);
+            d.withdrawnOnWire_ = false;
             detail::withIndex(
               w,
               [&](auto i) {
@@ -1367,7 +1524,7 @@ private:
       .registerBytes      = static_cast<std::uint8_t>(RegisterBytes),
       .initEmpty          = InitSteps.empty(),
       .faultsBeforeReinit = FaultsBeforeReinit,
-      .bridged            = Bridged,
+      .bridged            = Switchable,
       .hasResetLine       = HasResetLine,
       .maxRetries         = MaxRetries};
 
@@ -1401,8 +1558,8 @@ public:
     /// does not wait for it -- reads and writes go out while `starting` -- so a part with no Init
     /// and no cyclic read answers with the first thing the application asks of it.
     [[nodiscard]] Link link() const {
-        if constexpr(Bridged) {
-            if(bridge_.offline || gate_.offline()) { return Link::offline; }
+        if constexpr(Switchable) {
+            if(bridge_.offline() || gateOffline_() || disabled_()) { return Link::offline; }
         }
         if(!presence_.present()) { return Link::absent; }
         return up_ && acked_ ? Link::answering : Link::starting;
@@ -1601,6 +1758,13 @@ public:
         return n;
     }
 
+    /// Changed readings of G that the next read contradicted (ConfirmChange).
+    template<typename G>
+        requires(ConfirmChange<G> != 0)
+    [[nodiscard]] std::uint32_t disagreements() const {
+        return std::get<ReadSlot<G>>(reads_).confirm.disagreements;
+    }
+
     /// Frames of G the decode rejected (CRC, busy past MaxRetries, impossible values).
     template<typename G>
     [[nodiscard]] std::uint32_t rejected() const {
@@ -1790,6 +1954,19 @@ public:
             || (running_ == Running::write && group_ == detail::IndexOf<W, Writes>::value);
     }
 
+    /// Drop what write group W still owes; one on the wire is not retried. For a Transient
+    /// write (an EEPROM page) that must not land long after the caller gave up. Returns
+    /// whether anything was owed.
+    template<typename W>
+    bool withdraw() {
+        auto&      s    = std::get<WriteSlot<W>>(writes_);
+        bool const owed = s.dirty.exchange(0, std::memory_order_acq_rel) != 0;
+        bool const onWire
+          = running_ == Running::write && group_ == detail::IndexOf<W, Writes>::value;
+        if(onWire) { withdrawnOnWire_ = true; }
+        return owed || onWire;
+    }
+
     /// Read-backs of write group W that did not match what was written.
     template<typename W>
     [[nodiscard]] std::uint32_t mismatches() const
@@ -1905,43 +2082,73 @@ private:
     /// taken after the return.
     void pause_() { detail::Engine<I2c, Clock>::pause(*this, EngineOps); }
 
-    /// The part is behind a bridge: false while the engine has to keep still. A transaction
-    /// still on the wire when the bridge stops being active is waited for -- the gate is held
-    /// until then, which is what keeps a bridge the firmware switches from cutting it
-    /// (BridgeLine, `closing`) -- and whatever it says is dropped: a bridge that went by itself
-    /// fails it, and that is no news about the part.
-    bool bridgeTurn_(TimePoint now) {
-        if(gate_.offline()) {
-            if(inFlight_) {
-                if(pending_.take() == PendingT::Outcome::running
-                   && now - submittedAt_ <= InFlightTimeout)
-                {
-                    return false;
-                }
-                inFlight_ = false;
-                pending_.clear();
-            }
-            if(!bridge_.offline) { goOffline_(); }
+    [[nodiscard]] bool gateOffline_() const {
+        if constexpr(Bridged) {
+            return gate_.offline();
+        } else {
             return false;
         }
-        if(bridge_.generation != gate_.generation()) {
-            if(!bridge_.offline) { goOffline_(); }   // off and on again between two turns
-            bridge_.generation = gate_.generation();
-            bridge_.offline    = false;
-            presence_.restart();
-            detail::logBridge(Chip::Name, Address, true);
-        }
-        return true;
     }
 
-    void goOffline_() {
-        bridge_.offline = true;
-        if(Gate::Bridge::WhileOff == WhileOff::unpowered) {
-            reset_();
+    [[nodiscard]] static bool disabled_() {
+        if constexpr(Enableable) {
+            return !static_cast<bool>(Config::enabled());
         } else {
-            pause_();
+            return false;
         }
-        detail::logBridge(Chip::Name, Address, false);
+    }
+
+    /// False while the engine has to keep still. A transaction on the wire when the part goes
+    /// offline is waited for (the held gate keeps a switched bridge from cutting it) and its
+    /// result dropped. Any power loss in an offline spell, a bounce seen only by the bridge's
+    /// generation included, brings the part up from the start once.
+    bool bridgeTurn_(TimePoint now) {
+        bool const gateOff  = gateOffline_();
+        bool const disabled = disabled_();
+        bool       bounced  = false;   // the bridge was off since the last turn
+        if constexpr(Bridged) { bounced = bridge_.generation != gate_.generation(); }
+        if((gateOff || disabled) && inFlight_) {
+            if(pending_.take() == PendingT::Outcome::running
+               && now - submittedAt_ <= InFlightTimeout)
+            {
+                return false;   // not a word to the part until it is answered
+            }
+            inFlight_ = false;
+            pending_.clear();
+        }
+
+        bool const wasOffline = bridge_.offline();
+        bool       powerCut   = false;
+        if constexpr(Bridged) {
+            if(gateOff != bridge_.gateOff) {
+                bridge_.gateOff = gateOff;
+                detail::logBridge(Chip::Name, Address, !gateOff);
+            } else if(bounced && !gateOff) {   // off and on again, both unseen
+                detail::logBridge(Chip::Name, Address, false);
+                detail::logBridge(Chip::Name, Address, true);
+            }
+            powerCut = (gateOff || bounced) && Gate::Bridge::WhileOff == WhileOff::unpowered;
+            bridge_.generation = gate_.generation();
+        }
+        if(disabled != bridge_.disabled) {
+            bridge_.disabled = disabled;
+            detail::logEnabled(Chip::Name, Address, !disabled);
+            powerCut = powerCut || (disabled && WhileDisabled == WhileOff::unpowered);
+        }
+
+        bool const offline = gateOff || disabled;
+        if(!wasOffline && !offline && !bounced) { return true; }   // the common case
+
+        if(powerCut && !bridge_.lostPower) {
+            reset_();
+            bridge_.lostPower = true;
+        } else if(!wasOffline) {
+            pause_();   // the registers stay; a reset later in this spell still comes
+        }
+        if(offline) { return false; }
+        bridge_.lostPower = false;
+        presence_.restart();
+        return true;
     }
 
     /// A NAK the part may give while it wakes: true when it is put on the wire again after
@@ -2006,6 +2213,10 @@ private:
     /// The write item on the wire is still owed: a fault says nothing about whether the
     /// bytes landed, so it is written again.
     void redirtyItem_() {
+        if(withdrawnOnWire_) {
+            withdrawnOnWire_ = false;   // withdraw<W>() said it is no longer wanted
+            return;
+        }
         detail::withIndex(
           group_,
           [&](auto i) {
@@ -2241,6 +2452,38 @@ private:
                 if(s.owned) { s.dirty.store(s.known, std::memory_order_release); }
             }
         });
+    }
+
+    /// Whether G's bytes may be decoded (ConfirmChange). A candidate lives within one run, so
+    /// nothing a part answers after a fault confirms what it said before it; the first
+    /// reading after a bring-up is confirmed too.
+    template<typename G,
+             typename S>
+    bool confirmed_(S& slot) {
+        auto&      c    = slot.confirm;
+        auto const data = std::span<std::byte const>{slot.buf}.first(slot.validBytes);
+        auto const same = [&](auto const& bytes, std::uint8_t n) {
+            return n == data.size() && std::ranges::equal(data, std::span{bytes}.first(n));
+        };
+        if(slot.retries == 0) {
+            c.hasCandidate = false;
+            c.unconfirmed  = 0;
+        }
+        bool const unchanged = slot.current && same(c.taken, c.takenBytes);
+        bool const agrees    = c.hasCandidate && same(c.candidate, c.candidateBytes);
+        if(c.hasCandidate && !agrees) { ++c.disagreements; }
+        if(!unchanged && !agrees && c.unconfirmed < ConfirmChange<G>) {
+            std::ranges::copy(data, c.candidate.begin());
+            c.candidateBytes = static_cast<std::uint8_t>(data.size());
+            c.hasCandidate   = true;
+            ++c.unconfirmed;
+            return false;
+        }
+        std::ranges::copy(data, c.taken.begin());
+        c.takenBytes   = static_cast<std::uint8_t>(data.size());
+        c.hasCandidate = false;
+        c.unconfirmed  = 0;
+        return true;
     }
 
     /// The group's decode, with the chip State or the previous Sample when it takes one,
@@ -2531,7 +2774,8 @@ private:
     [[no_unique_address]] detail::VerifyBufs<AnyVerify, MaxVerifyBytes>       verify_{};
     [[no_unique_address]] detail::WriteScript<MultiStepWrites, MaxWriteSteps> writeScript_{};
     [[no_unique_address]] detail::WakeSlot<(WakeRetries > 0)>                 wake_{};
-    [[no_unique_address]] detail::BridgeSlot<Bridged>                         bridge_{};
+    [[no_unique_address]] detail::BridgeSlot<Switchable>                      bridge_{};
+    bool                                                                      withdrawnOnWire_{};
     ReadSlots                                                                 reads_{};
     WriteSlots                                                                writes_{};
 };

@@ -14,9 +14,7 @@ jobs:
         runs-on: ubuntu-latest
         container:
             image: archlinux:latest
-        # The two configurations of `just test-all`: clang builds every suite with -Weverything and
-        # asan+ubsan (test/i2c/CMakeLists.txt, test/usb/CMakeLists.txt), gcc with -Wall -Wextra -Wconversion
-        # - they catch different things. Warnings are errors here: the build must be warning-free.
+        # The two configurations of `just test-all` (test/cmake/KvasirDevicesTest.cmake).
         strategy:
             fail-fast: false
             matrix:
@@ -33,8 +31,7 @@ jobs:
             - name: Checkout repository
               uses: actions/checkout@v5
 
-            # The tests use the SDK header-only (kvasir::sdk, kvasir::test_support) and the USB suite
-            # string_constant from uc_log/remote_fmt - only that submodule chain, not the SDK's libc/libc++.
+            # Only the submodules the tests use: uc_log's remote_fmt and string_constant.
             # A plain git clone rather than a second actions/checkout: act cannot run a JS action for another
             # repository in the bare archlinux container (no node).
             - name: Checkout Kvasir SDK

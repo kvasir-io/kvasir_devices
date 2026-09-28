@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Duration.hpp"
 #include "Device.hpp"
 
 #include <chrono>
@@ -59,6 +60,28 @@ template<std::uint16_t Reg, std::uint8_t Init, typename Timing>
 struct VerifiedByte : InitialByte<Reg, Init> {
     static constexpr std::chrono::milliseconds VerifyDelay    = Timing::VerifyDelay;
     static constexpr std::chrono::milliseconds VerifyInterval = Timing::VerifyInterval;
+};
+
+/// A temperature sensor's alert limits, read back every `Timing::LimitsVerifyInterval` (and
+/// `LimitsVerifyDelay` after a write, default 100 ms) and rewritten when they differ: a part
+/// that lost them to a supply dip keeps answering with its reset defaults. Empty otherwise.
+///     struct Checked { static constexpr std::chrono::seconds LimitsVerifyInterval{5}; };
+///     using Sensor = Chips::Tmp1075<Checked>;
+template<typename Timing>
+struct LimitsReadBack {};
+
+template<typename Timing>
+    requires requires { Timing::LimitsVerifyInterval; }
+struct LimitsReadBack<Timing> {
+    static constexpr std::chrono::milliseconds VerifyDelay = [] {
+        if constexpr(requires { Timing::LimitsVerifyDelay; }) {
+            return Kvasir::asDuration(Timing::LimitsVerifyDelay);
+        } else {
+            return std::chrono::milliseconds{100};
+        }
+    }();
+    static constexpr std::chrono::milliseconds VerifyInterval
+      = Kvasir::asDuration(Timing::LimitsVerifyInterval);
 };
 
 /// The State of a description that publishes its identity register and nothing else: filled by its

@@ -3,7 +3,7 @@
 #include <cstdint>
 
 /// Where a driver is with the part on the wire, on any bus. The I2C engine (I2C/Device.hpp)
-/// and the SPI base (SPIDeviceBase.hpp) both report it, so a status page can treat a sensor
+/// and the SPI drivers report it, so a status page can treat a sensor
 /// the same whichever bus it is on.
 namespace Kvasir {
 

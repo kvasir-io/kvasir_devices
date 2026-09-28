@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Device.hpp"
+#include "../Quantities.hpp"
 
 #include <array>
 #include <chrono>

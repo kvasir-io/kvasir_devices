@@ -40,7 +40,7 @@
 // clang-format off
 #include <support/LogStubs.hpp>
 #include "FakeBus.hpp"
-#include "Check.hpp"
+#include <support/Check.hpp>
 // clang-format on
 #include <kvasir/Devices/I2C/Bus.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>

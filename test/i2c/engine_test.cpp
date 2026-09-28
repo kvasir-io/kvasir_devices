@@ -1986,6 +1986,346 @@ void mayNak() {
 
 }   // namespace
 
+// -- ConfirmChange: a changed reading is taken when the next one agrees ----------------------
+
+namespace {
+
+namespace ConfirmTest {
+
+    /// An input port: one byte, read every 100 ms, a changed value confirmed by the next read.
+    struct Port {
+        static constexpr std::string_view Name          = "PORT";
+        static constexpr Address7         Address       = 0x24;
+        static constexpr std::size_t      RegisterBytes = 1;
+
+        struct Pins {
+            static constexpr auto         Period        = std::chrono::milliseconds{100};
+            static constexpr std::uint8_t ConfirmChange = 3;
+            static constexpr std::array   Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            using Sample = std::uint8_t;
+
+            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+        };
+
+        using Reads = List<Pins>;
+    };
+
+    /// One scripted value per read, then the last again; negative: fails on the wire.
+    struct Script {
+        std::vector<int> values;
+        std::size_t      reads{};
+
+        FakeBus::Result operator()(std::uint8_t,
+                                   std::span<std::byte const>,
+                                   std::span<std::byte> r) {
+            if(r.empty()) { return FakeBus::Result::succeeded; }   // a write: acked
+            int const v = values.empty() ? 0 : values[std::min(reads, values.size() - 1)];
+            ++reads;
+            if(v < 0) { return FakeBus::Result::failed; }
+            std::ranges::fill(r, static_cast<std::byte>(v));
+            return FakeBus::Result::succeeded;
+        }
+    };
+
+    struct Confirmed {
+        using Confirm                               = List<Chips::Tca9555::Pins>;
+        static constexpr std::uint8_t ConfirmChange = 3;
+    };
+
+    /// Two read groups: a level register worth confirming and a count the Config leaves alone.
+    struct TwoGroups {
+        static constexpr std::string_view Name          = "TWO";
+        static constexpr Address7         Address       = 0x25;
+        static constexpr std::size_t      RegisterBytes = 1;
+
+        struct Levels {
+            static constexpr auto       Period = std::chrono::milliseconds{100};
+            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            using Sample = std::uint8_t;
+
+            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+        };
+
+        struct Count {
+            static constexpr auto       Period = std::chrono::milliseconds{100};
+            static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+            using Sample = std::uint8_t;
+
+            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+        };
+
+        using Reads = List<Levels, Count>;
+    };
+
+    struct LevelsOnly {
+        using Confirm                               = List<TwoGroups::Levels>;
+        static constexpr std::uint8_t ConfirmChange = 2;
+    };
+
+    // What a Config may say, as the Device's static_asserts see it.
+    using Kvasir::I2C::detail::checkConfirmConfig;
+    using Kvasir::I2C::detail::ConfirmConfig;
+
+    struct Unnamed {
+        static constexpr std::uint8_t ConfirmChange = 3;
+    };
+
+    struct Uncounted {
+        using Confirm = List<TwoGroups::Levels>;
+    };
+
+    struct Foreign {
+        using Confirm                               = List<Chips::Tca9555::Pins>;
+        static constexpr std::uint8_t ConfirmChange = 3;
+    };
+
+    struct Stream {
+        using Confirm                               = List<Chips::SamM8q<>::Stream>;
+        static constexpr std::uint8_t ConfirmChange = 3;
+    };
+
+    static_assert(checkConfirmConfig<LevelsOnly,
+                                     TwoGroups::Reads>()
+                  == ConfirmConfig::ok);
+    static_assert(checkConfirmConfig<Kvasir::I2C::DefaultConfig,
+                                     TwoGroups::Reads>()
+                  == ConfirmConfig::ok);
+    static_assert(checkConfirmConfig<Unnamed,
+                                     TwoGroups::Reads>()
+                  == ConfirmConfig::unnamed);
+    static_assert(checkConfirmConfig<Uncounted,
+                                     TwoGroups::Reads>()
+                  == ConfirmConfig::uncounted);
+    static_assert(checkConfirmConfig<Foreign,
+                                     TwoGroups::Reads>()
+                  == ConfirmConfig::foreign);
+    static_assert(checkConfirmConfig<Stream,
+                                     Chips::SamM8q<>::Reads>()
+                    == ConfirmConfig::counted,
+                  "a GNSS stream is a counted read: never read twice");
+    static_assert(Dev<TwoGroups,
+                      LevelsOnly>::ConfirmChange<TwoGroups::Levels>
+                  == 2);
+    static_assert(Dev<TwoGroups,
+                      LevelsOnly>::ConfirmChange<TwoGroups::Count>
+                    == 0,
+                  "a group the Config does not name is read once");
+
+}   // namespace ConfirmTest
+
+void confirmChange() {
+    using namespace ConfirmTest;
+
+    auto const run = [](Script& script, std::vector<int> values) {
+        script.values    = std::move(values);
+        script.reads     = 0;
+        FakeBus::respond = std::ref(script);
+    };
+
+    testCase("confirm: the first reading after a bring-up is read twice");
+    fresh();
+    {
+        Script script;
+        run(script, {0x0F});
+        Dev<Port> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        checkEq(d.latest(), std::uint8_t{0x0F}, "the value");
+        checkEq(script.reads, std::size_t{2}, "read, then confirmed");
+        checkEq(d.disagreements<Port::Pins>(), 0U, "nothing contradicted");
+    }
+
+    testCase("confirm: a glitch between two good reads is never taken");
+    fresh();
+    {
+        Script script;
+        run(script, {0x0F, 0x0F, 0xFF, 0x0F});
+        Dev<Port> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        std::vector<std::uint8_t> seen;
+        auto const                until = FakeClock::now() + 1s;
+        while(FakeClock::now() < until) {
+            turn(d);
+            seen.push_back(d.latest());
+        }
+        check(std::ranges::none_of(seen, [](auto v) { return v == 0xFF; }), "0xFF never served");
+        checkEq(d.latest(), std::uint8_t{0x0F}, "still the good value");
+        checkEq(d.disagreements<Port::Pins>(), 1U, "the glitch counted");
+    }
+
+    testCase("confirm: a change that the next read repeats is taken");
+    fresh();
+    {
+        Script script;
+        run(script, {0x0F, 0x0F, 0x0E});
+        Dev<Port> d{};
+        check(runUntil(d, [&] { return d.latest() == 0x0E; }, 1s), "the new value");
+        checkEq(script.reads, std::size_t{4}, "two reads for it, one more to confirm");
+        checkEq(d.disagreements<Port::Pins>(), 0U, "nothing contradicted");
+    }
+
+    testCase("confirm: an input moving faster than two reads is taken after ConfirmChange");
+    fresh();
+    {
+        Script script;
+        run(script, {1, 2, 3, 4, 5});
+        Dev<Port> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        checkEq(d.latest(), std::uint8_t{4}, "the fourth read, after three contradicted ones");
+        checkEq(d.disagreements<Port::Pins>(), 3U, "three contradicted");
+    }
+
+    testCase("confirm: a failed transfer drops the reading waiting for its confirmation");
+    fresh();
+    {
+        Script script;
+        run(script, {0x0F, 0x0F, 0x0E, -1, 0x0E, 0x0E});
+        Dev<Port> d{};
+        check(runUntil(d, [&] { return d.latest() == 0x0E; }, 2s), "the new value in the end");
+        checkEq(script.reads, std::size_t{6}, "0x0E read twice again after the fault");
+    }
+
+    testCase("confirm: a Config turns it on for a description that does not say it");
+    fresh();
+    {
+        // TCA9555: the Init read, then the input pair every 100 ms; one glitch to 0xFFFF.
+        Script script;
+        run(script, {0x34, 0x34, 0x34, 0xFF, 0x34});
+        Dev<Chips::Tca9555, Confirmed> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        bool       glitched = false;
+        auto const until    = FakeClock::now() + 1s;
+        while(FakeClock::now() < until) {
+            turn(d);
+            glitched = glitched || d.latest().port == 0xFFFF;
+        }
+        check(!glitched, "the glitch never served");
+        checkEq(d.latest().port, std::uint16_t{0x3434}, "the pins");
+        checkEq(d.disagreements<Chips::Tca9555::Pins>(), 1U, "one contradicted reading");
+    }
+
+    testCase("confirm: only the groups the Config names");
+    fresh();
+    {
+        // both registers read 0x10, and once 0xFF each (the third read of each)
+        std::array<std::size_t, 2> reads{};
+        FakeBus::respond
+          = [&](std::uint8_t, std::span<std::byte const> sent, std::span<std::byte> r) {
+                if(r.empty()) { return FakeBus::Result::succeeded; }
+                auto const reg = static_cast<std::size_t>(std::to_integer<unsigned>(sent[0]));
+                auto const n   = reads[reg]++;
+                std::ranges::fill(r, n == 2 ? std::byte{0xFF} : std::byte{0x10});
+                return FakeBus::Result::succeeded;
+            };
+        Dev<TwoGroups, LevelsOnly> d{};
+        bool                       levelsGlitched = false;
+        bool                       countGlitched  = false;
+        auto const                 until          = FakeClock::now() + 1s;
+        while(FakeClock::now() < until) {
+            turn(d);
+            levelsGlitched = levelsGlitched || d.latest<TwoGroups::Levels>() == 0xFF;
+            countGlitched  = countGlitched || d.latest<TwoGroups::Count>() == 0xFF;
+        }
+        check(!levelsGlitched, "the named group never serves the glitch");
+        check(countGlitched, "the other one is read once and serves what it read");
+        checkEq(d.disagreements<TwoGroups::Levels>(), 1U, "one contradicted reading");
+    }
+
+    testCase("confirm: after a restart the value is confirmed again");
+    fresh();
+    {
+        Script script;
+        run(script, {0x0F});
+        Dev<Port> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        d.restart();
+        auto const before = script.reads;
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up again");
+        checkEq(script.reads - before, std::size_t{2}, "read twice again");
+    }
+}
+
+// -- withdraw<W>(): a write the application no longer wants --------------------------------------
+
+void withdrawWrites() {
+    using Eeprom = Chips::Eeprom24aa025e48<>;
+    using Page   = Eeprom::Page;
+
+    /// Acks everything, and answers the EUI-48 read with a real one (not all 0x00 / 0xFF).
+    auto const eeprom = [](std::uint8_t, std::span<std::byte const>, std::span<std::byte> r) {
+        std::ranges::fill(r, std::byte{0x42});
+        return FakeBus::Result::succeeded;
+    };
+    auto const pageWrites = [](std::size_t from) {
+        std::size_t n = 0;
+        for(auto const& w : writes(from)) {
+            if(w.size() > 1 && w[0] == 0x10) { ++n; }
+        }
+        return n;
+    };
+    Eeprom::PageData const data{
+      .address = 0x10,
+      .data    = {1, 2},
+      .length  = 2
+    };
+
+    testCase("withdraw: a page owed while the part is away is never written");
+    fresh();
+    FakeBus::respond = eeprom;
+    {
+        Dev<Eeprom> d{};
+        check(runUntil(d, [&] { return d.answering(); }, 500ms), "up");
+        FakeBus::respond = alwaysNak;
+        d.set<Page>(data);   // NAKed, owed again, NAKed: the part is parked
+        check(runUntil(d, [&] { return d.absent(); }, 1s), "gone");
+        check(d.pending<Page>(), "owed");
+        check(d.withdraw<Page>(), "something was owed");
+        check(!d.pending<Page>(), "no longer owed");
+        auto const from  = FakeBus::log.size();
+        FakeBus::respond = eeprom;
+        runFor(d, 40s);   // probed back meanwhile
+        check(d.answering(), "back");
+        checkEq(pageWrites(from), std::size_t{0}, "the page never went out");
+        checkEq(d.writes<Page>(), 0U, "nothing written");
+        check(!d.withdraw<Page>(), "and nothing owed to withdraw");
+    }
+
+    testCase("withdraw: a page on the wire that then fails is not written again");
+    fresh();
+    FakeBus::respond = eeprom;
+    {
+        Dev<Eeprom> d{};
+        check(runUntil(d, [&] { return d.answering(); }, 500ms), "up");
+        d.set<Page>(data);
+        d.handler();   // the page goes on the wire
+        check(!FakeBus::pending.empty(), "on the wire");
+        check(d.withdraw<Page>(), "the one on the wire counts");
+        FakeBus::respond = [](std::uint8_t, std::span<std::byte const>, std::span<std::byte>) {
+            return FakeBus::Result::failed;
+        };
+        FakeBus::complete();
+        FakeBus::respond = eeprom;
+        auto const from  = FakeBus::log.size();
+        runFor(d, 1s);
+        checkEq(pageWrites(from), std::size_t{0}, "not written again");
+        check(!d.pending<Page>(), "not owed");
+    }
+
+    testCase("withdraw: a later set() of the same group is written as usual");
+    fresh();
+    FakeBus::respond = eeprom;
+    {
+        Dev<Eeprom> d{};
+        check(runUntil(d, [&] { return d.answering(); }, 500ms), "up");
+        d.set<Page>(data);
+        static_cast<void>(d.withdraw<Page>());
+        d.set<Page>(data);
+        check(runUntil(d, [&] { return !d.pending<Page>(); }, 500ms), "written");
+        checkEq(d.writes<Page>(), 1U, "once");
+    }
+}
+
+}   // namespace
+
 int main() {
     presence();
     linkState();
@@ -1996,5 +2336,7 @@ int main() {
     countedReads();
     wakeRetries();
     mayNak();
+    confirmChange();
+    withdrawWrites();
     return finish();
 }

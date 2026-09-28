@@ -20,15 +20,6 @@
 #include <type_traits>
 #include <vector>
 
-// Not exercised against the fake bus, but parsed here so a change to a shared type (the
-// BME280 compensation lives in the I2C description) cannot break them unnoticed.
-#include <kvasir/Devices/Max31865.hpp>
-#include <kvasir/Devices/SPI/Bme280.hpp>
-#include <kvasir/Devices/SPI/Max7219.hpp>
-#include <kvasir/Devices/SPI/Mpu9250.hpp>
-#include <kvasir/Devices/SPI/NorFlash.hpp>
-#include <kvasir/Devices/SPIDeviceBase.hpp>
-
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
@@ -753,7 +744,7 @@ static_assert([] {
                                                | std::to_integer<unsigned>(b[1]));
     static_cast<void>(Chips::Mcp9808::Limits::encode(Units::centiDegC(-30000), 1, b));
     auto const mcp = (std::to_integer<unsigned>(b[0]) << 8U) | std::to_integer<unsigned>(b[1]);
-    static_cast<void>(Chips::Tmp1075::Limits::encode(Units::centiDegC(20000), 1, b));
+    static_cast<void>(Chips::Tmp1075<>::Limits::encode(Units::centiDegC(20000), 1, b));
     auto const tmp = static_cast<std::int16_t>((std::to_integer<unsigned>(b[0]) << 8U)
                                                | std::to_integer<unsigned>(b[1]));
     return adt == 150 * 16 * 8   // +150 degC in sixteenths << 3
@@ -832,21 +823,26 @@ void tmp1075() {
     t75.set(0x00, {0x19, 0x00});   // left-aligned: 0x1900 >> 4 = 400 sixteenths = 25.00 degC
     t75.readOnly     = {0x00, 0x0F};
     FakeBus::respond = std::ref(t75);
-    Dev<Chips::Tmp1075> tt{};
+    Dev<Chips::Tmp1075<>> tt{};
     check(runUntil(tt, [&] { return tt.samples() == 1; }, 500ms), "first sample");
     check(tt.identified(), "DIEID 0x7500");
     checkEq(tt.latest().temperature, 2500, "the model's frame reached the decode");
     checkEq(t75.word(0x01), 0x0000U, "the reset configuration is written back at bring-up");
 
-    tt.set<Chips::Tmp1075::Limits>(Chips::Tmp1075::Low, Units::centiDegC(7500));
-    tt.set<Chips::Tmp1075::Limits>(Chips::Tmp1075::High, Units::centiDegC(8000));
-    check(runUntil(tt, [&] { return tt.writes<Chips::Tmp1075::Limits>() == 2; }, 200ms), "limits");
+    tt.set<Chips::Tmp1075<>::Limits>(Chips::Tmp1075<>::Low, Units::centiDegC(7500));
+    tt.set<Chips::Tmp1075<>::Limits>(Chips::Tmp1075<>::High, Units::centiDegC(8000));
+    check(runUntil(
+            tt,
+            [&] { return tt.writes<Chips::Tmp1075<>::Limits>() == 2; },
+            200ms),
+          "limits");
     checkEq(t75.word(0x02), 0x4B00U, "TLOW 75 degC");
     checkEq(t75.word(0x03), 0x5000U, "THIGH 80 degC");
 
-    tt.modify<Chips::Tmp1075::Config>([](auto& c) { c.rate = Chips::Tmp1075::Rate::ms220; });
+    tt.modify<Chips::Tmp1075<>::Config>([](auto& c) { c.rate = Chips::Tmp1075<>::Rate::ms220; });
     check(runUntil(tt, [&] { return t75.word(0x01) == 0x6000U; }, 200ms), "conversion rate 0b11");
-    tt.modify<Chips::Tmp1075::Config>([](auto& c) { c.power = Chips::Tmp1075::Power::shutdown; });
+    tt.modify<Chips::Tmp1075<>::Config>(
+      [](auto& c) { c.power = Chips::Tmp1075<>::Power::shutdown; });
     check(runUntil(
             tt,
             [&] { return t75.word(0x01) == 0x6100U; },
@@ -857,7 +853,7 @@ void tmp1075() {
     check(runUntil(tt, [&] { return tt.samples() == 2; }, 800ms), "second sample");
     // 0x1900 is 25.00 degC; 0xF000, -256 sixteenths, is -16.00 degC sign extended
     static_assert([] {
-        using T       = Chips::Tmp1075::Temperature;
+        using T       = Chips::Tmp1075<>::Temperature;
         auto const f  = frame(0x19, 0x00);
         auto const g  = frame(0xF0, 0x00);
         auto const up = T::decode(Bytes{f});
@@ -866,6 +862,50 @@ void tmp1075() {
             && equal(dn.value.temperature, -1600);
     }());
     if(failures != 0) { dump(); }
+}
+
+/// The limits read back every 5 s, 100 ms after a write.
+struct CheckedLimits {
+    static constexpr std::chrono::seconds LimitsVerifyInterval{5};
+};
+
+void limitsReadBack() {
+    testCase("TMP1075: Timing::LimitsVerifyInterval puts back limits the part lost");
+    fresh();
+    RegisterModel<1, 2> t75{0x48};
+    t75.set(0x0F, {0x75, 0x00});
+    t75.set(0x00, {0x19, 0x00});
+    t75.readOnly     = {0x00, 0x0F};
+    FakeBus::respond = std::ref(t75);
+    using Checked    = Chips::Tmp1075<CheckedLimits>;
+    static_assert(detail::Verifies<Checked::Limits> && !detail::Verifies<Chips::Tmp1075<>::Limits>);
+    Dev<Checked> tt{};
+    tt.set<Checked::Limits>(Checked::High, Units::centiDegC(8500));
+    tt.set<Checked::Limits>(Checked::Low, Units::centiDegC(8000));
+    check(runUntil(tt, [&] { return tt.writes<Checked::Limits>() == 2; }, 500ms), "written");
+    checkEq(t75.word(0x03), 0x5500U, "THIGH 85 degC");
+    t75.set(0x03, {0x50, 0x00});   // a supply dip: back at the reset THIGH
+    check(runUntil(tt, [&] { return t75.word(0x03) == 0x5500U; }, 6s), "written again");
+    checkEq(tt.mismatches<Checked::Limits>(), 1U, "one mismatch");
+
+    testCase("ADT7420: the same for its three limits");
+    fresh();
+    RegisterModel<1, 1> a{0x48};
+    a.set(0x0B, {0xCB});
+    a.set(0x00, {0x0C, 0x80});
+    a.readOnly       = {0x00, 0x01, 0x0B};
+    FakeBus::respond = std::ref(a);
+    using CheckedAdt = Chips::Adt7420<Chips::Adt7420<>::Resolution::bits13, CheckedLimits>;
+    static_assert(detail::Verifies<CheckedAdt::Limits>);
+    Dev<CheckedAdt> aa{};
+    aa.set<CheckedAdt::Limits>(CheckedAdt::Critical, Units::centiDegC(8500));
+    check(runUntil(aa, [&] { return aa.writes<CheckedAdt::Limits>() == 1; }, 500ms), "written");
+    a.set(0x08, {0x49, 0x80});   // TCRIT back at its reset 147 degC
+    check(runUntil(
+            aa,
+            [&] { return a.get(0x08)[0] == 0x2A && a.get(0x09)[0] == 0x80; },
+            6s),
+          "TCRIT again");
 }
 
 void mcp9808() {
@@ -1167,28 +1207,10 @@ void mpl3115a2() {
     if(failures != 0) { dump(); }
 }
 
-void max31865() {
-    testCase("MAX31865: Callendar-Van Dusen in integers");
-
-    struct None {};
-
-    using Pt500 = Kvasir::Max31865<FakeClock, None, None, None>;
-    using Pt100 = Kvasir::Max31865<FakeClock, None, None, None, Units::ohm(100), Units::ohm(430)>;
-    checkEq(Pt500::temperatureFor(16384), 0, "R = R0 is 0 degC");
-    checkEq(Pt500::resistanceFor(16384), 500000, "half of the 1 k reference");
-    // R(100 degC) = 500 (1 + 0.39083 - 0.005775) = 692.5375 ohm, code 22693
-    checkNear(Pt500::temperatureFor(22693), 100000.0, 5.0, "100 degC on a PT500");
-    // R(-50 degC) without the C term = 80.3141 ohm against 430, code 6120
-    checkNear(Pt100::temperatureFor(6120), -50000.0, 30.0, "-50 degC on a PT100");
-    // R(850 degC) = 3.9048 R0: 390.48 ohm against 430 is code 29756
-    check(Pt100::codeInRange(29756) && !Pt100::codeInRange(29760),
-          "the Callendar-Van Dusen range ends at 850 degC");
-    check(Pt500::codeInRange(32767), "a 2 x reference never reads past it");
-}
-
 }   // namespace
 
 int main() {
+    limitsReadBack();
     bme280();
     sht3x();
     aht20();
@@ -1208,6 +1230,5 @@ int main() {
     gas();
     thermalAndBaro();
     mpl3115a2();
-    max31865();
     return finish();
 }

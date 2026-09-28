@@ -50,6 +50,8 @@ namespace Tmp1075Detail {
 /// mode, 8 shutdown. Bring-up reads DIEID and rejects anything else, which leaves the
 /// TMP1075N out: it has no device id register (Table 7-5 note). A2 is tied high or low, A1
 /// and A0 may also go to SDA or SCL, which gives the 32 addresses 0x40..0x5F of Table 7-2.
+/// `Timing::LimitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
+template<typename Timing = DefaultTiming>
 struct Tmp1075 {
     static constexpr std::string_view Name = "TMP1075";
     /// TI TMP1075. TMP1075.md:931: DIEID (0Fh) is 7500h (not on the TMP1075N, :935).
@@ -135,8 +137,8 @@ struct Tmp1075 {
         }
     };
 
-    /// TLOW then THIGH: set<Limits>(Tmp1075::Low, Units::centiDegC(7500)).
-    struct Limits {
+    /// TLOW then THIGH: set<Limits>(Tmp1075<>::Low, Units::centiDegC(7500)).
+    struct Limits : Groups::LimitsReadBack<Timing> {
         using Value                        = CentiDegC;
         static constexpr std::size_t Items = 2;
         static constexpr std::size_t Bytes = 2;

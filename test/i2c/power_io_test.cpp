@@ -1441,9 +1441,87 @@ void pa1010d() {
     if(failures != 0) { dump(); }
 }
 
+/// The level written again every second.
+struct Keepalive {
+    static constexpr std::chrono::seconds LevelPeriod{1};
+};
+
+void mcp4725Rewrite() {
+    testCase("MCP4725: Timing::LevelPeriod rewrites the level");
+    fresh();
+    FakeBus::respond = zeros;
+    using Dac        = Chips::Mcp4725<Units::milliVolt(3300), Keepalive>;
+    Dev<Dac> dac{};
+    dac.set<Dac::Level>(0x0800);
+    check(runUntil(dac, [&] { return dac.writes<Dac::Level>() == 1; }, 500ms), "written");
+    runFor(dac, 3500ms);
+    check(dac.writes<Dac::Level>() >= 4, "and again every second");
+    checkEq(writes().back(), (std::vector<std::uint8_t>{0x08, 0x00}), "the same level");
+
+    testCase("MCP4725: LevelPeriod rewrites nothing before the level is set");
+    fresh();
+    FakeBus::respond = zeros;
+    Dev<Dac> unset{};
+    runFor(unset, 2500ms);
+    checkEq(unset.writes<Dac::Level>(), 0U, "the EEPROM's power-on level stands");
+    unset.set<Dac::Level>(0x0400);
+    runFor(unset, 2500ms);
+    check(unset.writes<Dac::Level>() >= 2, "rewritten once it is set");
+    checkEq(writes().back(), (std::vector<std::uint8_t>{0x04, 0x00}), "with the level set");
+
+    testCase("MCP4725: without it the level is written once");
+    fresh();
+    FakeBus::respond = zeros;
+    Dev<Chips::Mcp4725<>> once{};
+    once.set<Chips::Mcp4725<>::Level>(0x0800);
+    runFor(once, 3s);
+    checkEq(once.writes<Chips::Mcp4725<>::Level>(), 1U, "once");
+}
+
+/// The memory interface on each memory: write a few bytes, read them back.
+template<typename Chip,
+         std::size_t RegBytes>
+void memoryRoundTrip(char const* name) {
+    testCase(name);
+    fresh();
+    RegisterModel<RegBytes> m{0x50};
+    if constexpr(requires { Chip::UserAreaBytes; }) {
+        m.set(0xFA, {0x00, 0x04, 0xA3, 0x12, 0x34, 0x56});
+    }
+    FakeBus::respond = std::ref(m);
+    Dev<Chip> mem{};
+    check(runUntil(mem, [&] { return mem.answering(); }, 500ms), "up");
+    static_assert(Chip::WriteChunkBytes >= 4 && Chip::ReadChunkBytes >= 4
+                  && Chip::WritableBytes > 0x20);
+    typename Chip::Write::Value v{};
+    v.address = 0x10;
+    v.length  = 4;
+    for(std::uint8_t i = 0; i < 4; ++i) { v.data[i] = static_cast<std::uint8_t>(0xA0 + i); }
+    auto const before = mem.template writes<typename Chip::Write>();
+    mem.template rewrite<typename Chip::Write>(v);
+    check(runUntil(
+            mem,
+            [&] { return mem.template writes<typename Chip::Write>() == before + 1; },
+            500ms),
+          "written");
+    auto const t = mem.template request<typename Chip::Block>({0x10, 4});
+    check(runUntil(
+            mem,
+            [&] { return mem.template answer<typename Chip::Block>(t) != Answer::pending; },
+            500ms),
+          "read");
+    check(mem.template answer<typename Chip::Block>(t) == Answer::ok, "ok");
+    auto const& b = mem.template latest<typename Chip::Block>();
+    checkEq(static_cast<unsigned>(b.length), 4U, "four bytes");
+    checkEq(static_cast<unsigned>(b.data[3]), 0xA3U, "what was written");
+}
+
 }   // namespace
 
 int main() {
+    memoryRoundTrip<Chips::Eeprom24aa025e48<>, 1>("memory interface: 24AA025E48");
+    memoryRoundTrip<Chips::Cy15b064j<>, 2>("memory interface: CY15B064J");
+    mcp4725Rewrite();
     ina219();
     ads1115();
     ds1307();

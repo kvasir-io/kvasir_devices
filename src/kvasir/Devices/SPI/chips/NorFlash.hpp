@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../Duration.hpp"
-#include "../SPIDeviceBase.hpp"
+#include "../../Duration.hpp"
+#include "../../Link.hpp"
+#include "../../Quantities.hpp"
+#include "../QueueCore.hpp"
 
 #include <array>
 #include <chrono>
@@ -9,7 +11,10 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <utility>
 
+// Everything runs from the main loop except each frame's callback (the master's completion),
+// which only sets the two flags the loop reads.
 namespace Kvasir::SPI {
 
 /// The knobs of the NOR flash driver, with their defaults; derive and redeclare what you
@@ -17,15 +22,18 @@ namespace Kvasir::SPI {
 /// the datasheet maxima of the Winbond W25Q / Macronix MX25 / Micron N25Q families (page
 /// program 3 ms, sector erase 400 ms), since they are counted from when the driver saw the
 /// command's frame complete; a chip erase takes from 2 s (a 2 MB part) to 200 s (W25Q128) or
-/// more, so ChipEraseTimeout is set per part and defaults to twice the W25Q128's. The
-/// SPIDeviceDefaults members apply too.
-struct NorFlashDefaults : SPIDeviceDefaults {
+/// more, so ChipEraseTimeout is set per part and defaults to twice the W25Q128's.
+struct NorFlashDefaults {
     static constexpr auto PageProgramTimeout = std::chrono::milliseconds{10};
     static constexpr auto SectorEraseTimeout = std::chrono::milliseconds{1000};
     static constexpr auto ChipEraseTimeout   = std::chrono::seconds{400};
 
     /// The status register is read at this interval while the part is busy.
-    static constexpr auto StatusPollInterval = std::chrono::milliseconds{1};
+    static constexpr auto         StatusPollInterval  = std::chrono::milliseconds{1};
+    static constexpr std::uint8_t AbsentAfterFailures = 3;
+    /// fR for Read Data 03h (W25Q128JV.md:1944); a slower part sets its own.
+    static constexpr ClockMode    Mode     = ClockMode::_0;
+    static constexpr Units::Hertz MaxClock = Units::hertz(50'000'000);
 };
 
 /// A generic SPI NOR flash (Winbond W25Q, Macronix MX25, Micron N25Q ...: the JEDEC
@@ -59,12 +67,53 @@ struct NorFlashDefaults : SPIDeviceDefaults {
 ///
 /// Addresses are 24 bits: an operation at or past 16 MB is refused (no 4-byte addressing).
 template<typename Spi, typename Clock, typename Cs, typename Config = NorFlashDefaults>
-struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>, Config, 4 + 256> {
+struct NorFlash {
     static constexpr std::size_t PageSize   = 256;
     static constexpr std::size_t SectorSize = 4096;
 
-    using Base    = SPIDeviceBase<Spi, Clock, Cs, NorFlash, Config, 4 + PageSize>;
-    using Outcome = typename Base::Outcome;
+    enum class Outcome : std::uint8_t { running, ok, failed };
+
+    static constexpr auto Setup = Spi::setup(
+      [] {
+          if constexpr(requires { Config::Mode; }) {
+              return Config::Mode;
+          } else {
+              return NorFlashDefaults::Mode;
+          }
+      }(),
+      [] {
+          if constexpr(requires { Config::MaxClock; }) {
+              return Config::MaxClock;
+          } else {
+              return NorFlashDefaults::MaxClock;
+          }
+      }());
+    static constexpr std::uint8_t AbsentAfterFailures = [] {
+        if constexpr(requires { Config::AbsentAfterFailures; }) {
+            return static_cast<std::uint8_t>(Config::AbsentAfterFailures);
+        } else {
+            return NorFlashDefaults::AbsentAfterFailures;
+        }
+    }();
+
+    NorFlash() { apply(set(Cs{})); }
+
+    NorFlash(NorFlash const&)            = delete;   // the frames' callbacks point at it
+    NorFlash& operator=(NorFlash const&) = delete;
+
+    void handler() { idleLogic(); }
+
+    [[nodiscard]] Link link() const { return link_; }
+
+    [[nodiscard]] bool answering() const { return link_ == Link::answering; }
+
+    [[nodiscard]] bool absent() const { return link_ == Link::absent; }
+
+    [[nodiscard]] bool present() const { return answering(); }
+
+    [[nodiscard]] std::uint16_t bringUps() const { return bringUps_; }
+
+    [[nodiscard]] std::uint32_t errors() const { return errors_; }
 
     static constexpr std::string_view Name = "SPI NOR flash";
 
@@ -142,14 +191,6 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
         timedOut,   ///< the part stayed busy past the operation's timeout
     };
 
-    /// An operation in flight fails rather than leaving its waiter with no completion.
-    void resetLogic() {
-        if(op_ != Op::none) { finish_(Result::failed); }
-        op_    = Op::none;
-        state_ = State::idle;
-        this->markStarting();
-    }
-
     void idleLogic() {
         auto const now = Clock::now();
         switch(state_) {
@@ -165,12 +206,12 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
             if(now >= pollAt_ && statusFrame_()) { state_ = State::settleWait; }
             break;
         case State::settleWait:
-            if(auto const o = this->take(); o != Outcome::running) {
+            if(auto const o = take_(); o != Outcome::running) {
                 if(o != Outcome::ok) {
                     finish_(Result::failed);
                     break;
                 }
-                status_ = static_cast<std::uint8_t>(this->rx_[1]);
+                status_ = static_cast<std::uint8_t>(rx_[1]);
                 if((status_ & StatusBusy) == 0) {
                     settled_ = true;
                     state_   = State::start;
@@ -187,7 +228,7 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
             if(singleFrame_(WakeSequence[wakeStep_])) { state_ = State::wakeWait; }
             break;
         case State::wakeWait:
-            if(auto const o = this->take(); o != Outcome::running) {
+            if(auto const o = take_(); o != Outcome::running) {
                 if(o != Outcome::ok) {
                     finish_(Result::failed);
                     break;
@@ -213,7 +254,7 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
             }
             break;
         case State::enableWait:
-            if(auto const o = this->take(); o != Outcome::running) {
+            if(auto const o = take_(); o != Outcome::running) {
                 if(o != Outcome::ok) {
                     finish_(Result::failed);
                     break;
@@ -225,7 +266,7 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
             if(commandFrame_()) { state_ = State::commandWait; }
             break;
         case State::commandWait:
-            if(auto const o = this->take(); o != Outcome::running) {
+            if(auto const o = take_(); o != Outcome::running) {
                 if(o != Outcome::ok) {
                     finish_(Result::failed);
                     break;
@@ -239,12 +280,12 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
             if(now >= pollAt_ && statusFrame_()) { state_ = State::pollWait; }
             break;
         case State::pollWait:
-            if(auto const o = this->take(); o != Outcome::running) {
+            if(auto const o = take_(); o != Outcome::running) {
                 if(o != Outcome::ok) {
                     finish_(Result::failed);
                     break;
                 }
-                status_ = static_cast<std::uint8_t>(this->rx_[1]);
+                status_ = static_cast<std::uint8_t>(rx_[1]);
                 if((status_ & StatusBusy) == 0) {
                     finish_(Result::ok);
                 } else if(now >= deadline_) {
@@ -257,22 +298,22 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
             }
             break;
         case State::frameWait:
-            if(auto const o = this->take(); o != Outcome::running) {
+            if(auto const o = take_(); o != Outcome::running) {
                 if(o != Outcome::ok) {
                     finish_(Result::failed);
                     break;
                 }
                 if(op_ == Op::jedec) {
-                    jedec_ = {static_cast<std::uint8_t>(this->rx_[1]),
-                              static_cast<std::uint8_t>(this->rx_[2]),
-                              static_cast<std::uint8_t>(this->rx_[3])};
+                    jedec_ = {static_cast<std::uint8_t>(rx_[1]),
+                              static_cast<std::uint8_t>(rx_[2]),
+                              static_cast<std::uint8_t>(rx_[3])};
                     if(jedec_.manufacturer != 0 && jedec_.manufacturer != 0xFF) {
-                        this->markAnswering();
+                        markAnswering_();
                     } else {
-                        this->reportFailure();
+                        reportFailure_();
                     }
                 } else if(op_ == Op::read) {
-                    for(std::size_t i = 0; i < length_; ++i) { target_[i] = this->rx_[4 + i]; }
+                    for(std::size_t i = 0; i < length_; ++i) { target_[i] = rx_[4 + i]; }
                 }
                 finish_(Result::ok);
             }
@@ -312,8 +353,8 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
     /// 0x00 nor 0xFF has come back. False while another operation runs.
     [[nodiscard]] bool readJedec() { return begin_(Op::jedec, 0, {}, 0); }
 
-    /// Read `into.size()` bytes (up to PageSize) from `address`. The driver keeps `into` and
-    /// writes the bytes through it when the frame completes, so it must stay alive and
+    /// Read `into.size()` bytes (up to PageSize) from `address`. The driver keeps `into`
+    /// and writes the bytes through it when the frame completes, so it must stay alive and
     /// unread until takeDone() (or finished()) reports the operation done; on any result
     /// other than ok its contents are unchanged. False while another operation runs, for
     /// more than a page, or past the 24-bit address space.
@@ -345,7 +386,7 @@ struct NorFlash : SPIDeviceBase<Spi, Clock, Cs, NorFlash<Spi, Clock, Cs, Config>
         if(op_ != Op::none || !inRange_(address, data.size())) { return false; }
         // The data sits behind the command and address bytes; the write-enable frame
         // before it uses tx_[0] only.
-        for(std::size_t i = 0; i < data.size(); ++i) { this->tx_[4 + i] = data[i]; }
+        for(std::size_t i = 0; i < data.size(); ++i) { tx_[4 + i] = data[i]; }
         return begin_(Op::program, address, {}, data.size());
     }
 
@@ -409,36 +450,36 @@ private:
     }
 
     bool singleFrame_(std::uint8_t command) {
-        this->tx_[0] = std::byte{command};
-        return this->submit(std::span<std::byte const>{this->tx_}.first(1), {});
+        tx_[0] = std::byte{command};
+        return submit_(std::span<std::byte const>{tx_}.first(1), {});
     }
 
     void putAddress_(std::size_t at) {
-        this->tx_[at]     = static_cast<std::byte>(address_ >> 16);
-        this->tx_[at + 1] = static_cast<std::byte>(address_ >> 8);
-        this->tx_[at + 2] = static_cast<std::byte>(address_);
+        tx_[at]     = static_cast<std::byte>(address_ >> 16);
+        tx_[at + 1] = static_cast<std::byte>(address_ >> 8);
+        tx_[at + 2] = static_cast<std::byte>(address_);
     }
 
     /// The first frame: the whole operation for a read or the id, write-enable otherwise.
     bool startOp_() {
         switch(op_) {
         case Op::jedec:
-            this->tx_[0] = std::byte{CmdJedecId};
-            this->tx_[1] = this->tx_[2] = this->tx_[3] = std::byte{0};
-            return this->submit(std::span<std::byte const>{this->tx_}.first(4),
-                                std::span<std::byte>{this->rx_}.first(4));
+            tx_[0] = std::byte{CmdJedecId};
+            tx_[1] = tx_[2] = tx_[3] = std::byte{0};
+            return submit_(std::span<std::byte const>{tx_}.first(4),
+                           std::span<std::byte>{rx_}.first(4));
         case Op::read:
-            this->tx_[0] = std::byte{CmdRead};
+            tx_[0] = std::byte{CmdRead};
             putAddress_(1);
-            for(std::size_t i = 0; i < length_; ++i) { this->tx_[4 + i] = std::byte{0}; }
-            return this->submit(std::span<std::byte const>{this->tx_}.first(4 + length_),
-                                std::span<std::byte>{this->rx_}.first(4 + length_));
+            for(std::size_t i = 0; i < length_; ++i) { tx_[4 + i] = std::byte{0}; }
+            return submit_(std::span<std::byte const>{tx_}.first(4 + length_),
+                           std::span<std::byte>{rx_}.first(4 + length_));
         case Op::eraseSector:
         case Op::eraseChip:
         case Op::program:
         case Op::unlock:
-            this->tx_[0] = std::byte{CmdWriteEnable};
-            return this->submit(std::span<std::byte const>{this->tx_}.first(1), {});
+            tx_[0] = std::byte{CmdWriteEnable};
+            return submit_(std::span<std::byte const>{tx_}.first(1), {});
         case Op::none: break;
         }
         return false;
@@ -447,24 +488,24 @@ private:
     bool commandFrame_() {
         switch(op_) {
         case Op::eraseSector:
-            this->tx_[0] = std::byte{CmdSectorErase};
+            tx_[0] = std::byte{CmdSectorErase};
             putAddress_(1);
-            return this->submit(std::span<std::byte const>{this->tx_}.first(4), {});
+            return submit_(std::span<std::byte const>{tx_}.first(4), {});
         case Op::eraseChip: return singleFrame_(CmdChipErase);
         case Op::unlock:    return singleFrame_(CmdGlobalUnlock);
         case Op::program:
-            this->tx_[0] = std::byte{CmdPageProgram};
+            tx_[0] = std::byte{CmdPageProgram};
             putAddress_(1);   // the data is in tx_[4..] since program()
-            return this->submit(std::span<std::byte const>{this->tx_}.first(4 + length_), {});
+            return submit_(std::span<std::byte const>{tx_}.first(4 + length_), {});
         default: return false;
         }
     }
 
     bool statusFrame_() {
-        this->tx_[0] = std::byte{CmdReadStatus};
-        this->tx_[1] = std::byte{0};
-        return this->submit(std::span<std::byte const>{this->tx_}.first(2),
-                            std::span<std::byte>{this->rx_}.first(2));
+        tx_[0] = std::byte{CmdReadStatus};
+        tx_[1] = std::byte{0};
+        return submit_(std::span<std::byte const>{tx_}.first(2),
+                       std::span<std::byte>{rx_}.first(2));
     }
 
     void finish_(Result r) {
@@ -474,6 +515,60 @@ private:
         op_       = Op::none;
         state_    = State::idle;
     }
+
+    static void select_() { apply(clear(Cs{})); }
+
+    static void deselect_() { apply(set(Cs{})); }
+
+    static constexpr Lines lines_{&select_, &deselect_, nullptr, nullptr};
+
+    /// `rx` (when given) as long as `tx`. Both flags cleared first: the callback writes them from
+    /// the completion interrupt, and take_() must never read the previous frame's verdict.
+    bool submit_(std::span<std::byte const> tx,
+                 std::span<std::byte>       rx) {
+        if(inFlight_) { return false; }
+        done_     = false;
+        ok_       = false;
+        inFlight_ = Spi::submit(typename Spi::Request{.setup    = Setup,
+                                                      .lines    = lines_,
+                                                      .tx       = tx,
+                                                      .rx       = rx,
+                                                      .callback = [this](TransferResult r) {
+                                                          ok_   = r == TransferResult::succeeded;
+                                                          done_ = true;
+                                                      }});
+        return inFlight_;
+    }
+
+    Outcome take_() {
+        if(!inFlight_ || !done_) { return Outcome::running; }
+        inFlight_ = false;
+        if(!ok_) { ++errors_; }
+        return ok_ ? Outcome::ok : Outcome::failed;
+    }
+
+    void markAnswering_() {
+        if(link_ != Link::answering) { ++bringUps_; }
+        link_     = Link::answering;
+        failures_ = 0;
+    }
+
+    void markStarting_() { link_ = Link::starting; }
+
+    void reportFailure_() {
+        if(failures_ != 0xFF) { ++failures_; }
+        if(failures_ >= AbsentAfterFailures) { link_ = Link::absent; }
+    }
+
+    std::array<std::byte, 4 + PageSize> tx_{};
+    std::array<std::byte, 4 + PageSize> rx_{};
+    bool                                inFlight_{};
+    bool volatile done_{};   ///< written by the completion (interrupt)
+    bool volatile ok_{};
+    Link          link_{Link::starting};
+    std::uint8_t  failures_{};
+    std::uint16_t bringUps_{};
+    std::uint32_t errors_{};
 
     Op                         op_{Op::none};
     State                      state_{State::idle};

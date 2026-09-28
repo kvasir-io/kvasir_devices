@@ -3,7 +3,6 @@
 // Must come before any driver header: the uc_log macros as counters.
 #include <support/LogStubs.hpp>
 //
-#include "../i2c/Check.hpp"
 #include "FakeUsbBackend.hpp"
 
 #include <cstddef>
@@ -11,6 +10,7 @@
 #include <cstring>
 #include <optional>
 #include <span>
+#include <support/Check.hpp>
 #include <support/FakeClock.hpp>
 #include <vector>
 

@@ -69,6 +69,17 @@ KVASIR_LOG_SHARED void logBridge([[maybe_unused]] std::string_view name,
     }
 }
 
+/// Config::enabled() changed: not a fault of the part.
+KVASIR_LOG_SHARED void logEnabled([[maybe_unused]] std::string_view name,
+                                  [[maybe_unused]] std::uint8_t     address,
+                                  [[maybe_unused]] bool             enabled) {
+    if(enabled) {
+        UC_LOG_I("{} at {:#04x}: enabled again", name, address);
+    } else {
+        UC_LOG_I("{} at {:#04x}: offline, disabled", name, address);
+    }
+}
+
 /// setup() turned the bring-up down: something answers at the address, but it is not this chip.
 KVASIR_LOG_SHARED void logUnidentified([[maybe_unused]] std::string_view          name,
                                        [[maybe_unused]] std::uint8_t              address,

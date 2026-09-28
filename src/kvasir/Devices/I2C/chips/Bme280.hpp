@@ -35,10 +35,12 @@ struct Bmx280 {
     static constexpr bool Humidity = Model == Bme280Compensation::Model::bme280;
 
     static constexpr std::string_view Name = Humidity ? "BME280" : "BMP280";
-    /// The id register 0xD0 reads 0x60 on the BME280 (BME280.md:1106) and 0x58 on the BMP280
-    /// (BMP280.md:989).
+    /// The id register 0xD0 reads 0x60 on the BME280 and, on the BMP280, 0x58 in mass production
+    /// or 0x56 / 0x57 on samples (BME280.md:1106, Table 17; BMP280.md:989 names 0x58 only): the
+    /// mask 0xFE takes the sample pair as one value.
     static constexpr std::array Identity{
-      RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, Humidity ? 0x60U : 0x58U},
+      Humidity ? RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x60U}
+               : RegisterCheck{"chip-id", 0xD0, 1, true, 0xFE, 0x58U, 0x56U},
     };
     static constexpr Address7                Address = 0x76;
     static constexpr std::array<Address7, 2> Addresses{0x76, 0x77};

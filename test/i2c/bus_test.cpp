@@ -41,8 +41,8 @@ struct QuickScan {
 void scanner() {
     testCase("bus scanner");
     fresh();
-    using Cat                          = Catalogue<Chips::Bh1750, Chips::Ads1115<>, Chips::Tmp1075>;
-    using Scan                         = Scanner<FakeBus, FakeClock, Cat>;
+    using Cat  = Catalogue<Chips::Bh1750, Chips::Ads1115<>, Chips::Tmp1075<>>;
+    using Scan = Scanner<FakeBus, FakeClock, Cat>;
     bool                      busFault = false;
     std::vector<std::uint8_t> probed;
     FakeBus::respond
@@ -82,7 +82,7 @@ void scanner() {
         packedRight       = packedRight && Cat::hint(static_cast<std::uint8_t>(a)) == want;
     }
     check(packedRight, "every address's packed hint is the one the table was built with");
-    using Narrow = SizedCatalogue<12, Chips::Bh1750, Chips::Ads1115<>, Chips::Tmp1075>;
+    using Narrow = SizedCatalogue<12, Chips::Bh1750, Chips::Ads1115<>, Chips::Tmp1075<>>;
     checkEq(Narrow::hint(0x48).size(), std::size_t{12}, "a hint is cut at its width");
     check(Narrow::hint(0x48).ends_with("~"), "and says so");
     check(Narrow::hint(0x23) == std::string_view{"BH1750"}, "a short one is whole");

@@ -146,6 +146,14 @@ struct Eeprom24aa025e48 {
         }
     };
 
+    /// The memory interface every memory description shares: `request<Block>` reads,
+    /// `rewrite<Write>` writes, in chunks, not across a WritePageBytes boundary (0: no pages).
+    using Write                                  = Page;
+    static constexpr std::size_t WritableBytes   = UserAreaBytes;
+    static constexpr std::size_t ReadChunkBytes  = ChunkBytes;
+    static constexpr std::size_t WriteChunkBytes = PageBytes;
+    static constexpr std::size_t WritePageBytes  = PageBytes;
+
     using Reads  = List<Block>;
     using Writes = List<Page>;
 };

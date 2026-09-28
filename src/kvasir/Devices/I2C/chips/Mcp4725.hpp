@@ -1,9 +1,11 @@
 #pragma once
 
+#include "../../Duration.hpp"
 #include "../Device.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -46,7 +48,10 @@ namespace Mcp4725Detail {
 /// board stored to come up with. Once the application has set a level it is written again
 /// after a reset. `Supply` only scales `codeFor()` and `Status::Sample::voltage()`; it does
 /// not reach the chip. 0x60..0x67: A0 is a pin, A2 A1 are factory options.
-template<MilliVolt Supply = Units::milliVolt(3300)>
+///
+/// `Timing::LevelPeriod` rewrites a level the application set at that period: a part that
+/// browned out comes back at its EEPROM value without a NAK, and there is no cheap read-back.
+template<MilliVolt Supply = Units::milliVolt(3300), typename Timing = DefaultTiming>
 struct Mcp4725 {
     static constexpr std::string_view Name          = "MCP4725";
     static constexpr Address7         Address       = 0x60;
@@ -81,8 +86,17 @@ struct Mcp4725 {
           / FullScale));
     }
 
+    template<typename T>
+    struct LevelRewrite {};
+
+    template<typename T>
+        requires requires { T::LevelPeriod; }
+    struct LevelRewrite<T> {
+        static constexpr std::chrono::milliseconds Period = Kvasir::asDuration(T::LevelPeriod);
+    };
+
     /// The output, 0..4095 of VDD.
-    struct Level {
+    struct Level : LevelRewrite<Timing> {
         using Value                        = Output;
         static constexpr std::size_t Bytes = 2;
 
