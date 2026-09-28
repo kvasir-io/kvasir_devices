@@ -21,6 +21,8 @@
     #include <fs/fat/Format.hpp>
     #include <fs/fat/Volume.hpp>
     #define SD_BLOCK_DEVICE_TEST_HAS_FS 1
+#else
+    #define SD_BLOCK_DEVICE_TEST_HAS_FS 0
 #endif
 
 using namespace std::chrono_literals;
