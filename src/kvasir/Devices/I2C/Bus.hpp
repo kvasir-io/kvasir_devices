@@ -617,7 +617,16 @@ public:
     /// main-loop turn, after the bus behavior's own handler.
     void handler() {
         handleBridges_(std::make_index_sequence<Bridges>{});
-        std::apply([](auto&... d) { (d.handler(), ...); }, devices_);
+        // One clock read for every device.
+        auto const now  = Clock::now();
+        auto const turn = [&](auto& d) {
+            if constexpr(requires { d.handler(now); }) {
+                d.handler(now);
+            } else {
+                d.handler();
+            }
+        };
+        std::apply([&](auto&... d) { (turn(d), ...); }, devices_);
     }
 
     /// Every device starts over from its reset (Device::restart()): what a supply the parts

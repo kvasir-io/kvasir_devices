@@ -2326,6 +2326,133 @@ void withdrawWrites() {
 
 }   // namespace
 
+// -- resting: the turns that would change nothing are skipped, and nothing is missed ----------
+
+namespace {
+
+namespace RestTest {
+    inline bool enabled = true;
+
+    struct Switched {
+        static bool enabled() { return RestTest::enabled; }
+    };
+
+    /// The shared form: one function for every device, and this one's flag as its argument.
+    inline bool flags[2] = {true, true};
+
+    inline bool flagSet(void const* flag) { return *static_cast<bool const*>(flag); }
+
+    struct SharedSwitched {
+        static constexpr bool (*enabledBy)(void const*) = &flagSet;
+        static constexpr void const* enabledArg         = &flags[1];
+    };
+}   // namespace RestTest
+
+void resting() {
+    using PresenceTest::Probe;
+    using PresenceTest::readsOf;
+    using TicketTest::OnDemand;
+
+    testCase("resting: between two periods a device runs no turn, and still reads on time");
+    fresh();
+    FakeBus::respond = zeros;
+    Dev<Probe> d{};
+    check(runUntil(d, [&] { return d.valid(); }, 50ms), "up");
+    {
+        auto const turns = d.turns();
+        auto const reads = readsOf(Probe::Address, 0x01);
+        runFor(d, 1000ms);   // a turn a millisecond, a read every 100 ms
+        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{10}, "ten reads in a second");
+        check(d.turns() - turns <= 30, "a few full turns per read, not a thousand");
+    }
+
+    testCase("resting: a request from outside the turn is served on the very next turn");
+    {
+        auto const reads = readsOf(Probe::Address, 0x01);
+        runFor(d, 20ms);   // well inside the period
+        auto const t = d.request<Probe::Value>();
+        turn(d);
+        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "on the wire at once");
+        check(runUntil(
+                d,
+                [&] { return d.answer<Probe::Value>(t) == Answer::ok; },
+                10ms),
+              "and answered");
+    }
+
+    testCase("resting: a shorter period takes effect at once");
+    {
+        runFor(d, 5ms);
+        d.period<Probe::Value>(10ms);
+        auto const reads = readsOf(Probe::Address, 0x01);
+        runFor(d, 100ms);
+        check(readsOf(Probe::Address, 0x01) - reads >= 9, "every 10 ms from now on");
+        d.period<Probe::Value>(100ms);
+    }
+
+    testCase("resting: a clock that jumps past several periods gets one read, then the period");
+    {
+        runFor(d, 5ms);
+        auto const reads = readsOf(Probe::Address, 0x01);
+        FakeClock::current += 1s;
+        turn(d);
+        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "one read");
+        runFor(d, 50ms);
+        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "not a burst");
+    }
+
+    testCase("resting: set() on a resting device is written on the next turn");
+    fresh();
+    {
+        RegisterModel<1, 1> model{OnDemand::Address};
+        model.set(0x00, {0x01, 7});
+        FakeBus::respond = std::ref(model);
+        Dev<OnDemand> w{};
+        runFor(w, 50ms);   // up, nothing cyclic: resting for good
+        auto const turns  = w.turns();
+        auto const writes = model.writes;
+        runFor(w, 50ms);
+        checkEq(w.turns(), turns, "no turn at all while nothing is owed");
+        check(w.set<OnDemand::Level>(3), "set");
+        turn(w);
+        checkEq(model.writes - writes, 1, "written on the next turn");
+    }
+
+    testCase("resting: Config::enabled() going false takes the part offline at once, and back");
+    fresh();
+    {
+        FakeBus::respond  = zeros;
+        RestTest::enabled = true;
+        Dev<Probe, RestTest::Switched> s{};
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "up");
+        runFor(s, 20ms);
+        RestTest::enabled = false;
+        turn(s);
+        check(s.offline(), "offline on the next turn");
+        auto const sent = FakeBus::log.size();
+        runFor(s, 500ms);
+        checkEq(FakeBus::log.size(), sent, "nothing said to it while disabled");
+        RestTest::enabled = true;
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "back up once enabled");
+    }
+
+    testCase("resting: an enable given as a shared function and an argument works the same");
+    fresh();
+    {
+        FakeBus::respond = zeros;
+        Dev<Probe, RestTest::SharedSwitched> s{};
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "up");
+        RestTest::flags[1] = false;
+        turn(s);
+        check(s.offline(), "offline on the next turn");
+        RestTest::flags[0] = false;
+        RestTest::flags[1] = true;
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "its own flag, not another's");
+    }
+}
+
+}   // namespace
+
 int main() {
     presence();
     linkState();
@@ -2338,5 +2465,6 @@ int main() {
     mayNak();
     confirmChange();
     withdrawWrites();
+    resting();
     return finish();
 }

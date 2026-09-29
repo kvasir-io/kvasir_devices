@@ -24,6 +24,7 @@
 #include "Presence.hpp"
 #include "Step.hpp"
 
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstddef>
@@ -50,13 +51,37 @@ enum class Phase : std::uint8_t { reset, resetHeld, settle, run };
 /// Which kind of script is on the wire, if any.
 enum class Running : std::uint8_t { none, init, read, write, verify };
 
-/// The engine's own state: every member of `Device` that does not depend on the chip. `I2c`
+template<typename Port, typename Clock>
+struct DeviceOps;
+
+/// A bus as the engine sees it: buses with the same Request and Result (an RP2350's I2C0 and
+/// I2C1) are one port and share the engine and each chip's code.
+template<typename Req, typename Res>
+struct BusPort {
+    using Request = Req;
+    using Result  = Res;
+};
+
+template<typename Bus>
+using PortOf = BusPort<typename Bus::Request, typename Bus::Result>;
+
+/// Why a switchable part is offline; the reasons come and go independently.
+struct BridgeState {
+    bool          gateOff{};     ///< offline because the bridge is not active
+    bool          disabled{};    ///< offline because Config::enabled() is false
+    bool          lostPower{};   ///< reset() done since the part went offline
+    std::uint32_t generation{};
+
+    [[nodiscard]] bool offline() const { return gateOff || disabled; }
+};
+
+/// The engine's own state: every member of `Device` that does not depend on the chip. `Port`
 /// and `Clock` are one type each per firmware, so this exists once however many devices there
 /// are.
-template<typename I2c, typename Clock>
+template<typename Port, typename Clock>
 struct EngineState {
     using TimePoint = typename Clock::time_point;
-    using PendingT  = Pending<I2c, Clock>;
+    using PendingT  = Pending<Port, Clock>;
 
     Phase   phase_{Phase::reset};
     Running running_{Running::none};
@@ -89,6 +114,20 @@ struct EngineState {
 
     /// The handshake with the bus: the callback handed to it, and what came back.
     PendingT pending_{};
+
+    /// This device's own table (DeviceOps), set by its constructor.
+    DeviceOps<Port, Clock> const* dev_{};
+
+    /// Whether the part is there (Presence.hpp), and why it is offline, if it is.
+    Presence<Clock> presence_{};
+    BridgeState     bridge_{};
+
+    /// Resting (Engine::handler): turns before `quietUntil_` are skipped unless `doorbell_`
+    /// rang (request, set, period, restart) or the bridge or Config::enabled() changed.
+    TimePoint         quietUntil_{};
+    bool              resting_{false};
+    std::atomic<bool> doorbell_{false};
+    std::uint32_t     turns_{};   ///< full turns run: what the device costs the loop
 };
 
 /// The half of a read group's slot that does not depend on the chip: where the group is in
@@ -186,9 +225,9 @@ struct ReadGroupInfo {
 /// Each pointer's target is a one-line trampoline in `Device` that casts the state back to
 /// itself -- so the switch over the chip's groups is written once per chip instead of once per
 /// call site per group.
-template<typename I2c, typename Clock>
+template<typename Port, typename Clock>
 struct Ops {
-    using State     = EngineState<I2c, Clock>;
+    using State     = EngineState<Port, Clock>;
     using TimePoint = typename Clock::time_point;
 
     /// What the chip is called, for the lines the engine logs about it.
@@ -198,12 +237,6 @@ struct Ops {
     /// The script the current run walks, and the buffer its steps read into or write from.
     std::span<Step const> (*script)(State&){};
     std::span<std::byte> (*buffer)(State&){};
-
-    /// Presence: false while the part is parked and no probe is due.
-    bool (*mayTalk)(State&){};
-    /// The gate in front of the part (a switch channel): false means "not yet, try next turn".
-    bool (*claimGate)(State&){};
-    void (*releaseGate)(State&){};
 
     /// A read group whose prepare() sized this run, and a counted read whose length an
     /// earlier step read.
@@ -217,10 +250,6 @@ struct Ops {
     /// State: both say whether the script may go on.
     bool (*oracle)(State&){};
     bool (*identify)(State&){};
-
-    /// How long a failed write, read-back or bring-up waits before it is tried again, and how
-    /// many failures in a row past the bring-up configure the chip again from the start.
-    std::uint32_t faultBackoffMs{};
 
     /// The bring-up's buffer, cleared before a run: setup() and an identify step see only
     /// this run's bytes.
@@ -238,36 +267,17 @@ struct Ops {
     /// setup() over what the bring-up read: false is "answers, but is not this chip". How
     /// long before such a part is tried again; 0 runs the description anyway.
     bool (*setupFinal)(State&){};
-    std::uint32_t unidentifiedRetryMs{};
     /// Every group's first deadline after a bring-up, and the values the chip owes again
     /// because it came back at its defaults.
     void (*startupSchedule)(State&,
                             TimePoint){};
-
-    /// Presence (Presence.hpp): what the device may do this turn, and what a transaction's
-    /// outcome says about whether the part is there.
-    PresenceTurn (*presenceTurn)(State&,
-                                 TimePoint){};
-    void (*presenceAck)(State&,
-                        TimePoint){};
-    void (*presenceNak)(State&){};
-    void (*presenceFault)(State&){};
-    /// A request the bus never answered: the net under its "exactly one callback".
-    std::uint32_t inFlightTimeoutMs{};
 
     /// A NAK the part gives while it wakes: true when the transaction was put on the wire
     /// again rather than counted.
     bool (*wakeRetry)(State&,
                       TimePoint){};
 
-    /// Behind a bridge that can be switched off (Bridge.hpp): false while the engine has to
-    /// keep still. Always true for a device that is not behind one.
-    bool (*bridgeTurn)(State&,
-                       TimePoint){};
-
-    /// A chip with a reset line of its own, and the three waits of a power-on.
-    void (*resetHold)(State&){};
-    void (*resetRelease)(State&){};
+    /// The three waits of a power-on.
     std::uint32_t startupDelayMs{};
     std::uint32_t resetLowMs{};
     std::uint32_t resetSettleMs{};
@@ -312,32 +322,70 @@ struct Ops {
     /// What came back compared with what was written.
     void (*finishVerify)(State&,
                          TimePoint){};
+    /// The earliest read-back due (max() if none); null when the chip verifies nothing.
+    TimePoint (*verifyDue)(State&){};
 
     // The small fields last, together. Between the pointers each cost three bytes of padding,
     // and the six durations above were 8-byte `std::chrono::milliseconds` that aligned the
     // whole table to 8: 224 bytes x 57 devices was 12.8 KB of the i2c_testing bench (2026-09-21).
     std::string_view name{};
-    std::uint8_t     address{};
     /// 0, 1 or 2: how a register is addressed on this chip.
     std::uint8_t registerBytes{};
     /// True when the chip sends nothing to come up: link() then stays `starting` until its
     /// first transaction is acknowledged.
-    bool         initEmpty{};
+    bool initEmpty{};
+};
+
+/// What the engine needs of one device beside its chip, so that Ops and the chip's code are
+/// shared by every device of that chip. A null hook is "none".
+template<typename Port, typename Clock>
+struct DeviceOps {
+    using State = EngineState<Port, Clock>;
+
+    /// The bus the part is on.
+    bool (*submit)(typename Port::Request const&){};
+    /// The gate in front of the part (a switch channel): false means "not yet, try next turn".
+    bool (*claimGate)(State&){};
+    void (*releaseGate)(State&){};
+    /// Config::enabled(), called with `enabledArg` (one function can serve many devices).
+    bool (*enabled)(void const*){};
+    void const* enabledArg{};
+    /// Behind a bridge (Bridge.hpp): off now, and its generation (steps on every activation).
+    bool (*gateOffline)(State const&){};
+    std::uint32_t (*gateGeneration)(State const&){};
+    /// A chip with a reset line of its own.
+    void (*resetHold)(){};
+    void (*resetRelease)(){};
+
+    PresenceKnobs presence{};
+    /// How long a failed write, read-back or bring-up waits before it is tried again.
+    std::uint32_t faultBackoffMs{};
+    /// A request the bus never answered: the net under its "exactly one callback".
+    std::uint32_t inFlightTimeoutMs{};
+    std::uint32_t unidentifiedRetryMs{};
+    std::uint8_t  address{};
+    /// Failures in a row past the bring-up that configure the chip again from the start.
     std::uint8_t faultsBeforeReinit{};
-    bool         bridged{};
-    bool         hasResetLine{};
-    /// How often a decode or a check step may ask for a retry before the sample is rejected.
+    /// How often a decode or a check step may ask for a retry before the sample is rejected,
+    /// and how often a read-back mismatch rewrites a register.
     std::uint8_t maxRetries{};
+    /// WhileOff::unpowered: brought up from the start after an offline spell.
+    bool bridgeUnpowered{};
+    bool disabledUnpowered{};
+
+    [[nodiscard]] constexpr bool switchable() const {
+        return enabled != nullptr || gateOffline != nullptr;
+    }
 };
 
 /// The state machine. Every function here is one copy in the image for the whole firmware:
 /// what it needs of the chip comes from `Ops`, what it needs of the run from `EngineState`.
-template<typename I2c, typename Clock>
+template<typename Port, typename Clock>
 struct Engine {
-    using State     = EngineState<I2c, Clock>;
-    using OpsT      = Ops<I2c, Clock>;
+    using State     = EngineState<Port, Clock>;
+    using OpsT      = Ops<Port, Clock>;
     using TimePoint = typename Clock::time_point;
-    using PendingT  = Pending<I2c, Clock>;
+    using PendingT  = Pending<Port, Clock>;
 
     /// When a wait of `delay` from `now` is over. `now` was read at some point inside a tick of
     /// the clock, so one tick more makes the wait at least `delay` long however late in its
@@ -346,6 +394,16 @@ struct Engine {
     /// A duration from one of the table's millisecond counts.
     [[nodiscard]] static constexpr std::chrono::milliseconds ms(std::uint32_t count) {
         return std::chrono::milliseconds{count};
+    }
+
+    /// The gate in front of the part, if any.
+    [[nodiscard]] static bool claimGate(State& e) {
+        auto const claim = e.dev_->claimGate;
+        return claim == nullptr || claim(e);
+    }
+
+    static void releaseGate(State& e) {
+        if(auto const release = e.dev_->releaseGate) { release(e); }
     }
 
     [[nodiscard]] static TimePoint atLeast(TimePoint                 now,
@@ -357,21 +415,19 @@ struct Engine {
     /// The run is about to wait, so the gate is let go for it and claimed again before the
     /// next transaction: a part behind a switch does not hold its channel while it waits.
     static void wait(State&                    e,
-                     OpsT const&               ops,
                      TimePoint                 now,
                      std::chrono::milliseconds delay,
                      bool                      thenNextStep) {
         e.waiting_    = true;
         e.afterDelay_ = thenNextStep;
         e.waitUntil_  = atLeast(now, delay);
-        ops.releaseGate(e);
+        releaseGate(e);
     }
 
     /// A run is over -- finished, failed, rejected, or abandoned by a reset. Every exit from
     /// a script goes through here, so a gate is never held a turn past the end of a run.
-    static void endRun(State&      e,
-                       OpsT const& ops) {
-        ops.releaseGate(e);
+    static void endRun(State& e) {
+        releaseGate(e);
         e.running_ = Running::none;
     }
 
@@ -469,16 +525,16 @@ struct Engine {
                       TimePoint                 now,
                       std::chrono::milliseconds retryAfter) {
         auto& s = ops.readSlot(e, e.group_);
-        if(s.retries < ops.maxRetries) {
+        if(s.retries < e.dev_->maxRetries) {
             ++s.retries;
             e.step_ = 0;
-            wait(e, ops, now, retryAfter, false);
+            wait(e, now, retryAfter, false);
         } else {
             ++s.rejected;
             s.retries = 0;
             answered(s, Answer::rejected);
             reschedule(e, ops, e.group_, now);
-            endRun(e, ops);
+            endRun(e);
         }
     }
 
@@ -556,7 +612,7 @@ struct Engine {
         }
         s.retries = 0;
         reschedule(e, ops, e.group_, now);
-        endRun(e, ops);
+        endRun(e);
     }
 
     /// A write is on the chip: the description hears about it, and the read-back is owed.
@@ -565,7 +621,7 @@ struct Engine {
                             TimePoint   now) {
         ++ops.writeSlot(e, e.group_).writes;
         ops.afterWrite(e, e.group_, e.item_, now);
-        endRun(e, ops);
+        endRun(e);
     }
 
     /// The first dirty item of the first dirty write group, encoded and on the wire.
@@ -612,12 +668,158 @@ struct Engine {
         return false;
     }
 
-    /// Once per loop turn: everything happens here.
+    /// False while the engine has to keep still: the part is behind a bridge that is not
+    /// active, or its Config disabled it. A transaction on the wire when the part goes offline
+    /// is waited for (the held gate keeps a switched bridge from cutting it) and its result
+    /// dropped. Any power loss in an offline spell, a bounce seen only by the bridge's
+    /// generation included, brings the part up from the start once.
+    static bool bridgeTurn(State&      e,
+                           OpsT const& ops,
+                           TimePoint   now) {
+        auto const& d        = *e.dev_;
+        bool const  bridged  = d.gateOffline != nullptr;
+        bool const  gateOff  = bridged && d.gateOffline(e);
+        bool const  disabled = d.enabled != nullptr && !d.enabled(d.enabledArg);
+        bool const  bounced  = bridged && e.bridge_.generation != d.gateGeneration(e);
+        if((gateOff || disabled) && e.inFlight_) {
+            if(e.pending_.take() == PendingT::Outcome::running
+               && now - e.submittedAt_ <= ms(d.inFlightTimeoutMs))
+            {
+                return false;   // not a word to the part until it is answered
+            }
+            e.inFlight_ = false;
+            e.pending_.clear();
+        }
+
+        bool const wasOffline = e.bridge_.offline();
+        bool       powerCut   = false;
+        if(bridged) {
+            if(gateOff != e.bridge_.gateOff) {
+                e.bridge_.gateOff = gateOff;
+                logBridge(ops.name, d.address, !gateOff);
+            } else if(bounced && !gateOff) {   // off and on again, both unseen
+                logBridge(ops.name, d.address, false);
+                logBridge(ops.name, d.address, true);
+            }
+            powerCut             = (gateOff || bounced) && d.bridgeUnpowered;
+            e.bridge_.generation = d.gateGeneration(e);
+        }
+        if(disabled != e.bridge_.disabled) {
+            e.bridge_.disabled = disabled;
+            logEnabled(ops.name, d.address, !disabled);
+            powerCut = powerCut || (disabled && d.disabledUnpowered);
+        }
+
+        bool const offline = gateOff || disabled;
+        if(!wasOffline && !offline && !bounced) { return true; }   // the common case
+
+        if(powerCut && !e.bridge_.lostPower) {
+            reset(e, ops);
+            e.bridge_.lostPower = true;
+        } else if(!wasOffline) {
+            pause(e, ops);   // the registers stay; a reset later in this spell still comes
+        }
+        if(offline) { return false; }
+        e.bridge_.lostPower = false;
+        e.presence_.restart();
+        return true;
+    }
+
+    /// Once per loop turn: a full turn, or nothing while the device rests (EngineState).
     static void handler(State&      e,
                         OpsT const& ops,
                         TimePoint   now) {
-        if(ops.bridged && !ops.bridgeTurn(e, now)) { return; }
-        switch(ops.presenceTurn(e, now)) {
+        if(e.resting_ && now < e.quietUntil_ && !e.doorbell_.load(std::memory_order_acquire)
+           && switchSettled(e))
+        {
+            return;
+        }
+        // Cleared before the turn: a request made during it rings again.
+        e.doorbell_.exchange(false, std::memory_order_acq_rel);
+        ++e.turns_;
+        turnOnce(e, ops, now);
+        rest(e, ops);
+    }
+
+    /// The bridge and Config::enabled() still say what the last full turn saw (`bridge_`).
+    [[nodiscard]] static bool switchSettled(State const& e) {
+        auto const& d = *e.dev_;
+        if(!d.switchable()) { return true; }
+        bool const disabled = d.enabled != nullptr && !d.enabled(d.enabledArg);
+        if(disabled != e.bridge_.disabled) { return false; }
+        if(d.gateOffline != nullptr) {
+            return d.gateOffline(e) == e.bridge_.gateOff
+                && d.gateGeneration(e) == e.bridge_.generation;
+        }
+        return true;
+    }
+
+    /// After a full turn: rest until the time point the device waits for, if it waits for one.
+    /// Mirrors turn()/schedule(); anything else runs the next turn.
+    static void rest(State&      e,
+                     OpsT const& ops) {
+        e.resting_ = false;
+        if(e.inFlight_) { return; }
+        auto const quiet = [&](TimePoint until) {
+            e.quietUntil_ = until;
+            e.resting_    = true;
+        };
+        if(e.dev_->switchable() && e.bridge_.offline()) {
+            quiet(TimePoint::max());   // until switchSettled() says otherwise
+            return;
+        }
+        TimePoint probe{};
+        switch(e.presence_.rest(e.dev_->presence, probe)) {
+        case Presence<Clock>::Rest::busy:   return;
+        case Presence<Clock>::Rest::parked: quiet(probe); return;
+        case Presence<Clock>::Rest::talk:   break;
+        }
+        switch(e.phase_) {
+        case Phase::reset: return;
+        case Phase::resetHeld:
+        case Phase::settle:
+            // turn() moves on once now > waitUntil_: one tick after it
+            quiet(e.waitUntil_ + typename Clock::duration{1});
+            return;
+        case Phase::run: break;
+        }
+        if(e.running_ != Running::none) {
+            if(e.waiting_) { quiet(e.waitUntil_); }
+            return;   // not waiting and not in flight: a submit to try again
+        }
+        if(!e.up_) { return; }   // the bring-up begins next turn
+
+        // Up and idle: until the earliest group is due, and not before the hold after a fault.
+        TimePoint due = TimePoint::max();
+        for(std::uint8_t g = 0; g < static_cast<std::uint8_t>(ops.reads.size()); ++g) {
+            auto const& s = ops.readSlot(e, g);
+            if(s.asked.load(std::memory_order_acquire) != s.started) {
+                due = TimePoint::min();
+            } else if(ops.reads[g].periodMs != 0 && s.due < due) {
+                due = s.due;
+            }
+        }
+        for(std::uint8_t w = 0; w < static_cast<std::uint8_t>(ops.writes.size()); ++w) {
+            auto const& s = ops.writeSlot(e, w);
+            if(s.dirty.load(std::memory_order_acquire) != 0) {
+                due = TimePoint::min();
+            } else if(ops.writes[w].periodMs != 0 && s.due < due) {
+                due = s.due;
+            }
+        }
+        if(ops.verifyDue != nullptr) {
+            auto const v = ops.verifyDue(e);
+            if(v < due) { due = v; }
+        }
+        quiet(due < e.holdUntil_ ? e.holdUntil_ : due);
+    }
+
+    /// A full turn.
+    static void turnOnce(State&      e,
+                         OpsT const& ops,
+                         TimePoint   now) {
+        if(e.dev_->switchable() && !bridgeTurn(e, ops, now)) { return; }
+        switch(e.presence_.turn(now, e.dev_->address, e.dev_->presence)) {
         case PresenceTurn::wait: return;   // parked, no probe due: nothing runs
         case PresenceTurn::park:           // just parked: start over, then wait
             reset(e, ops);
@@ -627,12 +829,12 @@ struct Engine {
             break;
         case PresenceTurn::talk: break;
         }
-        if(e.inFlight_ && now - e.submittedAt_ > ms(ops.inFlightTimeoutMs)) {
-            logNoBusAnswer(ops.name, ops.address, ms(ops.inFlightTimeoutMs));
+        if(e.inFlight_ && now - e.submittedAt_ > ms(e.dev_->inFlightTimeoutMs)) {
+            logNoBusAnswer(ops.name, e.dev_->address, ms(e.dev_->inFlightTimeoutMs));
             e.inFlight_ = false;
             e.pending_.clear();
             ++e.errors_;
-            ops.presenceFault(e);
+            e.presence_.fault();
             fail(e, ops, now);
         }
         turn(e, ops, now);
@@ -648,10 +850,10 @@ struct Engine {
                 // A bring-up that failed is not tried again on the very next turn: a chip
                 // with no startupDelay on a faulting bus would otherwise be asked every turn.
                 auto const backoff
-                  = e.initFailed_ ? ms(ops.faultBackoffMs) : std::chrono::milliseconds{0};
+                  = e.initFailed_ ? ms(e.dev_->faultBackoffMs) : std::chrono::milliseconds{0};
                 e.initFailed_ = false;
-                if(ops.hasResetLine) {
-                    ops.resetHold(e);
+                if(auto const hold = e.dev_->resetHold) {
+                    hold();
                     e.waitUntil_ = now + ms(ops.resetLowMs) + backoff;
                     e.phase_     = Phase::resetHeld;
                 } else {
@@ -662,7 +864,7 @@ struct Engine {
             break;
         case Phase::resetHeld:
             if(now > e.waitUntil_) {
-                ops.resetRelease(e);
+                e.dev_->resetRelease();
                 e.waitUntil_ = now + ms(ops.resetSettleMs) + ms(ops.startupDelayMs);
                 e.phase_     = Phase::settle;
             }
@@ -722,11 +924,11 @@ struct Engine {
             e.inFlight_            = false;
             e.consecutiveFailures_ = 0;
             ops.wakeReset(e);
-            ops.presenceAck(e, now);
+            e.presence_.ack(now, e.dev_->address);
             if(!e.acked_) {
                 e.acked_ = true;
                 // no Init: the first ACK is the chip coming up
-                if(e.up_) { logUp(ops.name, ops.address, e.identified_); }
+                if(e.up_) { logUp(ops.name, e.dev_->address, e.identified_); }
             }
             afterTransaction(e, ops, now);
             return;
@@ -741,7 +943,7 @@ struct Engine {
             }
             if(ops.wakeRetry(e, now)) { return; }
             ++e.errors_;
-            ops.presenceNak(e);
+            e.presence_.nak();
             fail(e, ops, now);
             return;
         case PendingT::Outcome::failed:
@@ -757,7 +959,7 @@ struct Engine {
                 return;
             }
             ++e.errors_;
-            ops.presenceFault(e);
+            e.presence_.fault();
             fail(e, ops, now);
             return;
         }
@@ -768,28 +970,28 @@ struct Engine {
     static void finishInit(State&      e,
                            OpsT const& ops,
                            TimePoint   now) {
-        endRun(e, ops);
+        endRun(e);
         e.identified_ = ops.setupFinal(e);
         // The data sheet's identity has the last word: a part that failed it is not the chip,
         // whatever setup() makes of a buffer the script never got to fill.
         if(e.oracleFailed_) { e.identified_ = false; }
-        if(!e.identified_ && ms(ops.unidentifiedRetryMs) > std::chrono::milliseconds::zero()) {
+        if(!e.identified_ && ms(e.dev_->unidentifiedRetryMs) > std::chrono::milliseconds::zero()) {
             // Not the chip this description is for: nothing else goes to it. The bring-up
             // runs again after unidentifiedRetry -- a part that was still booting, or that
             // gets its id right after a reset, comes through then. link() stays `starting`.
             if(!e.unidentifiedLogged_) {
                 e.unidentifiedLogged_ = true;
-                logUnidentified(ops.name, ops.address, ms(ops.unidentifiedRetryMs));
+                logUnidentified(ops.name, e.dev_->address, ms(e.dev_->unidentifiedRetryMs));
             }
             ++e.unidentified_;
             e.waiting_   = false;
-            e.waitUntil_ = now + ms(ops.unidentifiedRetryMs);
+            e.waitUntil_ = now + ms(e.dev_->unidentifiedRetryMs);
             e.phase_     = Phase::settle;
             return;
         }
         e.up_ = true;
         ++e.bringUps_;
-        if(e.acked_) { logUp(ops.name, ops.address, e.identified_); }
+        if(e.acked_) { logUp(ops.name, e.dev_->address, e.identified_); }
         ops.startupSchedule(e, now);
     }
 
@@ -820,20 +1022,20 @@ struct Engine {
             break;
         case Running::write:
             ops.redirtyItem(e);
-            e.holdUntil_ = now + ms(ops.faultBackoffMs);
+            e.holdUntil_ = now + ms(e.dev_->faultBackoffMs);
             break;
         case Running::verify:
             // a bus fault says nothing about the register: still owed, looked at again
             // shortly. Only a mismatch counts against the rewrite budget.
-            e.holdUntil_ = now + ms(ops.faultBackoffMs);
+            e.holdUntil_ = now + ms(e.dev_->faultBackoffMs);
             break;
         case Running::none: break;
         }
-        endRun(e, ops);
+        endRun(e);
         // Past the bring-up and still failing: the chip is configured again from the
         // start. After the per-phase handling above, so a write is owed before the
         // bring-up that would otherwise not replay a Transient one.
-        if(e.phase_ == Phase::run && e.consecutiveFailures_ >= ops.faultsBeforeReinit) {
+        if(e.phase_ == Phase::run && e.consecutiveFailures_ >= e.dev_->faultsBeforeReinit) {
             e.consecutiveFailures_ = 0;
             e.waiting_             = false;
             e.up_                  = false;
@@ -852,7 +1054,7 @@ struct Engine {
                        std::span<std::byte> buf) {
         // Parked: nothing goes out but the one probe per interval, and that one before the
         // gate is asked, so a parked device never holds a switch.
-        if(!ops.mayTalk(e)) { return false; }
+        if(!e.presence_.mayTalk()) { return false; }
         auto const  tx = ops.tx(e);
         std::size_t n  = 0;
         if(s.hasRegister) {
@@ -873,10 +1075,10 @@ struct Engine {
         // device lets go is queued behind it, so it cannot land inside it. "Not yet" leaves
         // the request unsubmitted and the engine retries next turn, which is the path a full
         // bus queue already takes.
-        if(!ops.claimGate(e)) { return false; }
+        if(!claimGate(e)) { return false; }
         e.pending_.clear();
-        typename I2c::Request req{};
-        req.address  = ops.address;
+        typename Port::Request req{};
+        req.address  = e.dev_->address;
         req.callback = e.pending_.callback();
         // SPI/Transport.hpp turns the register byte into the chip's command.
         if constexpr(requires { req.registerBytes; }) {
@@ -894,7 +1096,7 @@ struct Engine {
         // Stamped before the submit: a one-byte write can complete in the interrupt before
         // submit() returns, and the net must not measure from after that.
         e.submittedAt_ = Clock::now();
-        return I2c::submit(req);
+        return e.dev_->submit(req);
     }
 
     /// The step `step_` of the running script: a wait, a question the buffer answers, or a
@@ -917,7 +1119,7 @@ struct Engine {
             e.current_.count = n;
         }
         switch(e.current_.kind) {
-        case Step::Kind::wait: wait(e, ops, now, e.current_.delay, true); return;
+        case Step::Kind::wait: wait(e, now, e.current_.delay, true); return;
         case Step::Kind::oracle:
             if(ops.oracle(e)) {
                 nextStep(e, ops, now);
@@ -958,7 +1160,7 @@ struct Engine {
                                  OpsT const& ops,
                                  TimePoint   now) {
         if(e.current_.delay != std::chrono::milliseconds::zero()) {
-            wait(e, ops, now, e.current_.delay, true);
+            wait(e, now, e.current_.delay, true);
         } else {
             nextStep(e, ops, now);
         }
@@ -971,7 +1173,7 @@ private:
                             OpsT const& ops) {
         if(e.running_ == Running::write) { ops.redirtyItem(e); }
         if(e.running_ == Running::read) { ops.unserve(e); }
-        endRun(e, ops);
+        endRun(e);
         e.waiting_             = false;
         e.inFlight_            = false;
         e.consecutiveFailures_ = 0;

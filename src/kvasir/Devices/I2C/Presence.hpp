@@ -43,37 +43,50 @@ enum class PresenceTurn : std::uint8_t {
     park,    ///< the streak just reached the threshold: start over, then wait
 };
 
-template<typename Clock, typename Cfg = PresenceDefaults>
-struct Presence {
-    using TimePoint = typename Clock::time_point;
+/// The knobs as values, so `Presence` is one type whatever a Config sets (DeviceOps::presence).
+struct PresenceKnobs {
+    std::uint32_t probeIntervalMs{};
+    std::uint32_t probeIntervalMaxMs{};
+    std::uint8_t  absentAfterNaks{};
+};
 
-    static constexpr std::uint8_t AbsentAfterNaks = [] {
+/// A Config's knobs, each falling back to PresenceDefaults.
+template<typename Cfg>
+constexpr PresenceKnobs presenceKnobs() {
+    auto const absent = [] {
         if constexpr(requires { Cfg::AbsentAfterNaks; }) {
             return static_cast<std::uint8_t>(Cfg::AbsentAfterNaks);
         } else {
             return PresenceDefaults::AbsentAfterNaks;
         }
     }();
-
-    static constexpr std::chrono::milliseconds ProbeInterval = [] {
+    auto const interval = [] {
         if constexpr(requires { Cfg::ProbeInterval; }) {
             return Kvasir::asDuration(Cfg::ProbeInterval);
         } else {
             return Kvasir::asDuration(PresenceDefaults::ProbeInterval);
         }
     }();
-
-    static constexpr std::chrono::milliseconds ProbeIntervalMax = [] {
+    auto const intervalMax = [] {
         if constexpr(requires { Cfg::ProbeIntervalMax; }) {
             return Kvasir::asDuration(Cfg::ProbeIntervalMax);
         } else {
             return Kvasir::asDuration(PresenceDefaults::ProbeIntervalMax);
         }
     }();
+    return {.probeIntervalMs    = static_cast<std::uint32_t>(interval.count()),
+            .probeIntervalMaxMs = static_cast<std::uint32_t>(intervalMax.count()),
+            .absentAfterNaks    = absent};
+}
 
-    static_assert(ProbeInterval > std::chrono::milliseconds::zero()
-                    && ProbeIntervalMax >= ProbeInterval,
-                  "a probe interval, and a maximum it grows towards");
+template<typename Cfg>
+inline constexpr bool presenceKnobsOk
+  = presenceKnobs<Cfg>().probeIntervalMs > 0
+ && presenceKnobs<Cfg>().probeIntervalMaxMs >= presenceKnobs<Cfg>().probeIntervalMs;
+
+template<typename Clock>
+struct Presence {
+    using TimePoint = typename Clock::time_point;
 
     using Turn = PresenceTurn;
 
@@ -122,13 +135,14 @@ struct Presence {
 
     /// Once per turn, before anything else.
     Turn turn(TimePoint                     now,
-              [[maybe_unused]] std::uint8_t address) {
+              [[maybe_unused]] std::uint8_t address,
+              PresenceKnobs const&          k) {
         if(!absent_) {
-            if(AbsentAfterNaks == 0 || naks_ < AbsentAfterNaks) { return Turn::talk; }
+            if(k.absentAfterNaks == 0 || naks_ < k.absentAfterNaks) { return Turn::talk; }
             absent_    = true;
             probe_     = Probe::none;
             probes_    = 0;
-            interval_  = ProbeInterval;
+            interval_  = std::chrono::milliseconds{k.probeIntervalMs};
             nextProbe_ = now + interval_;
             KVASIR_LOG_LIMITED(log_.allow(NotResponding, now),
                                UC_LOG_W,
@@ -136,8 +150,8 @@ struct Presence {
                                "probing every {} .. {}",
                                address,
                                naks_,
-                               ProbeInterval,
-                               ProbeIntervalMax);
+                               std::chrono::milliseconds{k.probeIntervalMs},
+                               std::chrono::milliseconds{k.probeIntervalMaxMs});
             return Turn::park;
         }
         // Parked. A probe that is armed or on the wire keeps the engine running so that
@@ -146,9 +160,23 @@ struct Presence {
         if(now < nextProbe_) { return Turn::wait; }
         probe_     = Probe::armed;
         nextProbe_ = now + interval_;
-        interval_  = std::min(interval_ * 2, ProbeIntervalMax);
+        interval_  = std::min(interval_ * 2, std::chrono::milliseconds{k.probeIntervalMaxMs});
         ++probes_;
         return Turn::probe;
+    }
+
+    /// For Engine::rest: `talk` while present, `parked` until the next probe (in `until`),
+    /// `busy` when the next turn acts (a probe armed or on the wire, a streak about to park).
+    enum class Rest : std::uint8_t { busy, talk, parked };
+
+    [[nodiscard]] Rest rest(PresenceKnobs const& k,
+                            TimePoint&           until) const {
+        if(!absent_) {
+            return k.absentAfterNaks != 0 && naks_ >= k.absentAfterNaks ? Rest::busy : Rest::talk;
+        }
+        if(probe_ != Probe::none) { return Rest::busy; }
+        until = nextProbe_;
+        return Rest::parked;
     }
 
     /// Asked before every submit: a present device may always talk, a parked one only
@@ -171,7 +199,7 @@ private:
     bool                      absent_{false};
     Probe                     probe_{Probe::none};
     std::uint16_t             probes_{};
-    std::chrono::milliseconds interval_{ProbeInterval};
+    std::chrono::milliseconds interval_{};   ///< set when the device is parked
     TimePoint                 nextProbe_{};
     RateLimiter<Clock>        log_{};   ///< a flapping device must not flood the log
 };

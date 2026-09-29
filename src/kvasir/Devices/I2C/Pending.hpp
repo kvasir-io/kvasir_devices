@@ -23,7 +23,7 @@ namespace Kvasir::I2C {
 ///     case Outcome::notAcknowledged: ...   // the device did not answer
 ///     case Outcome::failed:          ...   // a bus fault: says nothing about the device
 ///     }
-template<typename I2c, typename Clock>
+template<typename Port, typename Clock>
 struct Pending {
     using TimePoint = typename Clock::time_point;
 
@@ -33,16 +33,16 @@ struct Pending {
     /// what the bus's CallbackSize has to hold (Device::CallbackBytes).
     auto callback() {
         auto const gen = generation_.load(std::memory_order_relaxed);
-        return [this, gen](typename I2c::Result r) { complete(gen, r); };
+        return [this, gen](typename Port::Result r) { complete(gen, r); };
     }
 
-    void complete(std::uint32_t        gen,
-                  typename I2c::Result r) {
+    void complete(std::uint32_t         gen,
+                  typename Port::Result r) {
         if(gen != generation_.load(std::memory_order_relaxed)) { return; }   // given up on
         stamp_             = Clock::now();
-        auto const outcome = r == I2c::Result::succeeded       ? Outcome::ok
-                           : r == I2c::Result::notAcknowledged ? Outcome::notAcknowledged
-                                                               : Outcome::failed;
+        auto const outcome = r == Port::Result::succeeded       ? Outcome::ok
+                           : r == Port::Result::notAcknowledged ? Outcome::notAcknowledged
+                                                                : Outcome::failed;
         result_.store(outcome, std::memory_order_relaxed);
         done_.store(true, std::memory_order_release);
     }

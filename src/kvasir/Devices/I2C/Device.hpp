@@ -529,21 +529,6 @@ namespace detail {
         std::uint32_t retries{};   ///< over the device's life
     };
 
-    /// A part behind a bridge or one the Config can disable: each offline reason on its own,
-    /// since they come and go independently. Empty for every other device.
-    template<bool Enable>
-    struct BridgeSlot {};
-
-    template<>
-    struct BridgeSlot<true> {
-        bool          gateOff{};     ///< offline because the bridge is not active
-        bool          disabled{};    ///< offline because Config::enabled() is false
-        bool          lostPower{};   ///< reset_() done since the part went offline
-        std::uint32_t generation{};
-
-        [[nodiscard]] bool offline() const { return gateOff || disabled; }
-    };
-
     constexpr bool hasCheck(std::span<Step const> steps) {
         for(auto const& s : steps) {
             if(s.kind == Step::Kind::check || s.kind == Step::Kind::stopUnless) { return true; }
@@ -808,6 +793,19 @@ namespace detail {
         }
     }
 
+    /// Every read group's ConfirmChange for a Config, in the order of the chip's Reads.
+    template<typename ChipT,
+             typename Config>
+    constexpr auto confirmsOf() {
+        using Rs = typename ReadsOf<ChipT>::type;
+        std::array<std::uint8_t, Rs::size> counts{};
+        forEach<Rs>([&](auto i) {
+            counts[decltype(i)::value]
+              = confirmChangeOf<typename Nth<Rs>::template type<decltype(i)::value>, Config>();
+        });
+        return counts;
+    }
+
     template<typename L>
     [[nodiscard]] constexpr std::size_t maxPayloadOf() {
         std::size_t n = 0;
@@ -863,49 +861,29 @@ namespace detail {
     concept SpiTransport = requires { requires B::IsSpi; };
 }   // namespace detail
 
-/// The driver. `Chip` is the description (chips/); `Config` may set `Address`, the presence
-/// knobs (PresenceDefaults: AbsentAfterNaks, ProbeInterval, ProbeIntervalMax) and the engine's
-/// own (EngineDefaults below: MaxRetries, FaultBackoff, FaultsBeforeReinit, InFlightTimeout,
-/// UnidentifiedRetry); `Reset` is a line with hold()/release() (any GPIO reset callable) for a
-/// chip that declares ResetLow/ResetSettle.
-///
-/// What a run-time caller may change: `period<G>(ms)` sets a cyclic read group's period from
-/// then on (0 parks it until request<G>() asks; the description's Period stays the nominal
-/// rate the bus load is computed from).
-template<typename I2c,
-         typename Clock,
-         typename ChipT,
-         typename Config = DefaultConfig,
-         typename Reset  = NoReset,
-         typename Gate   = NoGate>
-    requires Chip<ChipT> || detail::SpiTransport<I2c>
-struct Device
-  : detail::EngineState<I2c, Clock>
-  , detail::ResetClaims<Reset> {
-    using Chip = ChipT;
-    /// The bus and the clock this device is on, so a Bus<> can check that the devices it
-    /// was handed are all on the bus it names -- a mixed set would give a queue depth and a
-    /// bus load for traffic that is not on one wire.
-    using I2cBus    = I2c;
-    using ClockT    = Clock;
-    using GateT     = Gate;
-    using ConfigT   = Config;
-    using ResetT    = Reset;
-    using TimePoint = typename Clock::time_point;
-    using Duration  = typename Clock::duration;
-    using PendingT  = Pending<I2c, Clock>;
-    using PresenceT = Presence<Clock, Config>;
-    using State     = typename detail::StateOf<Chip>::type;
+/// Everything of a Device that depends on the chip alone: slots, buffers, the chip's State, the
+/// application's API and the engine's Ops. Devices of one chip on one port type (PortOf) with
+/// equal `Confirms` (detail::confirmsOf, it sizes the slots) share it; the rest is DeviceOps.
+template<typename Port, typename Clock, typename ChipT, auto Confirms>
+struct DeviceCore : detail::EngineState<Port, Clock> {
+    using Chip       = ChipT;
+    using ClockT     = Clock;
+    using TimePoint  = typename Clock::time_point;
+    using Duration   = typename Clock::duration;
+    using PendingT   = Pending<Port, Clock>;
+    using State      = typename detail::StateOf<Chip>::type;
+    using DeviceOpsT = detail::DeviceOps<Port, Clock>;
 
     /// The state machine's own fields and its two enums (Engine.hpp). A base that depends on a
     /// template parameter is not searched by unqualified lookup, so every name it brings is
     /// named here once instead of `this->` at some hundreds of use sites.
-    using EngineStateT = detail::EngineState<I2c, Clock>;
+    using EngineStateT = detail::EngineState<Port, Clock>;
     using Phase        = detail::Phase;
     using Running      = detail::Running;
 
     using EngineStateT::acked_;
     using EngineStateT::afterDelay_;
+    using EngineStateT::bridge_;
     using EngineStateT::bringUps_;
     using EngineStateT::consecutiveFailures_;
     using EngineStateT::current_;
@@ -919,6 +897,7 @@ struct Device
     using EngineStateT::oracleFailed_;
     using EngineStateT::pending_;
     using EngineStateT::phase_;
+    using EngineStateT::presence_;
     using EngineStateT::running_;
     using EngineStateT::step_;
     using EngineStateT::submittedAt_;
@@ -935,41 +914,6 @@ struct Device
     /// description grow a second read group without breaking every caller of latest().
     using PrimaryRead                    = typename detail::PrimaryOf<Chip, Reads>::type;
     static constexpr bool HasPrimaryRead = !std::is_void_v<PrimaryRead>;
-
-    /// Behind a bridge that can be switched off (Bridge.hpp): link() can say `offline`.
-    static constexpr bool Bridged = detail::BridgedGate<Gate>;
-
-    /// Config's `static bool enabled();` takes the part offline for a reason the bus cannot see
-    /// (a module not fitted), as an inactive bridge would, and combines with one. It comes back
-    /// as `WhileDisabled` says: `unpowered` (default, brought up again) or `disconnected`.
-    ///     struct Config {
-    ///         static constexpr std::uint8_t Address = 0x49;
-    ///         static bool enabled() { return slots.fitted(2); }
-    ///     };
-    static constexpr bool Enableable = requires {
-        { Config::enabled() } -> std::convertible_to<bool>;
-    };
-
-    static constexpr bool Switchable = Bridged || Enableable;
-
-    static constexpr WhileOff WhileDisabled = [] {
-        if constexpr(requires { Config::WhileDisabled; }) {
-            return Config::WhileDisabled;
-        } else {
-            return WhileOff::unpowered;
-        }
-    }();
-
-    /// The part's I2C address; on an SPI transport, its chip-select GPIO (for the log).
-    static constexpr std::uint8_t Address = [] {
-        if constexpr(detail::SpiTransport<I2c>) {
-            return I2c::LogId;
-        } else if constexpr(requires { Config::Address; }) {
-            return static_cast<std::uint8_t>(Config::Address);
-        } else {
-            return static_cast<std::uint8_t>(Chip::Address);
-        }
-    }();
 
     static constexpr std::size_t RegisterBytes = Chip::RegisterBytes;
 
@@ -999,8 +943,6 @@ struct Device
         }
     }();
 
-    static constexpr bool HasResetLine = !requires { Reset::NoLine; };
-
     static constexpr std::chrono::milliseconds ResetLow = [] {
         if constexpr(requires { Chip::ResetLow; }) {
             return Kvasir::asDuration(Chip::ResetLow);
@@ -1017,72 +959,9 @@ struct Device
         }
     }();
 
-    // The policy knobs (EngineDefaults), each overridable by the Config.
-    static constexpr std::uint8_t MaxRetries = [] {
-        if constexpr(requires { Config::MaxRetries; }) {
-            return static_cast<std::uint8_t>(Config::MaxRetries);
-        } else {
-            return EngineDefaults::MaxRetries;
-        }
-    }();
-
+    /// Each read group's ConfirmChange (from `Confirms`).
     template<typename G>
-    static constexpr std::uint8_t ConfirmChange = detail::confirmChangeOf<G, Config>();
-
-    static_assert(detail::checkConfirmConfig<Config,
-                                             Reads>()
-                    != detail::ConfirmConfig::unnamed,
-                  "Config::ConfirmChange names no read group: add `using Confirm = List<...>;` "
-                  "with the groups whose changes are confirmed");
-    static_assert(detail::checkConfirmConfig<Config,
-                                             Reads>()
-                    != detail::ConfirmConfig::uncounted,
-                  "Config::Confirm without Config::ConfirmChange confirms nothing");
-    static_assert(detail::checkConfirmConfig<Config,
-                                             Reads>()
-                    != detail::ConfirmConfig::foreign,
-                  "Config::Confirm names a group that is not one of this part's reads");
-    static_assert(detail::checkConfirmConfig<Config,
-                                             Reads>()
-                    != detail::ConfirmConfig::counted,
-                  "a read group with a counted read (a stream, a FIFO) cannot confirm changes: the "
-                  "confirming read is a second read at once");
-
-    static_assert(
-      [] {
-          bool ok = true;
-          detail::forEach<Reads>([&](auto i) {
-              using G = typename detail::Nth<Reads>::template type<decltype(i)::value>;
-              ok      = ok && ConfirmChange<G> <= MaxRetries;
-          });
-          return ok;
-      }(),
-      "a read group's ConfirmChange is over MaxRetries: its confirming re-reads are the run's "
-      "retries, and a run out of retries rejects the reading");
-
-    static constexpr std::chrono::milliseconds FaultBackoff = [] {
-        if constexpr(requires { Config::FaultBackoff; }) {
-            return Kvasir::asDuration(Config::FaultBackoff);
-        } else {
-            return Kvasir::asDuration(EngineDefaults::FaultBackoff);
-        }
-    }();
-
-    static constexpr std::uint8_t FaultsBeforeReinit = [] {
-        if constexpr(requires { Config::FaultsBeforeReinit; }) {
-            return static_cast<std::uint8_t>(Config::FaultsBeforeReinit);
-        } else {
-            return EngineDefaults::FaultsBeforeReinit;
-        }
-    }();
-
-    static constexpr std::chrono::milliseconds InFlightTimeout = [] {
-        if constexpr(requires { Config::InFlightTimeout; }) {
-            return Kvasir::asDuration(Config::InFlightTimeout);
-        } else {
-            return Kvasir::asDuration(EngineDefaults::InFlightTimeout);
-        }
-    }();
+    static constexpr std::uint8_t ConfirmChange = Confirms[detail::IndexOf<G, Reads>::value];
 
     /// A NAK is the part still waking: resubmit it this often, this long apart, before it counts.
     static constexpr std::uint8_t WakeRetries = [] {
@@ -1101,28 +980,10 @@ struct Device
         }
     }();
 
-    static constexpr std::chrono::milliseconds UnidentifiedRetry = [] {
-        if constexpr(requires { Config::UnidentifiedRetry; }) {
-            return Kvasir::asDuration(Config::UnidentifiedRetry);
-        } else {
-            return Kvasir::asDuration(EngineDefaults::UnidentifiedRetry);
-        }
-    }();
-
     /// What the bus's CallbackSize has to hold: the completion lambda the engine hands it.
     /// Checked against the bus when it says what it holds.
     static constexpr std::size_t CallbackBytes
       = sizeof(decltype(std::declval<PendingT&>().callback()));
-
-    static_assert(
-      [] {
-          if constexpr(requires { I2c::CallbackSize; }) {
-              return static_cast<std::size_t>(I2c::CallbackSize) >= CallbackBytes;
-          }
-          return true;
-      }(),
-      "the bus behavior's CallbackSize is smaller than the engine's completion lambda "
-      "(Device::CallbackBytes): raise the I2CBehaviorQueued CallbackSize template argument");
 
     // -- compile-time checks of the description --------------------------------------------
 
@@ -1136,17 +997,6 @@ struct Device
       "one-byte chip, a register on a chip without registers, a read of nothing, a check "
       "step (only read groups have ready()), a counted read whose count is not one or two "
       "bytes inside an earlier read, or a first transaction that may NAK (it is the probe)");
-    static_assert(
-      [] {
-          if constexpr(detail::HasAddresses<Chip> && !detail::SpiTransport<I2c>) {
-              for(auto const a : Chip::Addresses) {
-                  if(a == Address) { return true; }
-              }
-              return false;
-          }
-          return true;
-      }(),
-      "Config::Address is not one of the addresses this chip can have (Chip::Addresses)");
 
     template<typename G>
     static constexpr bool groupOk() {
@@ -1294,34 +1144,25 @@ struct Device
     // (an I2C switch, a DAC with one word) it is a bare read of as many bytes as were written,
     // which is what such parts return.
 
-    constexpr Device() = default;
+    /// `dev` is the Device's own table (Device::Hooks).
+    constexpr explicit DeviceCore(DeviceOpsT const* dev) { this->dev_ = dev; }
 
 private:
     /// The state the engine works on is this object: every trampoline below casts back.
-    [[nodiscard]] static Device& self_(EngineStateT& e) { return static_cast<Device&>(e); }
+    [[nodiscard]] static DeviceCore& self_(EngineStateT& e) { return static_cast<DeviceCore&>(e); }
 
     /// What the engine (Engine.hpp) needs of this chip: constants, and one trampoline per hole.
-    /// `static constexpr`, so it is one table in flash per Device instantiation and nothing per
+    /// `static constexpr`, so it is one table in flash per DeviceCore and nothing per
     /// object -- the engine takes it as an argument rather than the device carrying a pointer.
     /// This is where the chip's groups are switched over, once, instead of at every call site.
-    static constexpr detail::Ops<I2c, Clock> EngineOps{
+    static constexpr detail::Ops<Port, Clock> EngineOps{
       .tx        = [](EngineStateT& e) { return std::span<std::byte>{self_(e).tx_}; },
       .script    = [](EngineStateT& e) { return self_(e).script_(); },
       .buffer    = [](EngineStateT& e) { return self_(e).buffer_(); },
-      .mayTalk   = [](EngineStateT& e) -> bool { return self_(e).presence_.mayTalk(); },
-      .claimGate = [](EngineStateT& e) -> bool {
-          if constexpr(Gate::Gated) {
-              return self_(e).gate_.claim();
-          } else {
-              static_cast<void>(e);
-              return true;
-          }
-      },
-      .releaseGate = [](EngineStateT& e) { self_(e).letGateGo_(); },
-      .sizeRead    = [](EngineStateT& e) { self_(e).sizeRead_(); },
-      .countRead   = [](EngineStateT& e, std::uint8_t n) { self_(e).countRead_(n); },
-      .ready       = [](EngineStateT& e) -> bool { return self_(e).ready_(); },
-      .oracle      = [](EngineStateT& e) -> bool {
+      .sizeRead  = [](EngineStateT& e) { self_(e).sizeRead_(); },
+      .countRead = [](EngineStateT& e, std::uint8_t n) { self_(e).countRead_(n); },
+      .ready     = [](EngineStateT& e) -> bool { return self_(e).ready_(); },
+      .oracle    = [](EngineStateT& e) -> bool {
           auto& d            = self_(e);
           d.identityMatched_ = d.identityMatches_();
           if(!d.identityMatched_) { d.oracleFailed_ = true; }
@@ -1342,14 +1183,13 @@ private:
               return true;
           }
       },
-      .faultBackoffMs = static_cast<std::uint32_t>(FaultBackoff.count()),
-      .clearInit      = [](EngineStateT& e) { self_(e).init_.fill(std::byte{0}); },
-      .finishInit     = [](EngineStateT& e, TimePoint now) { self_(e).finishInit_(now); },
-      .wakeReset      = [](EngineStateT& e) { self_(e).wakeReset_(); },
-      .redirtyItem    = [](EngineStateT& e) { self_(e).redirtyItem_(); },
-      .unserve        = [](EngineStateT& e) { self_(e).unserve_(); },
-      .forgetSamples  = [](EngineStateT& e) { self_(e).forgetSamples_(); },
-      .setupFinal     = [](EngineStateT& e) -> bool {
+      .clearInit     = [](EngineStateT& e) { self_(e).init_.fill(std::byte{0}); },
+      .finishInit    = [](EngineStateT& e, TimePoint now) { self_(e).finishInit_(now); },
+      .wakeReset     = [](EngineStateT& e) { self_(e).wakeReset_(); },
+      .redirtyItem   = [](EngineStateT& e) { self_(e).redirtyItem_(); },
+      .unserve       = [](EngineStateT& e) { self_(e).unserve_(); },
+      .forgetSamples = [](EngineStateT& e) { self_(e).forgetSamples_(); },
+      .setupFinal    = [](EngineStateT& e) -> bool {
           auto& d = self_(e);
           if constexpr(requires(State& s) {
                            { Chip::setup(Bytes{}, s) } -> std::convertible_to<bool>;
@@ -1361,39 +1201,13 @@ private:
               return true;
           }
       },
-      .unidentifiedRetryMs = static_cast<std::uint32_t>(UnidentifiedRetry.count()),
-      .startupSchedule     = [](EngineStateT& e, TimePoint now) { self_(e).startupSchedule_(now); },
-      .presenceTurn
-      = [](EngineStateT& e, TimePoint now) { return self_(e).presence_.turn(now, Address); },
-      .presenceAck   = [](EngineStateT& e, TimePoint now) { self_(e).presence_.ack(now, Address); },
-      .presenceNak   = [](EngineStateT& e) { self_(e).presence_.nak(); },
-      .presenceFault = [](EngineStateT& e) { self_(e).presence_.fault(); },
-      .inFlightTimeoutMs = static_cast<std::uint32_t>(InFlightTimeout.count()),
-      .wakeRetry         = [](EngineStateT& e, TimePoint now) { return self_(e).wakeRetry_(now); },
-      .bridgeTurn        = [](EngineStateT& e, TimePoint now) -> bool {
-          if constexpr(Switchable) {
-              return self_(e).bridgeTurn_(now);
-          } else {
-              static_cast<void>(e);
-              static_cast<void>(now);
-              return true;
-          }
-      },
-      .resetHold =
-        [](EngineStateT& e) {
-            static_cast<void>(e);
-            if constexpr(HasResetLine) { Reset::hold(); }
-        },
-      .resetRelease =
-        [](EngineStateT& e) {
-            static_cast<void>(e);
-            if constexpr(HasResetLine) { Reset::release(); }
-        },
-      .startupDelayMs = static_cast<std::uint32_t>(StartupDelay.count()),
-      .resetLowMs     = static_cast<std::uint32_t>(ResetLow.count()),
-      .resetSettleMs  = static_cast<std::uint32_t>(ResetSettle.count()),
-      .reads          = std::span<detail::ReadGroupInfo const>{ReadInfos}.first(Reads::size),
-      .readSlot       = [](EngineStateT& e, std::uint8_t g) -> detail::ReadSlotBase<Clock>& {
+      .startupSchedule = [](EngineStateT& e, TimePoint now) { self_(e).startupSchedule_(now); },
+      .wakeRetry       = [](EngineStateT& e, TimePoint now) { return self_(e).wakeRetry_(now); },
+      .startupDelayMs  = static_cast<std::uint32_t>(StartupDelay.count()),
+      .resetLowMs      = static_cast<std::uint32_t>(ResetLow.count()),
+      .resetSettleMs   = static_cast<std::uint32_t>(ResetSettle.count()),
+      .reads           = std::span<detail::ReadGroupInfo const>{ReadInfos}.first(Reads::size),
+      .readSlot        = [](EngineStateT& e, std::uint8_t g) -> detail::ReadSlotBase<Clock>& {
           detail::ReadSlotBase<Clock>* r = nullptr;
           detail::withIndex(
             g,
@@ -1515,25 +1329,31 @@ private:
               },
               std::make_index_sequence<Writes::size>{});
         },
-      .startVerifyGroup   = [](EngineStateT& e,
-                               std::uint8_t  w,
-                               TimePoint     now) { return self_(e).startVerify_(w, now); },
-      .finishVerify       = [](EngineStateT& e, TimePoint now) { self_(e).finishVerify_(now); },
-      .name               = Chip::Name,
-      .address            = Address,
-      .registerBytes      = static_cast<std::uint8_t>(RegisterBytes),
-      .initEmpty          = InitSteps.empty(),
-      .faultsBeforeReinit = FaultsBeforeReinit,
-      .bridged            = Switchable,
-      .hasResetLine       = HasResetLine,
-      .maxRetries         = MaxRetries};
+      .startVerifyGroup = [](EngineStateT& e,
+                             std::uint8_t  w,
+                             TimePoint     now) { return self_(e).startVerify_(w, now); },
+      .finishVerify     = [](EngineStateT& e, TimePoint now) { self_(e).finishVerify_(now); },
+      .verifyDue =
+        [] {
+            using Fn = TimePoint (*)(EngineStateT&);
+            if constexpr(AnyVerify) {
+                return Fn{[](EngineStateT& e) { return self_(e).verifyDue_(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .name          = Chip::Name,
+      .registerBytes = static_cast<std::uint8_t>(RegisterBytes),
+      .initEmpty     = InitSteps.empty()};
 
 public:
     // -- the application's side ------------------------------------------------------------
 
-    /// Once per loop turn: everything happens here.
     /// Once per loop turn: everything happens here (Engine.hpp).
-    void handler() { detail::Engine<I2c, Clock>::handler(*this, EngineOps, Clock::now()); }
+    void handler() { handler(Clock::now()); }
+
+    /// The same with the clock read by the caller (Bus::handler).
+    void handler(TimePoint now) { detail::Engine<Port, Clock>::handler(*this, EngineOps, now); }
 
     /// Start over from the reset, as after power-on: for a caller that did to the part what the
     /// engine cannot see -- cycled the supply it shares with others (PowerRail.hpp). Whatever
@@ -1543,6 +1363,7 @@ public:
     void restart() {
         reset_();
         presence_.restart();
+        ring_();
     }
 
     /// Where the device is with its part:
@@ -1558,7 +1379,7 @@ public:
     /// does not wait for it -- reads and writes go out while `starting` -- so a part with no Init
     /// and no cyclic read answers with the first thing the application asks of it.
     [[nodiscard]] Link link() const {
-        if constexpr(Switchable) {
+        if(this->dev_->switchable()) {
             if(bridge_.offline() || gateOffline_() || disabled_()) { return Link::offline; }
         }
         if(!presence_.present()) { return Link::absent; }
@@ -1568,7 +1389,7 @@ public:
     /// One line for a log: what the device is, where, and how it is doing. What Bus::logHealth
     /// says per device, for a firmware with one device and no Bus.
     void logHealth() const {
-        detail::logHealth(Chip::Name, Address, link(), samples(), rejected(), errors());
+        detail::logHealth(Chip::Name, this->dev_->address, link(), samples(), rejected(), errors());
     }
 
     [[nodiscard]] bool answering() const { return link() == Link::answering; }
@@ -1693,6 +1514,7 @@ public:
         s.period    = p;
         s.periodSet = true;
         s.due       = p > std::chrono::milliseconds::zero() ? Clock::now() + p : TimePoint::max();
+        ring_();
     }
 
     /// The latest Sample of the primary read group (PrimaryRead).
@@ -1814,8 +1636,10 @@ public:
     /// An atomic step, so an interrupt may ask (a touch controller's INT line).
     template<typename G>
     Ticket request() {
-        auto& s = std::get<ReadSlot<G>>(reads_);
-        return Ticket{s.asked.fetch_add(1, std::memory_order_acq_rel) + 1};
+        auto&        s = std::get<ReadSlot<G>>(reads_);
+        Ticket const t{s.asked.fetch_add(1, std::memory_order_acq_rel) + 1};
+        ring_();
+        return t;
     }
 
     /// Run G once with a Request the group's prepare() turns into bytes. Unlike request<G>()
@@ -1825,7 +1649,9 @@ public:
     Ticket request(typename G::Request const& r) {
         auto& s   = std::get<ReadSlot<G>>(reads_);
         s.request = r;
-        return Ticket{s.asked.fetch_add(1, std::memory_order_acq_rel) + 1};
+        Ticket const t{s.asked.fetch_add(1, std::memory_order_acq_rel) + 1};
+        ring_();
+        return t;
     }
 
     /// How the request behind `ticket` went: `pending` until a run that started after it has
@@ -1919,6 +1745,7 @@ public:
         s.owned = true;
         s.known = s.known | (1U << i);
         s.dirty.fetch_or(1U << i, std::memory_order_release);
+        ring_();
     }
 
     /// Every item of write group W has been changed in place.
@@ -1928,6 +1755,7 @@ public:
         s.owned = true;
         s.known = WriteSlot<W>::AllItems;
         s.dirty.store(WriteSlot<W>::AllItems, std::memory_order_release);
+        ring_();
     }
 
     template<typename W>
@@ -1964,6 +1792,7 @@ public:
         bool const onWire
           = running_ == Running::write && group_ == detail::IndexOf<W, Writes>::value;
         if(onWire) { withdrawnOnWire_ = true; }
+        ring_();
         return owed || onWire;
     }
 
@@ -1985,6 +1814,9 @@ public:
         return any;
     }
 
+    /// Full turns run; resting turns (Engine::rest) are not counted.
+    [[nodiscard]] std::uint32_t turns() const { return this->turns_; }
+
     /// Transactions that failed (NAK, bus fault, timeout), all phases. A NAK a wake retry
     /// (Chip::WakeRetries) recovered from is not one.
     [[nodiscard]] std::uint32_t errors() const { return errors_; }
@@ -2001,11 +1833,6 @@ public:
 
     /// What setup() made of the bring-up (the chip id, trimming...).
     [[nodiscard]] State const& state() const { return state_; }
-
-    /// The gate, for an application that has to point it at something: a device behind an
-    /// I2C switch is told which switch and which arbiter at start-up (Mux.hpp). An ungated
-    /// device has an empty one and nothing to say to it.
-    [[nodiscard]] Gate& gate() { return gate_; }
 
     /// setup() accepted the chip (true when there is no setup()). While it is false and
     /// UnidentifiedRetry is set, the description runs nothing but its bring-up (link() stays
@@ -2038,14 +1865,18 @@ private:
 
     template<typename W,
              typename S>
-    static void store_(S&                       s,
-                       std::size_t              i,
-                       typename W::Value const& v) {
+    void store_(S&                       s,
+                std::size_t              i,
+                typename W::Value const& v) {
         s.values[i] = v;
         s.owned     = true;
         s.known     = s.known | (1U << i);
         s.dirty.fetch_or(1U << i, std::memory_order_release);
+        ring_();
     }
+
+    /// Wake the engine (EngineState::doorbell_); after the store it announces.
+    void ring_() { this->doorbell_.store(true, std::memory_order_release); }
 
     /// A timestamped sample of G landed at `at`: the gap since the one before, for takeGaps().
     template<typename G,
@@ -2070,7 +1901,7 @@ private:
     /// wire is abandoned -- but not what it was for: a write in flight is owed again (its
     /// dirty bit went at startWrite_), or a Transient one -- an EEPROM page, a clock set --
     /// would be lost, since the bring-up does not replay it. And the gate is let go.
-    void reset_() { detail::Engine<I2c, Clock>::reset(*this, EngineOps); }
+    void reset_() { detail::Engine<Port, Clock>::reset(*this, EngineOps); }
 
     void wakeReset_() {
         if constexpr(WakeRetries > 0) { wake_.tries = 0; }
@@ -2080,75 +1911,16 @@ private:
     /// the run on the wire is abandoned as in reset_() -- a write owed again, a read's requests
     /// still pending -- but the bring-up stands. The samples do not: valid() waits for one
     /// taken after the return.
-    void pause_() { detail::Engine<I2c, Clock>::pause(*this, EngineOps); }
+    void pause_() { detail::Engine<Port, Clock>::pause(*this, EngineOps); }
 
     [[nodiscard]] bool gateOffline_() const {
-        if constexpr(Bridged) {
-            return gate_.offline();
-        } else {
-            return false;
-        }
+        auto const offline = this->dev_->gateOffline;
+        return offline != nullptr && offline(*this);
     }
 
-    [[nodiscard]] static bool disabled_() {
-        if constexpr(Enableable) {
-            return !static_cast<bool>(Config::enabled());
-        } else {
-            return false;
-        }
-    }
-
-    /// False while the engine has to keep still. A transaction on the wire when the part goes
-    /// offline is waited for (the held gate keeps a switched bridge from cutting it) and its
-    /// result dropped. Any power loss in an offline spell, a bounce seen only by the bridge's
-    /// generation included, brings the part up from the start once.
-    bool bridgeTurn_(TimePoint now) {
-        bool const gateOff  = gateOffline_();
-        bool const disabled = disabled_();
-        bool       bounced  = false;   // the bridge was off since the last turn
-        if constexpr(Bridged) { bounced = bridge_.generation != gate_.generation(); }
-        if((gateOff || disabled) && inFlight_) {
-            if(pending_.take() == PendingT::Outcome::running
-               && now - submittedAt_ <= InFlightTimeout)
-            {
-                return false;   // not a word to the part until it is answered
-            }
-            inFlight_ = false;
-            pending_.clear();
-        }
-
-        bool const wasOffline = bridge_.offline();
-        bool       powerCut   = false;
-        if constexpr(Bridged) {
-            if(gateOff != bridge_.gateOff) {
-                bridge_.gateOff = gateOff;
-                detail::logBridge(Chip::Name, Address, !gateOff);
-            } else if(bounced && !gateOff) {   // off and on again, both unseen
-                detail::logBridge(Chip::Name, Address, false);
-                detail::logBridge(Chip::Name, Address, true);
-            }
-            powerCut = (gateOff || bounced) && Gate::Bridge::WhileOff == WhileOff::unpowered;
-            bridge_.generation = gate_.generation();
-        }
-        if(disabled != bridge_.disabled) {
-            bridge_.disabled = disabled;
-            detail::logEnabled(Chip::Name, Address, !disabled);
-            powerCut = powerCut || (disabled && WhileDisabled == WhileOff::unpowered);
-        }
-
-        bool const offline = gateOff || disabled;
-        if(!wasOffline && !offline && !bounced) { return true; }   // the common case
-
-        if(powerCut && !bridge_.lostPower) {
-            reset_();
-            bridge_.lostPower = true;
-        } else if(!wasOffline) {
-            pause_();   // the registers stay; a reset later in this spell still comes
-        }
-        if(offline) { return false; }
-        bridge_.lostPower = false;
-        presence_.restart();
-        return true;
+    [[nodiscard]] bool disabled_() const {
+        auto const enabled = this->dev_->enabled;
+        return enabled != nullptr && !enabled(this->dev_->enabledArg);
     }
 
     /// A NAK the part may give while it wakes: true when it is put on the wire again after
@@ -2198,7 +1970,7 @@ private:
 
     /// A run is over -- finished, failed, rejected, or abandoned by a reset. Every exit from
     /// a script goes through here, so a gate is never held a turn past the end of a run.
-    void endRun_() { detail::Engine<I2c, Clock>::endRun(*this, EngineOps); }
+    void endRun_() { detail::Engine<Port, Clock>::endRun(*this); }
 
     /// The run is about to wait -- a step's delay, a wait step, a check or a decode asking to
     /// be run again -- so the gate is let go for the wait and claimed again before the next
@@ -2206,9 +1978,7 @@ private:
     /// part behind a switch does not see the switch move. Held through the wait, a part polling
     /// a flag every 15 ms on a 100 ms period would keep its channel for most of each period and
     /// starve the parts on the other channels.
-    void letGateGo_() {
-        if constexpr(Gate::Gated) { gate_.release(); }
-    }
+    void letGateGo_() { detail::Engine<Port, Clock>::releaseGate(*this); }
 
     /// The write item on the wire is still owed: a fault says nothing about whether the
     /// bytes landed, so it is written again.
@@ -2226,7 +1996,9 @@ private:
           std::make_index_sequence<Writes::size>{});
     }
 
-    void beginInit_(TimePoint now) { detail::Engine<I2c, Clock>::beginInit(*this, EngineOps, now); }
+    void beginInit_(TimePoint now) {
+        detail::Engine<Port, Clock>::beginInit(*this, EngineOps, now);
+    }
 
     [[nodiscard]] std::span<Step const> script_() const {
         switch(running_) {
@@ -2293,7 +2065,9 @@ private:
         return r;
     }
 
-    void startStep_(TimePoint now) { detail::Engine<I2c, Clock>::startStep(*this, EngineOps, now); }
+    void startStep_(TimePoint now) {
+        detail::Engine<Port, Clock>::startStep(*this, EngineOps, now);
+    }
 
     /// A group whose prepare() returned a count reads that many bytes instead of the
     /// script's. Such a group has exactly one read step (static_asserted), so the count is
@@ -2348,13 +2122,12 @@ private:
     /// tried again next turn.
     bool submit_(Step const&          s,
                  std::span<std::byte> buf) {
-        return detail::Engine<I2c, Clock>::submit(*this, EngineOps, s, buf);
+        return detail::Engine<Port, Clock>::submit(*this, EngineOps, s, buf);
     }
 
     /// The step's delay, then the next step.
-    /// The step's delay, then the next step.
     void afterTransaction_(TimePoint now) {
-        detail::Engine<I2c, Clock>::afterTransaction(*this, EngineOps, now);
+        detail::Engine<Port, Clock>::afterTransaction(*this, EngineOps, now);
     }
 
     /// When a wait of `delay` from `now` is over. `now` was read at some point inside a tick of
@@ -2367,7 +2140,7 @@ private:
         return now + delay + Duration{1};
     }
 
-    void nextStep_(TimePoint now) { detail::Engine<I2c, Clock>::nextStep(*this, EngineOps, now); }
+    void nextStep_(TimePoint now) { detail::Engine<Port, Clock>::nextStep(*this, EngineOps, now); }
 
     // -- what happens at the end of a script -----------------------------------------------
 
@@ -2386,7 +2159,7 @@ private:
                 if(!check.matches(identity_[i])) {
                     if(!unidentifiedLogged_) {
                         detail::logIdentityMismatch(Chip::Name,
-                                                    Address,
+                                                    this->dev_->address,
                                                     check.name,
                                                     static_cast<std::uint16_t>(check.reg),
                                                     identity_[i],
@@ -2409,7 +2182,7 @@ private:
     }
 
     void finishInit_(TimePoint now) {
-        detail::Engine<I2c, Clock>::finishInit(*this, EngineOps, now);
+        detail::Engine<Port, Clock>::finishInit(*this, EngineOps, now);
     }
 
     /// Every group's first deadline after a bring-up, and what the chip is owed again.
@@ -2579,13 +2352,13 @@ private:
                           s.verify.tries = 0;
                       } else {
                           ++s.verify.mismatches;
-                          if(s.verify.tries < MaxRetries) {
+                          if(s.verify.tries < this->dev_->maxRetries) {
                               ++s.verify.tries;
                               s.dirty.fetch_or(1U << this->item_, std::memory_order_relaxed);
                           } else {
                               detail::logVerifyStuck(
                                 Chip::Name,
-                                Address,
+                                this->dev_->address,
                                 static_cast<std::uint16_t>(verify_.wrote.reg),
                                 static_cast<std::uint32_t>(s.verify.mismatches));
                               s.verify.unverified.fetch_and(~(1U << this->item_),
@@ -2605,9 +2378,25 @@ private:
         endRun_();
     }
 
-    void fail_(TimePoint now) { detail::Engine<I2c, Clock>::fail(*this, EngineOps, now); }
+    void fail_(TimePoint now) { detail::Engine<Port, Clock>::fail(*this, EngineOps, now); }
 
     // -- choosing what runs next -----------------------------------------------------------
+
+    /// The earliest point startVerify_ can start a read-back.
+    [[nodiscard]] TimePoint verifyDue_() {
+        TimePoint due = TimePoint::max();
+        detail::forEach<Writes>([&](auto i) {
+            using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
+            if constexpr(detail::Verifies<W>) {
+                auto const& s = std::get<decltype(i)::value>(writes_);
+                bool const  owed
+                  = s.verify.unverified.load(std::memory_order_acquire) != 0
+                 || detail::verifyIntervalOf<W>() != std::chrono::milliseconds::zero();
+                if(owed && s.verify.due < due) { due = s.verify.due; }
+            }
+        });
+        return due;
+    }
 
     /// Read one written register back. The write step `encode` produced carries both the
     /// register and the bytes, so a chip needs to declare nothing but the two durations.
@@ -2740,7 +2529,7 @@ private:
                   constexpr auto off = detail::firstReadOffset(std::span<Step const>{G::Steps});
                   constexpr auto max = ReadSlot<G>::Bytes - off;
                   auto const     n   = G::prepare(s.request, std::span<std::byte>{s.buf});
-                  if(n > max) { detail::logOversizedRead(Chip::Name, Address, n, max); }
+                  if(n > max) { detail::logOversizedRead(Chip::Name, this->dev_->address, n, max); }
                   s.len        = static_cast<std::uint8_t>(n > max ? max : n);
                   s.validBytes = static_cast<std::uint8_t>(off + s.len);
               } else if constexpr(detail::HasRequest<G>) {
@@ -2757,9 +2546,7 @@ private:
 
     // Where the run is, what it waits for and what has happened to it: detail::EngineState,
     // the base of this class (Engine.hpp), because none of it depends on the chip.
-    PresenceT                                             presence_{};
     State                                                 state_{};
-    [[no_unique_address]] Gate                            gate_{};
     std::array<std::byte, RegisterBytes + MaxPayload + 1> tx_{};
     std::array<std::byte, InitBytes>                      init_{};
     bool                                                  identityMatched_{!HasIdentity};
@@ -2774,10 +2561,302 @@ private:
     [[no_unique_address]] detail::VerifyBufs<AnyVerify, MaxVerifyBytes>       verify_{};
     [[no_unique_address]] detail::WriteScript<MultiStepWrites, MaxWriteSteps> writeScript_{};
     [[no_unique_address]] detail::WakeSlot<(WakeRetries > 0)>                 wake_{};
-    [[no_unique_address]] detail::BridgeSlot<Switchable>                      bridge_{};
     bool                                                                      withdrawnOnWire_{};
     ReadSlots                                                                 reads_{};
     WriteSlots                                                                writes_{};
+};
+
+/// The driver. `Chip` is the description (chips/); `Config` may set `Address`, the presence
+/// knobs (PresenceDefaults: AbsentAfterNaks, ProbeInterval, ProbeIntervalMax) and the engine's
+/// own (EngineDefaults below: MaxRetries, FaultBackoff, FaultsBeforeReinit, InFlightTimeout,
+/// UnidentifiedRetry); `Reset` is a line with hold()/release() (any GPIO reset callable) for a
+/// chip that declares ResetLow/ResetSettle.
+///
+/// What a run-time caller may change: `period<G>(ms)` sets a cyclic read group's period from
+/// then on (0 parks it until request<G>() asks; the description's Period stays the nominal
+/// rate the bus load is computed from).
+///
+/// The chip's code is DeviceCore's; this adds what only this device has, as DeviceOps (Hooks).
+template<typename I2c,
+         typename Clock,
+         typename ChipT,
+         typename Config = DefaultConfig,
+         typename Reset  = NoReset,
+         typename Gate   = NoGate>
+    requires Chip<ChipT> || detail::SpiTransport<I2c>
+struct Device
+  : DeviceCore<detail::PortOf<I2c>, Clock, ChipT, detail::confirmsOf<ChipT, Config>()>
+  , detail::ResetClaims<Reset> {
+    using Core = DeviceCore<detail::PortOf<I2c>, Clock, ChipT, detail::confirmsOf<ChipT, Config>()>;
+    /// The bus and the clock this device is on, so a Bus<> can check that the devices it
+    /// was handed are all on the bus it names -- a mixed set would give a queue depth and a
+    /// bus load for traffic that is not on one wire.
+    using I2cBus       = I2c;
+    using Chip         = ChipT;
+    using GateT        = Gate;
+    using ConfigT      = Config;
+    using ResetT       = Reset;
+    using EngineStateT = typename Core::EngineStateT;
+    using Reads        = typename Core::Reads;
+
+    /// Behind a bridge that can be switched off (Bridge.hpp): link() can say `offline`.
+    static constexpr bool Bridged = detail::BridgedGate<Gate>;
+
+    /// Config's `static bool enabled();` takes the part offline for a reason the bus cannot see
+    /// (a module not fitted), as an inactive bridge would, and combines with one. It comes back
+    /// as `WhileDisabled` says: `unpowered` (default, brought up again) or `disconnected`.
+    ///     struct Config {
+    ///         static constexpr std::uint8_t Address = 0x49;
+    ///         static bool enabled() { return slots.fitted(2); }
+    ///     };
+    static constexpr bool Enableable = requires {
+        { Config::enabled() } -> std::convertible_to<bool>;
+    };
+
+    /// Or one function shared by many devices, with this device's data as its argument:
+    ///     struct Config {
+    ///         static constexpr bool (*enabledBy)(void const*) = &slotFitted;
+    ///         static constexpr void const* enabledArg = &mySlot;
+    ///         static bool enabled() { return slotFitted(&mySlot); }   // for the application
+    ///     };
+    static constexpr bool SharedEnable = requires {
+        { Config::enabledBy(Config::enabledArg) } -> std::convertible_to<bool>;
+    };
+
+    static constexpr bool Switchable = Bridged || Enableable || SharedEnable;
+
+    static constexpr WhileOff WhileDisabled = [] {
+        if constexpr(requires { Config::WhileDisabled; }) {
+            return Config::WhileDisabled;
+        } else {
+            return WhileOff::unpowered;
+        }
+    }();
+
+    /// The part's I2C address; on an SPI transport, its chip-select GPIO (for the log).
+    static constexpr std::uint8_t Address = [] {
+        if constexpr(detail::SpiTransport<I2c>) {
+            return I2c::LogId;
+        } else if constexpr(requires { Config::Address; }) {
+            return static_cast<std::uint8_t>(Config::Address);
+        } else {
+            return static_cast<std::uint8_t>(Chip::Address);
+        }
+    }();
+
+    static constexpr bool HasResetLine = !requires { Reset::NoLine; };
+
+    // The policy knobs (EngineDefaults), each overridable by the Config.
+    static constexpr std::uint8_t MaxRetries = [] {
+        if constexpr(requires { Config::MaxRetries; }) {
+            return static_cast<std::uint8_t>(Config::MaxRetries);
+        } else {
+            return EngineDefaults::MaxRetries;
+        }
+    }();
+
+    template<typename G>
+    static constexpr std::uint8_t ConfirmChange = detail::confirmChangeOf<G, Config>();
+
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::unnamed,
+                  "Config::ConfirmChange names no read group: add `using Confirm = List<...>;` "
+                  "with the groups whose changes are confirmed");
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::uncounted,
+                  "Config::Confirm without Config::ConfirmChange confirms nothing");
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::foreign,
+                  "Config::Confirm names a group that is not one of this part's reads");
+    static_assert(detail::checkConfirmConfig<Config,
+                                             Reads>()
+                    != detail::ConfirmConfig::counted,
+                  "a read group with a counted read (a stream, a FIFO) cannot confirm changes: the "
+                  "confirming read is a second read at once");
+
+    static_assert(
+      [] {
+          bool ok = true;
+          detail::forEach<Reads>([&](auto i) {
+              using G = typename detail::Nth<Reads>::template type<decltype(i)::value>;
+              ok      = ok && ConfirmChange<G> <= MaxRetries;
+          });
+          return ok;
+      }(),
+      "a read group's ConfirmChange is over MaxRetries: its confirming re-reads are the run's "
+      "retries, and a run out of retries rejects the reading");
+
+    static constexpr std::chrono::milliseconds FaultBackoff = [] {
+        if constexpr(requires { Config::FaultBackoff; }) {
+            return Kvasir::asDuration(Config::FaultBackoff);
+        } else {
+            return Kvasir::asDuration(EngineDefaults::FaultBackoff);
+        }
+    }();
+
+    static constexpr std::uint8_t FaultsBeforeReinit = [] {
+        if constexpr(requires { Config::FaultsBeforeReinit; }) {
+            return static_cast<std::uint8_t>(Config::FaultsBeforeReinit);
+        } else {
+            return EngineDefaults::FaultsBeforeReinit;
+        }
+    }();
+
+    static constexpr std::chrono::milliseconds InFlightTimeout = [] {
+        if constexpr(requires { Config::InFlightTimeout; }) {
+            return Kvasir::asDuration(Config::InFlightTimeout);
+        } else {
+            return Kvasir::asDuration(EngineDefaults::InFlightTimeout);
+        }
+    }();
+
+    static constexpr std::chrono::milliseconds UnidentifiedRetry = [] {
+        if constexpr(requires { Config::UnidentifiedRetry; }) {
+            return Kvasir::asDuration(Config::UnidentifiedRetry);
+        } else {
+            return Kvasir::asDuration(EngineDefaults::UnidentifiedRetry);
+        }
+    }();
+
+    static_assert(
+      [] {
+          if constexpr(detail::HasAddresses<Chip> && !detail::SpiTransport<I2c>) {
+              for(auto const a : Chip::Addresses) {
+                  if(a == Address) { return true; }
+              }
+              return false;
+          }
+          return true;
+      }(),
+      "Config::Address is not one of the addresses this chip can have (Chip::Addresses)");
+
+    static_assert(
+      [] {
+          if constexpr(requires { I2c::CallbackSize; }) {
+              return static_cast<std::size_t>(I2c::CallbackSize) >= Core::CallbackBytes;
+          }
+          return true;
+      }(),
+      "the bus behavior's CallbackSize is smaller than the engine's completion lambda "
+      "(Device::CallbackBytes): raise the I2CBehaviorQueued CallbackSize template argument");
+    static_assert(presenceKnobsOk<Config>,
+                  "a probe interval, and a maximum it grows towards");
+
+    constexpr Device() : Core(&Hooks) {}
+
+    /// The gate, for an application that has to point it at something: a device behind an
+    /// I2C switch is told which switch and which arbiter at start-up (Mux.hpp). An ungated
+    /// device has an empty one and nothing to say to it.
+    [[nodiscard]] Gate& gate() { return gate_; }
+
+private:
+    [[nodiscard]] static Device& self_(EngineStateT& e) { return static_cast<Device&>(e); }
+
+    [[nodiscard]] static Device const& self_(EngineStateT const& e) {
+        return static_cast<Device const&>(e);
+    }
+
+    using DeviceOpsT = detail::DeviceOps<detail::PortOf<I2c>, Clock>;
+
+    /// What only this device has, for the engine; a hook it does not need is null.
+    static constexpr DeviceOpsT Hooks{
+      .submit = [](typename I2c::Request const& r) -> bool { return I2c::submit(r); },
+      .claimGate =
+        [] {
+            using Fn = bool (*)(EngineStateT&);
+            if constexpr(Gate::Gated) {
+                return Fn{[](EngineStateT& e) -> bool { return self_(e).gate_.claim(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .releaseGate =
+        [] {
+            using Fn = void (*)(EngineStateT&);
+            if constexpr(Gate::Gated) {
+                return Fn{[](EngineStateT& e) { self_(e).gate_.release(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .enabled =
+        [] {
+            using Fn = bool (*)(void const*);
+            if constexpr(SharedEnable) {
+                return Fn{Config::enabledBy};
+            } else if constexpr(Enableable) {
+                return Fn{[](void const*) -> bool { return static_cast<bool>(Config::enabled()); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .enabledArg =
+        [] {
+            if constexpr(SharedEnable) {
+                return static_cast<void const*>(Config::enabledArg);
+            } else {
+                return static_cast<void const*>(nullptr);
+            }
+        }(),
+      .gateOffline =
+        [] {
+            using Fn = bool (*)(EngineStateT const&);
+            if constexpr(Bridged) {
+                return Fn{[](EngineStateT const& e) -> bool { return self_(e).gate_.offline(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .gateGeneration =
+        [] {
+            using Fn = std::uint32_t (*)(EngineStateT const&);
+            if constexpr(Bridged) {
+                return Fn{[](EngineStateT const& e) -> std::uint32_t {
+                    return static_cast<std::uint32_t>(self_(e).gate_.generation());
+                }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .resetHold =
+        [] {
+            using Fn = void (*)();
+            if constexpr(HasResetLine) {
+                return Fn{[] { Reset::hold(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .resetRelease =
+        [] {
+            using Fn = void (*)();
+            if constexpr(HasResetLine) {
+                return Fn{[] { Reset::release(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .presence            = presenceKnobs<Config>(),
+      .faultBackoffMs      = static_cast<std::uint32_t>(FaultBackoff.count()),
+      .inFlightTimeoutMs   = static_cast<std::uint32_t>(InFlightTimeout.count()),
+      .unidentifiedRetryMs = static_cast<std::uint32_t>(UnidentifiedRetry.count()),
+      .address             = Address,
+      .faultsBeforeReinit  = FaultsBeforeReinit,
+      .maxRetries          = MaxRetries,
+      .bridgeUnpowered =
+        [] {
+            if constexpr(Bridged) {
+                return Gate::Bridge::WhileOff == WhileOff::unpowered;
+            } else {
+                return false;
+            }
+        }(),
+      .disabledUnpowered = WhileDisabled == WhileOff::unpowered};
+
+    [[no_unique_address]] Gate gate_{};
 };
 
 }   // namespace Kvasir::I2C
