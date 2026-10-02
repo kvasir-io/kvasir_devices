@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 
 namespace Kvasir {
 
@@ -15,5 +16,11 @@ constexpr To asDuration(std::chrono::duration<Rep,
                                               Period> d) {
     return d;
 }
+
+/// Milliseconds in 32 bits (up to 49.7 days), for a time the engine keeps many copies of - a
+/// script step's delay, a read group's period: half the bytes of std::chrono::milliseconds and
+/// only 4-byte aligned, so it packs with the small fields around it. Built from any
+/// std::chrono::milliseconds implicitly, and compares and adds with it as it is.
+using Millis32 = std::chrono::duration<std::uint32_t, std::milli>;
 
 }   // namespace Kvasir

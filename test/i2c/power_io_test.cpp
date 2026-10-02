@@ -210,21 +210,22 @@ void aled7709() {
 void pcf8574() {
     testCase("PCF8574");
     fresh();
-    std::uint8_t port = 0x00;
-    std::uint8_t pins = 0xA5;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
-            if(sent.size() == 1 && recv.empty()) {
-                port = static_cast<std::uint8_t>(sent[0]);
-                return FakeBus::Result::succeeded;
-            }
-            if(sent.empty() && recv.size() == 1) {
-                recv[0] = static_cast<std::byte>(pins & port);
-                return FakeBus::Result::succeeded;
-            }
-            return FakeBus::Result::failed;
-        };
+    std::uint8_t     port = 0x00;
+    std::uint8_t     pins = 0xA5;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
+          if(sent.size() == 1 && recv.empty()) {
+              port = static_cast<std::uint8_t>(sent[0]);
+              return FakeBus::Result::succeeded;
+          }
+          if(sent.empty() && recv.size() == 1) {
+              recv[0] = static_cast<std::byte>(pins & port);
+              return FakeBus::Result::succeeded;
+          }
+          return FakeBus::Result::failed;
+      }};
     Dev<Chips::Pcf8574> d{};
     check(runUntil(d, [&] { return d.samples() == 1; }, 100ms), "first read");
     checkEq(port, 0xFF, "all released first (Initial)");
@@ -286,19 +287,20 @@ void easyC() {
     fresh();
     std::array<std::uint8_t, 5> rot{0x0A, 0x00, 0x00, 0x00, 0x06};   // +10, clockwise
     std::vector<std::uint8_t>   rotW;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(a != 0x30) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                rotW.clear();
-                for(auto const b : sent) { rotW.push_back(static_cast<std::uint8_t>(b)); }
-                return FakeBus::Result::succeeded;
-            }
-            for(std::size_t i = 0; i < recv.size() && i < 5; ++i) {
-                recv[i] = static_cast<std::byte>(rot[i]);
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const            answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(a != 0x30) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              rotW.clear();
+              for(auto const b : sent) { rotW.push_back(static_cast<std::uint8_t>(b)); }
+              return FakeBus::Result::succeeded;
+          }
+          for(std::size_t i = 0; i < recv.size() && i < 5; ++i) {
+              recv[i] = static_cast<std::byte>(rot[i]);
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::SolderedRotary<>> re{};
     check(runUntil(re, [&] { return re.valid(); }, 300ms), "encoder read");
     checkEq(re.latest().count, 10, "the model's frame reached the decode");
@@ -370,13 +372,14 @@ void ds3502() {
           "the IVR write goes out once");
     check(writes(persistFrom) == std::vector<std::vector<std::uint8_t>>{{0x02, 0x00}, {0x00, 0x20}, {0x02, 0x80}},
           "MODE 0x00, the wiper into the IVR, MODE back to 0x80: one item, three transactions");
-    bool       dsNak = false;
-    auto const resp  = FakeBus::respond;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(dsNak) { return FakeBus::Result::notAcknowledged; }
-            return resp(a, sent, recv);
-        };
+    bool             dsNak = false;
+    auto const       resp  = FakeBus::respond;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(dsNak) { return FakeBus::Result::notAcknowledged; }
+          return resp(a, sent, recv);
+      }};
     ds.set(0x00, {0x00});   // the part comes back at its default
     dsNak = true;
     check(runUntil(d5, [&] { return d5.absent(); }, 3s), "parked after three NAKs");
@@ -403,28 +406,29 @@ void ads1219() {
     };
     std::size_t               channel = 0;
     std::vector<std::uint8_t> lastCmd;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x40) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                lastCmd.assign(sent.size(), 0);
-                for(std::size_t i = 0; i < sent.size(); ++i) {
-                    lastCmd[i] = static_cast<std::uint8_t>(sent[i]);
-                }
-                if(lastCmd.size() == 2 && lastCmd[0] == 0x40) {
-                    channel = ((lastCmd[1] >> 5) - 3U) & 0x03U;
-                }
-                return FakeBus::Result::succeeded;
-            }
-            if(lastCmd == std::vector<std::uint8_t>{0x20} && recv.size() == 1) {
-                recv[0] = std::byte{0x00};   // the configuration register after RESET
-                return FakeBus::Result::succeeded;
-            }
-            for(std::size_t i = 0; i < recv.size() && i < 3; ++i) {
-                recv[i] = static_cast<std::byte>(code[channel][i]);
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const          answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x40) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              lastCmd.assign(sent.size(), 0);
+              for(std::size_t i = 0; i < sent.size(); ++i) {
+                  lastCmd[i] = static_cast<std::uint8_t>(sent[i]);
+              }
+              if(lastCmd.size() == 2 && lastCmd[0] == 0x40) {
+                  channel = ((lastCmd[1] >> 5) - 3U) & 0x03U;
+              }
+              return FakeBus::Result::succeeded;
+          }
+          if(lastCmd == std::vector<std::uint8_t>{0x20} && recv.size() == 1) {
+              recv[0] = std::byte{0x00};   // the configuration register after RESET
+              return FakeBus::Result::succeeded;
+          }
+          for(std::size_t i = 0; i < recv.size() && i < 3; ++i) {
+              recv[i] = static_cast<std::byte>(code[channel][i]);
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Ads1219<>> ad19{};
     check(runUntil(ad19, [&] { return ad19.valid(); }, 800ms), "a sweep");
     check(hasWrite({0x06}) && hasWrite({0x20}), "RESET at bring-up, then RREG of the config");
@@ -516,17 +520,18 @@ void mpr121() {
 void mcp4018() {
     testCase("MCP4018");
     fresh();
-    std::uint8_t tap = 0x40;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x2F) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                tap = static_cast<std::uint8_t>(sent[0]);
-                return FakeBus::Result::succeeded;
-            }
-            recv[0] = std::byte{tap};
-            return FakeBus::Result::succeeded;
-        };
+    std::uint8_t     tap = 0x40;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x2F) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              tap = static_cast<std::uint8_t>(sent[0]);
+              return FakeBus::Result::succeeded;
+          }
+          recv[0] = std::byte{tap};
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Mcp4018<Units::ohm(5000)>> mc{};
     check(runUntil(mc, [&] { return mc.valid(); }, 500ms), "first sample");
     checkEq(mc.latest().tap, std::uint8_t{0x40}, "the power-up wiper, mid scale");
@@ -622,20 +627,21 @@ void ads1015() {
     std::array<std::array<std::uint8_t, 2>, 4> conv{
       {{0x7F, 0xF0}, {0x12, 0x30}, {0x45, 0x60}, {0x00, 0x10}}
     };
-    std::size_t mux = 0;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x48) { return FakeBus::Result::notAcknowledged; }
-            if(recv.empty()) {
-                if(sent.size() == 3 && static_cast<std::uint8_t>(sent[0]) == 0x01) {
-                    mux = (static_cast<std::uint8_t>(sent[1]) >> 4) & 0x03U;
-                }
-                return FakeBus::Result::succeeded;
-            }
-            recv[0] = static_cast<std::byte>(conv[mux][0]);
-            recv[1] = static_cast<std::byte>(conv[mux][1]);
-            return FakeBus::Result::succeeded;
-        };
+    std::size_t      mux = 0;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x48) { return FakeBus::Result::notAcknowledged; }
+          if(recv.empty()) {
+              if(sent.size() == 3 && static_cast<std::uint8_t>(sent[0]) == 0x01) {
+                  mux = (static_cast<std::uint8_t>(sent[1]) >> 4) & 0x03U;
+              }
+              return FakeBus::Result::succeeded;
+          }
+          recv[0] = static_cast<std::byte>(conv[mux][0]);
+          recv[1] = static_cast<std::byte>(conv[mux][1]);
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Ads1015<>> a15{};
     check(runUntil(a15, [&] { return a15.valid(); }, 500ms), "a sweep");
     check(hasWrite({0x01, 0xC5, 0x83}) && hasWrite({0x01, 0xF5, 0x83}),
@@ -782,26 +788,27 @@ void ad7291() {
         burst[2 * i + 1] = static_cast<std::uint8_t>(w & 0xFF);
     }
     std::vector<std::vector<std::uint8_t>> cmdWrites;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
-            if(recv.empty()) {
-                std::vector<std::uint8_t> w;
-                for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
-                cmdWrites.push_back(w);
-                return FakeBus::Result::succeeded;
-            }
-            auto const reg = static_cast<std::uint8_t>(sent[0]);
-            if(reg == 0x01) {
-                for(std::size_t i = 0; i < recv.size(); ++i) {
-                    recv[i] = static_cast<std::byte>(burst[i]);
-                }
-            } else {   // TSENSE: channel 8, -40.00 degC is -160 counts = 0xF60
-                recv[0] = std::byte{0x8F};
-                recv[1] = std::byte{0x60};
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const                       answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
+          if(recv.empty()) {
+              std::vector<std::uint8_t> w;
+              for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
+              cmdWrites.push_back(w);
+              return FakeBus::Result::succeeded;
+          }
+          auto const reg = static_cast<std::uint8_t>(sent[0]);
+          if(reg == 0x01) {
+              for(std::size_t i = 0; i < recv.size(); ++i) {
+                  recv[i] = static_cast<std::byte>(burst[i]);
+              }
+          } else {   // TSENSE: channel 8, -40.00 degC is -160 counts = 0xF60
+              recv[0] = std::byte{0x8F};
+              recv[1] = std::byte{0x60};
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Adc> ad7{};
     check(runUntil(ad7, [&] { return ad7.valid(); }, 800ms), "first burst");
     check(cmdWrites.size() >= 1 && cmdWrites[0] == std::vector<std::uint8_t>{0x00, 0xFF, 0xA0},
@@ -851,18 +858,19 @@ void ina238() {
     in.set(0x3E, {0x54, 0x49});   // manufacturer TI
     in.set(0x3F, {0x23, 0x81});   // device id INA238
     in.readOnly = {0x04, 0x05, 0x06, 0x07, 0x08, 0x0B, 0x3E, 0x3F};
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr == 0x40 && sent.size() == 1 && recv.size() == 3
-               && static_cast<std::uint8_t>(sent[0]) == 0x08)
-            {
-                recv[0] = std::byte{0x00};   // 24-bit power: 0x003000 = 12288
-                recv[1] = std::byte{0x30};
-                recv[2] = std::byte{0x00};
-                return FakeBus::Result::succeeded;
-            }
-            return in(addr, sent, recv);
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr == 0x40 && sent.size() == 1 && recv.size() == 3
+             && static_cast<std::uint8_t>(sent[0]) == 0x08)
+          {
+              recv[0] = std::byte{0x00};   // 24-bit power: 0x003000 = 12288
+              recv[1] = std::byte{0x30};
+              recv[2] = std::byte{0x00};
+              return FakeBus::Result::succeeded;
+          }
+          return in(addr, sent, recv);
+      }};
     Dev<Ina> ii{};
     check(runUntil(ii, [&] { return ii.valid(); }, 800ms), "first sample");
     check(ii.identified(), "manufacturer 0x5449, device 0x2381");
@@ -907,14 +915,15 @@ void ad5665() {
     testCase("AD5665R");
     fresh();
     std::vector<std::vector<std::uint8_t>> dacWrites;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte>) {
-            if(addr != 0x0F) { return FakeBus::Result::notAcknowledged; }
-            std::vector<std::uint8_t> w;
-            for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
-            dacWrites.push_back(w);
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const                       answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte>) {
+          if(addr != 0x0F) { return FakeBus::Result::notAcknowledged; }
+          std::vector<std::uint8_t> w;
+          for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
+          dacWrites.push_back(w);
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Ad5665> dd{};
     check(runUntil(
             dd,
@@ -1065,19 +1074,20 @@ void power() {
 
     testCase("MCP3421");
     fresh();
-    int reads = 0;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x68) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) { return FakeBus::Result::succeeded; }
-            ++reads;
-            std::array<std::uint8_t, 4> f{0x01,
-                                          0x00,
-                                          0x00,
-                                          static_cast<std::uint8_t>(reads == 1 ? 0x9C : 0x1C)};
-            for(std::size_t i = 0; i < 4; ++i) { recv[i] = static_cast<std::byte>(f[i]); }
-            return FakeBus::Result::succeeded;
-        };
+    int              reads = 0;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x68) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) { return FakeBus::Result::succeeded; }
+          ++reads;
+          std::array<std::uint8_t, 4> f{0x01,
+                                        0x00,
+                                        0x00,
+                                        static_cast<std::uint8_t>(reads == 1 ? 0x9C : 0x1C)};
+          for(std::size_t i = 0; i < 4; ++i) { recv[i] = static_cast<std::byte>(f[i]); }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Mcp3421> a{};
     check(runUntil(a, [&] { return a.samples() == 1; }, 1s), "first sample");
     check(writes()[0] == std::vector<std::uint8_t>{0x9C}, "config 0x9C");
@@ -1101,16 +1111,17 @@ void power() {
 void mcp3221() {
     testCase("MCP3221");
     fresh();
-    int reads = 0;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x4D) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty() || recv.size() != 2) { return FakeBus::Result::failed; }
-            ++reads;
-            recv[0] = std::byte{0xF7};   // the upper nibble is don't-care
-            recv[1] = std::byte{0xFF};
-            return FakeBus::Result::succeeded;
-        };
+    int              reads = 0;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x4D) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty() || recv.size() != 2) { return FakeBus::Result::failed; }
+          ++reads;
+          recv[0] = std::byte{0xF7};   // the upper nibble is don't-care
+          recv[1] = std::byte{0xFF};
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Mcp3221<>> d{};
     check(runUntil(d, [&] { return d.valid(); }, 100ms), "first sample");
     checkEq(writes().size(), std::size_t{0}, "nothing is ever written");
@@ -1181,18 +1192,19 @@ void io() {
     testCase("MCP4725");
     fresh();
     std::vector<std::uint8_t> lastWrite;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x60) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                lastWrite.clear();
-                for(auto const b : sent) { lastWrite.push_back(static_cast<std::uint8_t>(b)); }
-                return FakeBus::Result::succeeded;
-            }
-            std::array<std::uint8_t, 5> f{0xC0, 0xAB, 0xC0, 0x0A, 0xBC};
-            for(std::size_t i = 0; i < 5; ++i) { recv[i] = static_cast<std::byte>(f[i]); }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const          answeringThird{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x60) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              lastWrite.clear();
+              for(auto const b : sent) { lastWrite.push_back(static_cast<std::uint8_t>(b)); }
+              return FakeBus::Result::succeeded;
+          }
+          std::array<std::uint8_t, 5> f{0xC0, 0xAB, 0xC0, 0x0A, 0xBC};
+          for(std::size_t i = 0; i < 5; ++i) { recv[i] = static_cast<std::byte>(f[i]); }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Mcp4725<>> dac{};
     runFor(dac, 100ms);
     check(dac.link() == Link::starting && lastWrite.empty(),
@@ -1243,17 +1255,18 @@ void io() {
 
     testCase("TCA9548A");
     fresh();
-    std::uint8_t ctrl = 0xFF;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x70) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                ctrl = static_cast<std::uint8_t>(sent[0]);
-                return FakeBus::Result::succeeded;
-            }
-            recv[0] = std::byte{ctrl};
-            return FakeBus::Result::succeeded;
-        };
+    std::uint8_t     ctrl = 0xFF;
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x70) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              ctrl = static_cast<std::uint8_t>(sent[0]);
+              return FakeBus::Result::succeeded;
+          }
+          recv[0] = std::byte{ctrl};
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Tca9548a> mux{};
     check(runUntil(mux, [&] { return mux.answering() && !mux.pending(); }, 100ms), "up");
     checkEq(ctrl, 0x00, "all channels closed at start");
@@ -1265,22 +1278,23 @@ void io() {
 
     testCase("PCF8575");
     fresh();
-    std::uint16_t port = 0;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
-            if(sent.size() == 2) {
-                port = static_cast<std::uint16_t>(static_cast<std::uint8_t>(sent[0])
-                                                  | (static_cast<std::uint8_t>(sent[1]) << 8));
-                return FakeBus::Result::succeeded;
-            }
-            if(recv.size() == 2) {
-                recv[0] = std::byte{0xA5};
-                recv[1] = std::byte{0x5A};
-                return FakeBus::Result::succeeded;
-            }
-            return FakeBus::Result::failed;
-        };
+    std::uint16_t    port = 0;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
+          if(sent.size() == 2) {
+              port = static_cast<std::uint16_t>(static_cast<std::uint8_t>(sent[0])
+                                                | (static_cast<std::uint8_t>(sent[1]) << 8));
+              return FakeBus::Result::succeeded;
+          }
+          if(recv.size() == 2) {
+              recv[0] = std::byte{0xA5};
+              recv[1] = std::byte{0x5A};
+              return FakeBus::Result::succeeded;
+          }
+          return FakeBus::Result::failed;
+      }};
     Dev<Chips::Pcf8575> p{};
     check(runUntil(p, [&] { return p.samples() == 1; }, 100ms), "first read");
     checkEq(port, 0xFFFF, "released");
@@ -1394,19 +1408,20 @@ void pa1010d() {
         "00,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*5A\r\n";
     std::size_t               pos = 0;
     std::vector<std::uint8_t> command;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte> recv) {
-            if(addr != 0x10) { return FakeBus::Result::notAcknowledged; }
-            if(!s.empty()) {
-                command.clear();
-                for(auto const b : s) { command.push_back(static_cast<std::uint8_t>(b)); }
-                return FakeBus::Result::succeeded;
-            }
-            for(auto& b : recv) {
-                b = static_cast<std::byte>(pos < stream.size() ? stream[pos++] : '\n');
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const          answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte> recv) {
+          if(addr != 0x10) { return FakeBus::Result::notAcknowledged; }
+          if(!s.empty()) {
+              command.clear();
+              for(auto const b : s) { command.push_back(static_cast<std::uint8_t>(b)); }
+              return FakeBus::Result::succeeded;
+          }
+          for(auto& b : recv) {
+              b = static_cast<std::byte>(pos < stream.size() ? stream[pos++] : '\n');
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Pa1010d<>> d{};
     check(runUntil(
             d,

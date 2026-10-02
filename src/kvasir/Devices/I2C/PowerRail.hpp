@@ -2,6 +2,7 @@
 
 #include "../Duration.hpp"
 #include "../Log.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <chrono>
 #include <concepts>
@@ -159,14 +160,23 @@ struct PowerRail : detail::RailClaims<Switch> {
 
     /// Once per loop turn, in place of bus.handler().
     template<typename B>
+        requires requires(B& b) { b.handler(); }
+    void handler(B& bus) {
+        handler(bus, [](B& b) { b.handler(); });
+    }
+
+    /// The same with the bus's turn run by `turn(bus)`: a Bus in a DeviceSet runs with the
+    /// set's engine (`rail.handler(set.get<B>(), set.turn())`, DeviceSet.hpp).
+    template<typename B,
+             typename Turn>
         requires requires(B& b) {
-            b.handler();
             b.restart();
             { b.absentCount() } -> std::convertible_to<std::size_t>;
             { b.answeringCount() } -> std::convertible_to<std::size_t>;
             { B::Parts } -> std::convertible_to<std::size_t>;
         }
-    void handler(B& bus) {
+    void handler(B&     bus,
+                 Turn&& turn) {
         auto const now = Clock::now();
         if(!started_) {
             started_ = true;
@@ -175,19 +185,19 @@ struct PowerRail : detail::RailClaims<Switch> {
         }
         switch(state_) {
         case State::off:
-            if(now < waitUntil_) { break; }
+            if(wait_.armed(now)) { break; }
             Switch::on();
-            waitUntil_ = now + SettleTime;
-            state_     = State::settling;
+            wait_.restart(SettleTime, now);
+            state_ = State::settling;
             break;
         case State::settling:
-            if(now < waitUntil_) { break; }
+            if(wait_.armed(now)) { break; }
             absentSince_.reset();
-            presentSince_.reset();
+            allPresent_.stop();
             state_ = State::on;
             break;
         case State::on:
-            bus.handler();
+            turn(bus);
             switch(due_(bus.absentCount(), bus.answeringCount() + offline_(bus) == B::Parts, now)) {
             case Due::no: return;
             case Due::requested:
@@ -215,8 +225,8 @@ private:
     void switchOff_(TimePoint now) {
         Switch::off();
         cycleRequested_ = false;
-        waitUntil_      = now + OffTime;
-        state_          = State::off;
+        wait_.restart(OffTime, now);
+        state_ = State::off;
     }
 
     /// Parts behind a bridge that is not active (Bridge.hpp) are not meant to answer: "every
@@ -243,12 +253,12 @@ private:
             // is for as much as one that stays away: the absence is only over once no part
             // has been absent for as long as it takes to be cycled for.
             if(absentSince_) {
-                if(!presentSince_) { presentSince_ = now; }
-                if(now - *presentSince_ >= AbsentBeforeCycle) { absentSince_.reset(); }
+                if(allPresent_.stopped()) { allPresent_.restart(AbsentBeforeCycle, now); }
+                if(allPresent_.expired(now)) { absentSince_.reset(); }
             }
             return Due::no;
         }
-        presentSince_.reset();
+        allPresent_.stop();
         if(!absentSince_) {
             absentSince_ = now;
             return Due::no;
@@ -264,9 +274,11 @@ private:
     bool                      cycleRequested_{false};
     std::uint32_t             cycles_{};
     std::chrono::milliseconds interval_{AbsentBeforeCycle};
-    TimePoint                 waitUntil_{};
-    std::optional<TimePoint>  absentSince_{};    ///< since when a part has been absent
-    std::optional<TimePoint>  presentSince_{};   ///< since when none has been, after that
+    Kvasir::Deadline<Clock>   wait_{};          ///< the off time, then the settle time
+    std::optional<TimePoint>  absentSince_{};   ///< since when a part has been absent
+    /// Armed when no part has been absent any more, after one was: the absence is over when
+    /// it ends.
+    Kvasir::Deadline<Clock> allPresent_{};
 };
 
 }   // namespace Kvasir::I2C

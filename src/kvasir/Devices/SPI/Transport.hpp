@@ -13,6 +13,7 @@
 //
 // There is no NAK: a part is there when its Identity matches (or setup() accepts a read-back).
 // Log lines name the device "at 0x15": for SPI that is its chip-select GPIO.
+#include "../I2C/EngineFeatures.hpp"
 #include "../Quantities.hpp"
 #include "QueueCore.hpp"
 
@@ -85,6 +86,25 @@ namespace Kvasir { namespace SPI {
         }
     }   // namespace detail
 
+    /// What the engine hands an SPI transport. Outside Transport, so it names nothing but the
+    /// callback size: every SPI device of one callback size is on one engine port
+    /// (I2C::detail::PortOf) and shares one Engine - nested, each device's Request was a type of
+    /// its own and each device got an Engine copy of its own (1.5-2.2 KB of flash a device).
+    ///
+    /// The engine puts the register into `prefix` (the queued I2C drivers' shape) and the
+    /// payload alone into sendData: the command and the data are two spans here already.
+    template<std::size_t CallbackSize>
+    struct TransportRequest {
+        static constexpr std::size_t MaxPrefix = 2;
+
+        std::uint8_t                                     address{};   // unused on SPI
+        std::uint8_t                                     prefixBytes{};
+        std::array<std::byte, MaxPrefix>                 prefix{};
+        std::span<std::byte const>                       sendData{};
+        std::span<std::byte>                             receiveData{};
+        StaticFunction<void(EngineResult), CallbackSize> callback{};
+    };
+
     template<typename Master, typename Cs, SpiChip Chip, std::size_t CallbackSize_ = 16>
     struct Transport {
         static constexpr bool         IsSpi        = true;
@@ -92,14 +112,13 @@ namespace Kvasir { namespace SPI {
         static constexpr std::uint8_t LogId        = detail::csId<Cs>();
         using Result                               = EngineResult;
         using MasterT                              = Master;
+        /// SPI has no NAK, so nothing to park (Presence), and the queued master times out a
+        /// transfer itself (QueueCore), so the engine needs no net of its own; no bridges.
+        static constexpr I2C::EngineFeatures Features{.switchable  = false,
+                                                      .presence    = false,
+                                                      .inFlightNet = false};
 
-        struct Request {
-            std::uint8_t                               address{};   // unused on SPI
-            std::uint8_t                               registerBytes{};
-            std::span<std::byte const>                 sendData{};
-            std::span<std::byte>                       receiveData{};
-            StaticFunction<void(Result), CallbackSize> callback{};
-        };
+        using Request = TransportRequest<CallbackSize>;
 
         static constexpr auto Setup = Master::setup(Chip::Mode, Chip::MaxClock);
 
@@ -108,9 +127,8 @@ namespace Kvasir { namespace SPI {
             typename Master::Request m{.setup = Setup, .lines = lines_};
             std::size_t              c      = 0;
             bool const               isRead = !r.receiveData.empty();
-            auto const regBytes = std::min<std::size_t>(r.registerBytes, r.sendData.size());
-            if(regBytes != 0) {
-                auto const reg = std::to_integer<std::uint8_t>(r.sendData[0]);
+            if(r.prefixBytes != 0) {
+                auto const reg = std::to_integer<std::uint8_t>(r.prefix[0]);
                 command_[c++]  = std::byte{isRead ? detail::readCommand<Chip>(reg)
                                                   : detail::writeCommand<Chip>(reg)};
                 if(isRead) {
@@ -122,8 +140,8 @@ namespace Kvasir { namespace SPI {
             }
             if(isRead) {
                 m.rx = r.receiveData;
-            } else if(r.sendData.size() > regBytes) {
-                m.tx = r.sendData.subspan(regBytes);
+            } else if(!r.sendData.empty()) {
+                m.tx = r.sendData;
             }
             callback_  = r.callback;
             m.callback = [](TransferResult res) {

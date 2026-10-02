@@ -2,6 +2,7 @@
 
 #include "../Duration.hpp"
 #include "../Log.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -41,6 +42,14 @@ enum class PresenceTurn : std::uint8_t {
     wait,    ///< parked and no probe due: run nothing, submit nothing
     probe,   ///< parked and a probe is due: start the bring-up again, it is the probe
     park,    ///< the streak just reached the threshold: start over, then wait
+};
+
+/// Whether a turn may rest (Engine::rest). Outside `Presence` for the same reason, and so that
+/// NoPresence answers with the same type.
+enum class PresenceRest : std::uint8_t {
+    busy,     ///< a probe is armed or on the wire, or the streak is at the threshold: no rest
+    talk,     ///< present: the turn decides
+    parked,   ///< parked: rest until the next probe
 };
 
 /// The knobs as values, so `Presence` is one type whatever a Config sets (DeviceOps::presence).
@@ -139,11 +148,11 @@ struct Presence {
               PresenceKnobs const&          k) {
         if(!absent_) {
             if(k.absentAfterNaks == 0 || naks_ < k.absentAfterNaks) { return Turn::talk; }
-            absent_    = true;
-            probe_     = Probe::none;
-            probes_    = 0;
-            interval_  = std::chrono::milliseconds{k.probeIntervalMs};
-            nextProbe_ = now + interval_;
+            absent_   = true;
+            probe_    = Probe::none;
+            probes_   = 0;
+            interval_ = std::chrono::milliseconds{k.probeIntervalMs};
+            nextProbe_.restart(interval_, now);
             KVASIR_LOG_LIMITED(log_.allow(NotResponding, now),
                                UC_LOG_W,
                                "i2c device {:#04x} not responding ({} NAKs in a row) -- "
@@ -157,17 +166,19 @@ struct Presence {
         // Parked. A probe that is armed or on the wire keeps the engine running so that
         // it can be submitted and its outcome taken; between probes nothing runs.
         if(probe_ != Probe::none) { return Turn::talk; }
-        if(now < nextProbe_) { return Turn::wait; }
-        probe_     = Probe::armed;
-        nextProbe_ = now + interval_;
-        interval_  = std::min(interval_ * 2, std::chrono::milliseconds{k.probeIntervalMaxMs});
+        if(nextProbe_.armed(now)) { return Turn::wait; }
+        probe_ = Probe::armed;
+        nextProbe_.restart(interval_, now);
+        interval_
+          = std::min<std::chrono::milliseconds>(interval_ * 2,
+                                                std::chrono::milliseconds{k.probeIntervalMaxMs});
         ++probes_;
         return Turn::probe;
     }
 
     /// For Engine::rest: `talk` while present, `parked` until the next probe (in `until`),
     /// `busy` when the next turn acts (a probe armed or on the wire, a streak about to park).
-    enum class Rest : std::uint8_t { busy, talk, parked };
+    using Rest = PresenceRest;
 
     [[nodiscard]] Rest rest(PresenceKnobs const& k,
                             TimePoint&           until) const {
@@ -175,7 +186,7 @@ struct Presence {
             return k.absentAfterNaks != 0 && naks_ >= k.absentAfterNaks ? Rest::busy : Rest::talk;
         }
         if(probe_ != Probe::none) { return Rest::busy; }
-        until = nextProbe_;
+        until = nextProbe_.end();
         return Rest::parked;
     }
 
@@ -195,13 +206,58 @@ private:
     static constexpr std::uint32_t NotResponding = rateLimitKey(1);
     static constexpr std::uint32_t PresentAgain  = rateLimitKey(2);
 
-    std::uint8_t              naks_{};
-    bool                      absent_{false};
-    Probe                     probe_{Probe::none};
-    std::uint16_t             probes_{};
-    std::chrono::milliseconds interval_{};   ///< set when the device is parked
-    TimePoint                 nextProbe_{};
-    RateLimiter<Clock>        log_{};   ///< a flapping device must not flood the log
+    // In order of alignment: the small fields share the tail.
+    Kvasir::Deadline<Clock> nextProbe_{};   ///< armed while parked
+    Millis32                interval_{};    ///< set when the device is parked
+    std::uint16_t           probes_{};
+    std::uint8_t            naks_{};
+    bool                    absent_{false};
+    Probe                   probe_{Probe::none};
+    /// A flapping device must not flood the log; empty without logging (LogRateLimiter).
+    [[no_unique_address]] LogRateLimiter<Clock> log_{};
+};
+
+/// Presence on a bus whose engine features leave it out (EngineFeatures::presence): no state,
+/// and every answer is "present, talk" - the part is never parked, a NAK is a failure like any
+/// other. The same calls as Presence, so the engine's code is the same for both and folds away.
+template<typename Clock>
+struct NoPresence {
+    using TimePoint = typename Clock::time_point;
+    using Turn      = PresenceTurn;
+    using Rest      = PresenceRest;
+
+    [[nodiscard]] static constexpr bool present() { return true; }
+
+    [[nodiscard]] static constexpr bool absent() { return false; }
+
+    [[nodiscard]] static constexpr std::uint8_t consecutiveNaks() { return 0; }
+
+    [[nodiscard]] static constexpr std::uint16_t probes() { return 0; }
+
+    static constexpr void ack(TimePoint,
+                              std::uint8_t) {}
+
+    static constexpr void nak() {}
+
+    static constexpr void fault() {}
+
+    static constexpr void restart() {}
+
+    // The knobs are any type: on such a port DeviceOps has none (detail::Absent).
+    template<typename Knobs>
+    static constexpr Turn turn(TimePoint,
+                               std::uint8_t,
+                               Knobs const&) {
+        return Turn::talk;
+    }
+
+    template<typename Knobs>
+    [[nodiscard]] static constexpr Rest rest(Knobs const&,
+                                             TimePoint&) {
+        return Rest::talk;
+    }
+
+    [[nodiscard]] static constexpr bool mayTalk() { return true; }
 };
 
 }   // namespace Kvasir::I2C

@@ -110,8 +110,12 @@ namespace Ds1307Detail {
 /// counts those reads until a time is set. The DS3231 has no CH bit and shares the rest.
 /// Standard mode only: 100 kHz at most on the bus it sits on.
 struct Ds1307 {
-    static constexpr std::string_view        Name    = "DS1307";
-    static constexpr Address7                Address = 0x68;
+    static constexpr std::string_view Name    = "DS1307";
+    static constexpr Address7         Address = 0x68;
+    /// f_SCL 0..100 kHz (DS1307 datasheet, AC Electrical Characteristics); "operates in the
+    /// standard mode (100kHz) only" (I2C Data Bus). A bus faster than that fails the build,
+    /// unless it runs each device at its own clock (I2CConfig::perDeviceClock).
+    static constexpr Units::Hertz            I2cMaxClock = Units::hertz(100'000);
     static constexpr std::array<Address7, 1> Addresses{0x68};
     static constexpr std::size_t             RegisterBytes = 1;
 

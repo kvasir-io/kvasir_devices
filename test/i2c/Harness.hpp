@@ -22,6 +22,7 @@
 #include <support/LogStubs.hpp>
 #include "FakeBus.hpp"
 #include <support/Check.hpp>
+#include <support/ScopedHook.hpp>
 // clang-format on
 #include <kvasir/Devices/Bytes.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>

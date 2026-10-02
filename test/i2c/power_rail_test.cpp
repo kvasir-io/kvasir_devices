@@ -128,12 +128,14 @@ void powerRail() {
 
     fresh();
     Supply::clear();
-    Supply::isOn     = true;   // as a warm reset of the controller leaves it
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(!Supply::isOn) { talkedWhileOff = true; }
-        if(farDead && a == Far::Address) { return FakeBusResult::notAcknowledged; }
-        return zeros(a, s, r);
-    };
+    Supply::isOn = true;   // as a warm reset of the controller leaves it
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(!Supply::isOn) { talkedWhileOff = true; }
+          if(farDead && a == Far::Address) { return FakeBusResult::notAcknowledged; }
+          return zeros(a, s, r);
+      }};
 
     testCase("PowerRail: off first, then on, and nothing on the bus before it settled");
     runFor(powered, Rail::OffTime);
@@ -204,10 +206,12 @@ void configured() {
 
     fresh();
     Supply::clear();
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(farDead && a == Far::Address) { return FakeBusResult::notAcknowledged; }
-        return zeros(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(farDead && a == Far::Address) { return FakeBusResult::notAcknowledged; }
+          return zeros(a, s, r);
+      }};
 
     testCase("PowerRail: a Config's own times");
     check(rail.state() == FastRail::State::off, "off from the start");
@@ -276,8 +280,9 @@ void muxOnTheRail() {
         return crcZeros(a, s, r);
     };
     FakeBus::respond = std::ref(wire);
-    Supply::onOff
-      = [&] { wire.control.clear(); };   // the switch powers up with every channel closed
+    ScopedHook const powerUp{Supply::onOff, [&] {
+                                 wire.control.clear();
+                             }};   // the switch powers up with every channel closed
 
     testCase("PowerRail: a switch on the rail is written again before the part behind it talks");
     check(runUntil(powered, [&] { return bus.answeringCount() == 2; }, 5s), "switch and part up");

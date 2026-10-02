@@ -32,6 +32,13 @@ KVASIR_LOG_SHARED void logUp([[maybe_unused]] std::string_view name,
     }
 }
 
+/// The same without the counters (EngineFeatures::stats off).
+KVASIR_LOG_SHARED void logHealth([[maybe_unused]] std::string_view name,
+                                 [[maybe_unused]] std::uint8_t     address,
+                                 [[maybe_unused]] Link             link) {
+    UC_LOG_I("{} at {:#04x}: {}", name, address, link);
+}
+
 /// What the device is, where, and how it is doing: Bus::logHealth's line, per device.
 KVASIR_LOG_SHARED void logHealth([[maybe_unused]] std::string_view name,
                                  [[maybe_unused]] std::uint8_t     address,

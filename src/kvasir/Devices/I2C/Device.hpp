@@ -2,6 +2,7 @@
 
 #include "../Link.hpp"
 #include "../Log.hpp"
+#include "../Quantities.hpp"
 #include "../ResetLine.hpp"
 #include "Bytes.hpp"
 #include "Concepts.hpp"
@@ -10,6 +11,7 @@
 #include "Pending.hpp"
 #include "Presence.hpp"
 #include "RegisterCheck.hpp"
+#include "SetOps.hpp"
 #include "Step.hpp"
 
 #include <algorithm>
@@ -157,6 +159,13 @@ struct At {
 
 /// No config: the chip's default address.
 struct DefaultConfig {};
+
+/// Another config with this device's bus clock added, for a bus that runs each device at its
+/// own clock (I2CConfig::perDeviceClock): `Device<I2c, Clock, Chips::Tlv493d, AtClock<100'000>>`.
+template<std::uint32_t Hz, typename Base = DefaultConfig>
+struct AtClock : Base {
+    static constexpr Units::Hertz BusClock = Units::hertz(Hz);
+};
 
 /// No timing: a description's own defaults. A description that takes a `Timing` type reads the
 /// std::chrono members it names (`Period`, `StartupDelay`, ...) from it and falls back to its
@@ -349,11 +358,19 @@ namespace detail {
     /// Per read group, only when it keeps history: what the last frames amounted to and when
     /// the last one landed. An empty member otherwise, so a group that keeps no history costs
     /// nothing -- the same trick VerifySlot uses.
-    template<bool Enable, typename TP>
+    /// `Timed`: the port keeps sample timestamps (EngineFeatures::timestamps); without them
+    /// only the unchanged count is kept.
+    template<bool Enable, bool Timed, typename TP>
     struct HistorySlot {};
 
     template<typename TP>
-    struct HistorySlot<true, TP> {
+    struct HistorySlot<true, false, TP> {
+        /// Frames that were well formed and said nothing new (Outcome::unchanged).
+        std::uint32_t unchanged{};
+    };
+
+    template<typename TP>
+    struct HistorySlot<true, true, TP> {
         using Duration = typename TP::duration;
         /// Frames that were well formed and said nothing new (Outcome::unchanged).
         std::uint32_t unchanged{};
@@ -806,21 +823,6 @@ namespace detail {
         return counts;
     }
 
-    template<typename L>
-    [[nodiscard]] constexpr std::size_t maxPayloadOf() {
-        std::size_t n = 0;
-        forEach<L>([&](auto i) {
-            using G = typename Nth<L>::template type<decltype(i)::value>;
-            if constexpr(ReadGroup<G>) {
-                auto const p = maxPayload(std::span<Step const>{G::Steps});
-                n            = p > n ? p : n;
-            } else {
-                n = static_cast<std::size_t>(G::Bytes) > n ? static_cast<std::size_t>(G::Bytes) : n;
-            }
-        });
-        return n;
-    }
-
     /// The most transactions any write group's item is; one when every group returns a
     /// single Step (and then the Device carries no script store at all).
     template<typename L>
@@ -864,15 +866,30 @@ namespace detail {
 /// Everything of a Device that depends on the chip alone: slots, buffers, the chip's State, the
 /// application's API and the engine's Ops. Devices of one chip on one port type (PortOf) with
 /// equal `Confirms` (detail::confirmsOf, it sizes the slots) share it; the rest is DeviceOps.
+
 template<typename Port, typename Clock, typename ChipT, auto Confirms>
 struct DeviceCore : detail::EngineState<Port, Clock> {
+    /// A Bus's device set calls this chip's hooks directly (SetOps.hpp).
+    template<typename, typename, detail::SetFlags, typename...>
+    friend struct detail::SetOps;
+
+    using Core       = DeviceCore;   ///< for a device set (SetOps): the chip's shared part
     using Chip       = ChipT;
+    using PortT      = Port;
     using ClockT     = Clock;
     using TimePoint  = typename Clock::time_point;
     using Duration   = typename Clock::duration;
     using PendingT   = Pending<Port, Clock>;
     using State      = typename detail::StateOf<Chip>::type;
     using DeviceOpsT = detail::DeviceOps<Port, Clock>;
+
+    /// Read group G keeps the bus completion time of its samples: it keeps history
+    /// (detail::KeepsHistory) and the port keeps timestamps (EngineFeatures::timestamps).
+    template<typename G>
+    static constexpr bool Timed = detail::KeepsHistory<G> && Port::Features.timestamps;
+
+    /// A read group's slot as the engine walks it (the statistics are in it when the port has them).
+    using ReadSlotBaseT = detail::ReadSlotBase<Clock, Port::Features>;
 
     /// The state machine's own fields and its two enums (Engine.hpp). A base that depends on a
     /// template parameter is not searched by unqualified lookup, so every name it brings is
@@ -1055,7 +1072,7 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
     // -- the slots -------------------------------------------------------------------------
 
     template<typename G>
-    struct ReadSlot : detail::ReadSlotBase<Clock> {
+    struct ReadSlot : ReadSlotBaseT {
         static constexpr std::size_t Bytes = [] {
             auto const n = bufferBytes(std::span<Step const>{G::Steps});
             return n == 0 ? std::size_t{1} : n;
@@ -1070,11 +1087,12 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
             this->period     = detail::periodOf<G>();
         }
 
-        std::array<std::byte, Bytes>                                                  buf{};
-        Sample                                                                        sample{};
-        Request                                                                       request{};
-        [[no_unique_address]] detail::HistorySlot<detail::KeepsHistory<G>, TimePoint> history{};
-        [[no_unique_address]] detail::ConfirmSlot<Bytes, ConfirmChange<G> != 0>       confirm{};
+        std::array<std::byte, Bytes> buf{};
+        Sample                       sample{};
+        Request                      request{};
+        [[no_unique_address]] detail::HistorySlot<detail::KeepsHistory<G>, Timed<G>, TimePoint>
+                                                                                history{};
+        [[no_unique_address]] detail::ConfirmSlot<Bytes, ConfirmChange<G> != 0> confirm{};
     };
 
     template<typename G>
@@ -1119,13 +1137,6 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
     using ReadSlots  = typename detail::Slots<ReadSlot, Reads>::type;
     using WriteSlots = typename detail::Slots<WriteSlot, Writes>::type;
 
-    static constexpr std::size_t MaxPayload = [] {
-        auto const initBytes  = maxPayload(InitSteps);
-        auto const readBytes  = detail::maxPayloadOf<Reads>();
-        auto const writeBytes = detail::maxPayloadOf<Writes>();
-        return std::max({initBytes, readBytes, writeBytes});
-    }();
-
     /// One item of a write group may be several transactions (a window command and the
     /// display RAM behind it). One when every group's encode() returns a single Step, and
     /// then the script store below is empty.
@@ -1137,7 +1148,28 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
         return n == 0 ? std::size_t{1} : n;
     }();
 
-    static constexpr bool        AnyVerify      = detail::anyVerifies<Writes>();
+    static constexpr bool AnyVerify = detail::anyVerifies<Writes>();
+
+    /// Whether this chip needs a hook at all (SetOps): a hook no chip of a Bus's device set
+    /// needs is a constant there, and the engine's path behind it folds away at compile time.
+    template<typename P>
+    static consteval bool anyRead_(P p) {
+        bool any = false;
+        detail::forEach<Reads>([&](auto i) {
+            using G = typename detail::Nth<Reads>::template type<decltype(i)::value>;
+            any     = any || p.template operator()<G>();
+        });
+        return any;
+    }
+
+    static constexpr bool NeedsWake = WakeRetries > 0;
+    static constexpr bool NeedsSizedRead
+      = anyRead_([]<typename G>() { return detail::HasSizedPrepare<G>; });
+    static constexpr bool NeedsReady = anyRead_([]<typename G>() { return detail::HasReady<G>; });
+    static constexpr bool NeedsDynamicPeriod
+      = anyRead_([]<typename G>() { return detail::HasDynamicPeriod<G>; });
+    static constexpr bool        NeedsOracle    = HasIdentity;
+    static constexpr bool        NeedsVerify    = AnyVerify;
     static constexpr std::size_t MaxVerifyBytes = detail::maxVerifyBytesOf<Writes>();
 
     // A read-back is addressed by the register the write went to; on a chip without registers
@@ -1151,12 +1183,26 @@ private:
     /// The state the engine works on is this object: every trampoline below casts back.
     [[nodiscard]] static DeviceCore& self_(EngineStateT& e) { return static_cast<DeviceCore&>(e); }
 
+    /// The hooks the engine's reset() needs, called directly (restart() runs it outside any
+    /// turn, so it cannot name the engine that drives the device - a Bus's device set or the
+    /// table). Four calls of this chip's own members, nothing else of the engine.
+    struct SelfOps {
+        static constexpr bool IsSetOps = true;
+
+        static void redirtyItem(EngineStateT& e) { self_(e).redirtyItem_(); }
+
+        static void unserve(EngineStateT& e) { self_(e).unserve_(); }
+
+        static void wakeReset(EngineStateT& e) { self_(e).wakeReset_(); }
+
+        static void forgetSamples(EngineStateT& e) { self_(e).forgetSamples_(); }
+    };
+
     /// What the engine (Engine.hpp) needs of this chip: constants, and one trampoline per hole.
     /// `static constexpr`, so it is one table in flash per DeviceCore and nothing per
     /// object -- the engine takes it as an argument rather than the device carrying a pointer.
     /// This is where the chip's groups are switched over, once, instead of at every call site.
     static constexpr detail::Ops<Port, Clock> EngineOps{
-      .tx        = [](EngineStateT& e) { return std::span<std::byte>{self_(e).tx_}; },
       .script    = [](EngineStateT& e) { return self_(e).script_(); },
       .buffer    = [](EngineStateT& e) { return self_(e).buffer_(); },
       .sizeRead  = [](EngineStateT& e) { self_(e).sizeRead_(); },
@@ -1184,7 +1230,7 @@ private:
           }
       },
       .clearInit     = [](EngineStateT& e) { self_(e).init_.fill(std::byte{0}); },
-      .finishInit    = [](EngineStateT& e, TimePoint now) { self_(e).finishInit_(now); },
+      .finishInit    = [](EngineStateT& e, TimePoint now) { self_(e).finishInit_(EngineOps, now); },
       .wakeReset     = [](EngineStateT& e) { self_(e).wakeReset_(); },
       .redirtyItem   = [](EngineStateT& e) { self_(e).redirtyItem_(); },
       .unserve       = [](EngineStateT& e) { self_(e).unserve_(); },
@@ -1207,8 +1253,8 @@ private:
       .resetLowMs      = static_cast<std::uint32_t>(ResetLow.count()),
       .resetSettleMs   = static_cast<std::uint32_t>(ResetSettle.count()),
       .reads           = std::span<detail::ReadGroupInfo const>{ReadInfos}.first(Reads::size),
-      .readSlot        = [](EngineStateT& e, std::uint8_t g) -> detail::ReadSlotBase<Clock>& {
-          detail::ReadSlotBase<Clock>* r = nullptr;
+      .readSlot        = [](EngineStateT& e, std::uint8_t g) -> ReadSlotBaseT& {
+          ReadSlotBaseT* r = nullptr;
           detail::withIndex(
             g,
             [&](auto i) { r = &std::get<decltype(i)::value>(self_(e).reads_); },
@@ -1265,7 +1311,7 @@ private:
                                static_cast<std::uint32_t>(outcome.retryAfter.count())};
                       } else if(outcome.kind == Result::Kind::ok) {
                           s.sample = outcome.value;
-                          if constexpr(detail::KeepsHistory<G>) {
+                          if constexpr(Timed<G>) {
                               d.template noteSample_<G>(s.history, d.pending_.stamp());
                           }
                           r = {detail::DecodeKind::ok, 0};
@@ -1331,7 +1377,7 @@ private:
         },
       .startVerifyGroup = [](EngineStateT& e,
                              std::uint8_t  w,
-                             TimePoint     now) { return self_(e).startVerify_(w, now); },
+                             TimePoint now) { return self_(e).startVerify_(EngineOps, w, now); },
       .finishVerify     = [](EngineStateT& e, TimePoint now) { self_(e).finishVerify_(now); },
       .verifyDue =
         [] {
@@ -1353,7 +1399,15 @@ public:
     void handler() { handler(Clock::now()); }
 
     /// The same with the clock read by the caller (Bus::handler).
-    void handler(TimePoint now) { detail::Engine<Port, Clock>::handler(*this, EngineOps, now); }
+    ///
+    /// A device on its own is a device set of one (SetOps.hpp): its hooks are direct calls, no
+    /// table is read - and the engine is one copy for this chip. Several parts on one port
+    /// share the engine when a Bus or a DeviceSet drives them.
+    void handler(TimePoint now) {
+        detail::Engine<Port, Clock>::handler(*this,
+                                             detail::SetOpsFor<Port, Clock, DeviceCore>{},
+                                             now);
+    }
 
     /// Start over from the reset, as after power-on: for a caller that did to the part what the
     /// engine cannot see -- cycled the supply it shares with others (PowerRail.hpp). Whatever
@@ -1361,7 +1415,7 @@ public:
     /// present and is brought up from the start (StartupDelay, the identity, Init), and
     /// everything the application had written is re-sent after it, as after any bring-up.
     void restart() {
-        reset_();
+        detail::Engine<Port, Clock>::reset(*this, SelfOps{});
         presence_.restart();
         ring_();
     }
@@ -1379,8 +1433,10 @@ public:
     /// does not wait for it -- reads and writes go out while `starting` -- so a part with no Init
     /// and no cyclic read answers with the first thing the application asks of it.
     [[nodiscard]] Link link() const {
-        if(this->dev_->switchable()) {
-            if(bridge_.offline() || gateOffline_() || disabled_()) { return Link::offline; }
+        if constexpr(Port::Features.switchable) {
+            if(this->dev_->switchable()) {
+                if(bridge_.offline() || gateOffline_() || disabled_()) { return Link::offline; }
+            }
         }
         if(!presence_.present()) { return Link::absent; }
         return up_ && acked_ ? Link::answering : Link::starting;
@@ -1389,7 +1445,16 @@ public:
     /// One line for a log: what the device is, where, and how it is doing. What Bus::logHealth
     /// says per device, for a firmware with one device and no Bus.
     void logHealth() const {
-        detail::logHealth(Chip::Name, this->dev_->address, link(), samples(), rejected(), errors());
+        if constexpr(Port::Features.stats) {
+            detail::logHealth(Chip::Name,
+                              this->dev_->address,
+                              link(),
+                              samples(),
+                              rejected(),
+                              errors());
+        } else {
+            detail::logHealth(Chip::Name, this->dev_->address, link());
+        }
     }
 
     [[nodiscard]] bool answering() const { return link() == Link::answering; }
@@ -1506,7 +1571,9 @@ public:
     /// a firmware picks at run time, and the late-gap count follows it -- slower while a display is off, faster while a
     /// value is being watched.
     template<typename G>
-    void period(std::chrono::milliseconds p) {
+    void period(std::chrono::milliseconds p)
+        requires(Port::Features.runtimePeriod)
+    {
         static_assert(detail::periodOf<G>() > std::chrono::milliseconds::zero(),
                       "period<G>(p): G is not a cyclic read group (it has no Period), so it "
                       "only runs when request<G>() asks");
@@ -1569,12 +1636,16 @@ public:
     }
 
     template<typename G>
-    [[nodiscard]] std::uint32_t samples() const {
+    [[nodiscard]] std::uint32_t samples() const
+        requires(Port::Features.stats)
+    {
         return std::get<ReadSlot<G>>(reads_).samples;
     }
 
     /// Samples across every read group, over the device's life.
-    [[nodiscard]] std::uint32_t samples() const {
+    [[nodiscard]] std::uint32_t samples() const
+        requires(Port::Features.stats)
+    {
         std::uint32_t n = 0;
         detail::forEach<Reads>([&](auto i) { n += std::get<decltype(i)::value>(reads_).samples; });
         return n;
@@ -1589,7 +1660,9 @@ public:
 
     /// Frames of G the decode rejected (CRC, busy past MaxRetries, impossible values).
     template<typename G>
-    [[nodiscard]] std::uint32_t rejected() const {
+    [[nodiscard]] std::uint32_t rejected() const
+        requires(Port::Features.stats)
+    {
         return std::get<ReadSlot<G>>(reads_).rejected;
     }
 
@@ -1606,7 +1679,7 @@ public:
     /// completed, taken in the interrupt, not the loop turn that noticed it.
     template<typename G>
     [[nodiscard]] TimePoint stamp() const
-        requires(detail::KeepsHistory<G>)
+        requires(Timed<G>)
     {
         return std::get<ReadSlot<G>>(reads_).history.at;
     }
@@ -1616,7 +1689,7 @@ public:
     /// were two periods or more. Taken and cleared, so one reader; the loop's.
     template<typename G>
     [[nodiscard]] SampleGaps<Duration> takeGaps()
-        requires(detail::KeepsHistory<G>)
+        requires(Timed<G>)
     {
         auto&                      h = std::get<ReadSlot<G>>(reads_).history;
         SampleGaps<Duration> const gaps{.longest = h.longestGap, .late = h.lateGaps};
@@ -1625,7 +1698,9 @@ public:
         return gaps;
     }
 
-    [[nodiscard]] std::uint32_t rejected() const {
+    [[nodiscard]] std::uint32_t rejected() const
+        requires(Port::Features.stats)
+    {
         std::uint32_t n = 0;
         detail::forEach<Reads>([&](auto i) { n += std::get<decltype(i)::value>(reads_).rejected; });
         return n;
@@ -1815,11 +1890,19 @@ public:
     }
 
     /// Full turns run; resting turns (Engine::rest) are not counted.
-    [[nodiscard]] std::uint32_t turns() const { return this->turns_; }
+    [[nodiscard]] std::uint32_t turns() const
+        requires(Port::Features.stats)
+    {
+        return this->turns_;
+    }
 
     /// Transactions that failed (NAK, bus fault, timeout), all phases. A NAK a wake retry
     /// (Chip::WakeRetries) recovered from is not one.
-    [[nodiscard]] std::uint32_t errors() const { return errors_; }
+    [[nodiscard]] std::uint32_t errors() const
+        requires(Port::Features.stats)
+    {
+        return errors_;
+    }
 
     /// NAKs that were put on the wire again because the part may still be waking
     /// (Chip::WakeRetries), over the device's life; 0 for a chip that declares none.
@@ -1854,7 +1937,11 @@ public:
     }
 
     /// Bring-ups whose setup() said "not this chip".
-    [[nodiscard]] std::uint16_t unidentified() const { return unidentified_; }
+    [[nodiscard]] std::uint16_t unidentified() const
+        requires(Port::Features.stats)
+    {
+        return unidentified_;
+    }
 
 private:
     /// set() compares against what the group holds: only a group that is a state (not
@@ -1876,7 +1963,11 @@ private:
     }
 
     /// Wake the engine (EngineState::doorbell_); after the store it announces.
-    void ring_() { this->doorbell_.store(true, std::memory_order_release); }
+    void ring_() {
+        if constexpr(Port::Features.rest) {
+            this->doorbell_.store(true, std::memory_order_release);
+        }
+    }
 
     /// A timestamped sample of G landed at `at`: the gap since the one before, for takeGaps().
     template<typename G,
@@ -1918,10 +2009,7 @@ private:
         return offline != nullptr && offline(*this);
     }
 
-    [[nodiscard]] bool disabled_() const {
-        auto const enabled = this->dev_->enabled;
-        return enabled != nullptr && !enabled(this->dev_->enabledArg);
-    }
+    [[nodiscard]] bool disabled_() const { return this->disabledNow(); }
 
     /// A NAK the part may give while it wakes: true when it is put on the wire again after
     /// WakeRetryDelay, the gate let go meanwhile, rather than counted.
@@ -2115,14 +2203,13 @@ private:
     /// Run the read group again from its first step after `retryAfter`, or give up on this
     /// run once the retry limit is reached: the sample is rejected.
 
-    /// Puts one transaction on the bus. False when it could not go (the gate said not yet,
-    /// the device is parked with no probe due, the bus queue is full): the step is tried
-    /// again next turn.
-    /// One transaction on the bus (Engine.hpp): false when it could not go and the step is
-    /// tried again next turn.
-    bool submit_(Step const&          s,
+    /// The running step (current_) on the bus (Engine.hpp): false when it could not go and
+    /// the step is tried again next turn. With the `ops` of whatever drives the device
+    /// (EngineOps, or a device set's SetOps).
+    template<typename O>
+    bool submit_(O const&             ops,
                  std::span<std::byte> buf) {
-        return detail::Engine<Port, Clock>::submit(*this, EngineOps, s, buf);
+        return detail::Engine<Port, Clock>::submit(*this, ops, buf);
     }
 
     /// The step's delay, then the next step.
@@ -2181,8 +2268,10 @@ private:
         return true;
     }
 
-    void finishInit_(TimePoint now) {
-        detail::Engine<Port, Clock>::finishInit(*this, EngineOps, now);
+    template<typename O>
+    void finishInit_(O const&  ops,
+                     TimePoint now) {
+        detail::Engine<Port, Clock>::finishInit(*this, ops, now);
     }
 
     /// Every group's first deadline after a bring-up, and what the chip is owed again.
@@ -2192,9 +2281,11 @@ private:
             auto& s   = std::get<decltype(i)::value>(reads_);
             s.retries = 0;
             if constexpr(detail::periodOf<G>() > std::chrono::milliseconds::zero()) {
-                s.due = s.periodSet && s.period == std::chrono::milliseconds::zero()
-                        ? TimePoint::max()
-                        : now;
+                bool parked = false;
+                if constexpr(Port::Features.runtimePeriod) {
+                    parked = s.periodSet && s.period == std::chrono::milliseconds::zero();
+                }
+                s.due = parked ? TimePoint::max() : now;
             } else {
                 s.due = now;
             }
@@ -2308,7 +2399,9 @@ private:
     template<typename G>
     [[nodiscard]] std::chrono::milliseconds periodNow_() const {
         auto const& s = std::get<ReadSlot<G>>(reads_);
-        if(s.periodSet) { return s.period; }
+        if constexpr(Port::Features.runtimePeriod) {
+            if(s.periodSet) { return s.period; }
+        }
         if constexpr(!detail::HasDynamicPeriod<G>
                      && requires(State const& st) {
                             { G::period(st) } -> std::convertible_to<std::chrono::milliseconds>;
@@ -2400,9 +2493,12 @@ private:
 
     /// Read one written register back. The write step `encode` produced carries both the
     /// register and the bytes, so a chip needs to declare nothing but the two durations.
-    bool startVerify_(std::uint8_t w,
+    template<typename O>
+    bool startVerify_(O const&     ops,
+                      std::uint8_t w,
                       TimePoint    now) {
         if constexpr(!AnyVerify) {
+            static_cast<void>(ops);
             static_cast<void>(w);
             static_cast<void>(now);
             return false;
@@ -2480,7 +2576,7 @@ private:
                                         .count  = static_cast<std::uint8_t>(n),
                                         .offset = 0})
                           : Step::receive({.count = static_cast<std::uint8_t>(n), .offset = 0});
-                      this->inFlight_ = submit_(this->current_, buffer_());
+                      this->inFlight_ = submit_(ops, buffer_());
                       started         = true;
                   }
               },
@@ -2546,18 +2642,21 @@ private:
 
     // Where the run is, what it waits for and what has happened to it: detail::EngineState,
     // the base of this class (Engine.hpp), because none of it depends on the chip.
-    State                                                 state_{};
-    std::array<std::byte, RegisterBytes + MaxPayload + 1> tx_{};
-    std::array<std::byte, InitBytes>                      init_{};
-    bool                                                  identityMatched_{!HasIdentity};
-    static constexpr std::size_t                          IdentityCount = [] {
+    State                            state_{};
+    std::array<std::byte, InitBytes> init_{};
+    bool                             identityMatched_{!HasIdentity};
+    static constexpr std::size_t     IdentityCount = [] {
         if constexpr(HasIdentity) {
             return Chip::Identity.size();
         } else {
-            return std::size_t{1};
+            return std::size_t{};
         }
     }();
-    std::array<std::uint32_t, IdentityCount>                                  identity_{};
+    /// What the identity registers read, for a chip that has them; nothing (no RAM) for the
+    /// rest - a std::array of 0 still takes a word.
+    using IdentityRegs
+      = std::conditional_t<HasIdentity, std::array<std::uint32_t, IdentityCount>, Empty>;
+    [[no_unique_address]] IdentityRegs                                        identity_{};
     [[no_unique_address]] detail::VerifyBufs<AnyVerify, MaxVerifyBytes>       verify_{};
     [[no_unique_address]] detail::WriteScript<MultiStepWrites, MaxWriteSteps> writeScript_{};
     [[no_unique_address]] detail::WakeSlot<(WakeRetries > 0)>                 wake_{};
@@ -2622,8 +2721,16 @@ struct Device
     static constexpr bool SharedEnable = requires {
         { Config::enabledBy(Config::enabledArg) } -> std::convertible_to<bool>;
     };
+    // Either may add `static constexpr std::uint32_t const* enabledGeneration`: a counter the
+    // application steps whenever the answer may change, after the change (an interrupt on this
+    // core may step it). Until it moves, the engine reuses the last answer instead of calling
+    // the function on every loop turn (DeviceOps). A change nobody announces is not seen.
 
     static constexpr bool Switchable = Bridged || Enableable || SharedEnable;
+    static_assert(!Switchable || detail::PortOf<I2c>::Features.switchable,
+                  "this device is behind a bridge or has Config::enabled(), and its bus leaves the "
+                  "engine's switchable feature out: give the bus one, "
+                  "Kvasir::I2C::WithFeatures<Bus, {.switchable = true}> (EngineFeatures.hpp)");
 
     static constexpr WhileOff WhileDisabled = [] {
         if constexpr(requires { Config::WhileDisabled; }) {
@@ -2721,6 +2828,59 @@ struct Device
         }
     }();
 
+    /// The clock this part asks for, in Hz, or 0 when it asks for none: `Config::BusClock`
+    /// (this device), else `Chip::I2cMaxClock` (what the part's data sheet allows; not
+    /// `MaxClock`, which an SPI description of the same part uses for its SPI clock). Both are
+    /// Units::Hertz. On a bus with I2CConfig::perDeviceClock the device is run at it (capped at
+    /// the bus's baudRate), and every request it submits carries the bus's timing for it; on a
+    /// bus without, a clock below the bus's rate is a compile error (the driver's timing()).
+    static constexpr std::uint32_t OwnClockHz = [] {
+        if constexpr(detail::SpiTransport<I2c>) {
+            return std::uint32_t{0};
+        } else if constexpr(requires { Config::BusClock; }) {
+            if constexpr(requires { Chip::I2cMaxClock; }) {
+                static_assert(Config::BusClock.numerical_value_in(Units::si::hertz)
+                                <= Chip::I2cMaxClock.numerical_value_in(Units::si::hertz),
+                              "Config::BusClock is above the chip's Chip::I2cMaxClock");
+            }
+            return Config::BusClock.numerical_value_in(Units::si::hertz);
+        } else if constexpr(requires { Chip::I2cMaxClock; }) {
+            return Chip::I2cMaxClock.numerical_value_in(Units::si::hertz);
+        } else {
+            return std::uint32_t{0};
+        }
+    }();
+
+    /// What the part runs at: its own clock capped at the bus's rate, the bus's rate when it
+    /// asks for none, 0 on a bus that says no rate. Bus::busLoad() weighs its bits with it.
+    static constexpr std::uint32_t BusHz = [] {
+        if constexpr(requires { I2c::BaudRate; }) {
+            auto const bus = static_cast<std::uint32_t>(I2c::BaudRate);
+            return OwnClockHz != 0 ? std::min(OwnClockHz, bus) : bus;
+        } else {
+            return OwnClockHz;
+        }
+    }();
+
+    /// The bus runs each device at its own clock: its request has a `timing` member.
+    static constexpr bool PerDeviceClock
+      = requires(typename I2c::Request r) { r.timing; } && !detail::SpiTransport<I2c>;
+
+    /// The timing every request of this device carries on a PerDeviceClock bus, for its own
+    /// clock or else the bus's rate. On any other bus the driver's timing() only checks a
+    /// clock the part asks for (a part slower than the bus fails the build there).
+    static constexpr auto BusTiming = [] {
+        if constexpr(PerDeviceClock) {
+            return I2c::timing(OwnClockHz != 0 ? OwnClockHz
+                                               : static_cast<std::uint32_t>(I2c::BaudRate));
+        } else {
+            if constexpr(OwnClockHz != 0 && requires { I2c::timing(OwnClockHz); }) {
+                [[maybe_unused]] constexpr auto checked = I2c::timing(OwnClockHz);
+            }
+            return Empty{};
+        }
+    }();
+
     static_assert(
       [] {
           if constexpr(detail::HasAddresses<Chip> && !detail::SpiTransport<I2c>) {
@@ -2763,7 +2923,21 @@ private:
 
     /// What only this device has, for the engine; a hook it does not need is null.
     static constexpr DeviceOpsT Hooks{
-      .submit = [](typename I2c::Request const& r) -> bool { return I2c::submit(r); },
+      .submit =
+        [] {
+            using Fn = bool (*)(typename I2c::Request const&);
+            if constexpr(PerDeviceClock) {
+                // The engine's code is shared by every device on the port: the timing is this
+                // device's own, so it goes in here, on the way out.
+                return Fn{[](typename I2c::Request const& r) -> bool {
+                    auto timed   = r;
+                    timed.timing = BusTiming;
+                    return I2c::submit(timed);
+                }};
+            } else {
+                return Fn{[](typename I2c::Request const& r) -> bool { return I2c::submit(r); }};
+            }
+        }(),
       .claimGate =
         [] {
             using Fn = bool (*)(EngineStateT&);
@@ -2799,6 +2973,14 @@ private:
                 return static_cast<void const*>(Config::enabledArg);
             } else {
                 return static_cast<void const*>(nullptr);
+            }
+        }(),
+      .enabledGeneration =
+        [] {
+            if constexpr(requires { Config::enabledGeneration; }) {
+                return static_cast<std::uint32_t const*>(Config::enabledGeneration);
+            } else {
+                return static_cast<std::uint32_t const*>(nullptr);
             }
         }(),
       .gateOffline =

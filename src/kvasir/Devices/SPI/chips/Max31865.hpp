@@ -6,6 +6,7 @@
 #include "../../Log.hpp"
 #include "../../Quantities.hpp"
 #include "../Device.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <array>
 #include <chrono>
@@ -268,26 +269,33 @@ namespace Kvasir { namespace SPI {
         Max31865& operator=(Max31865 const&) = delete;
 
         void handler() {
+            handler([](auto& d) { d.handler(); });
+        }
+
+        /// With `turn(device())` in place of the device's own turn: how a DeviceSet drives it
+        /// together with the other parts of its port (DeviceSet.hpp), one engine for all of them.
+        template<typename Turn>
+        void handler(Turn&& turn) {
             auto const now = Clock::now();
-            device_.handler();
+            turn(device_);
             if(!device_.answering()) {
-                valid_         = false;
-                conversionDue_ = now + ConversionTimeout;
-                wasUp_         = false;
+                valid_ = false;
+                conversionDue_.restart(ConversionTimeout, now);
+                wasUp_ = false;
                 return;
             }
             if(!wasUp_) {   // a bring-up just ended: its fault flags are cleared
-                wasUp_         = true;
-                fault_         = 0;
-                rejected_      = 0;
-                conversionDue_ = now + ConversionTimeout;
+                wasUp_    = true;
+                fault_    = 0;
+                rejected_ = 0;
+                conversionDue_.restart(ConversionTimeout, now);
                 if constexpr(RegisterCheck.count() != 0) {
                     seenRegisters_ = device_.template rejected<typename Chip::Registers>();
                 }
             }
             unidentifiedWhenUp_ = device_.unidentified();
             if(device_.template fresh<typename Chip::Conversion>(seenConversion_)) {
-                conversionDue_ = now + ConversionTimeout;
+                conversionDue_.restart(ConversionTimeout, now);
                 conversion_(device_.template latest<typename Chip::Conversion>(), now);
                 asked_ = false;
             }
@@ -309,7 +317,7 @@ namespace Kvasir { namespace SPI {
             {
                 asked_ = false;   // failed or rejected: DRDY decides again next turn
             }
-            if(now >= conversionDue_) {
+            if(conversionDue_.expired(now)) {
                 UC_LOG_W("max31865: no conversion within {}", ConversionTimeout);
                 restart_();
             }
@@ -439,18 +447,18 @@ namespace Kvasir { namespace SPI {
             device_.restart();
         }
 
-        DeviceT       device_{};
-        Sample        sample_{};
-        bool          valid_{};
-        bool          wasUp_{};
-        bool          asked_{};
-        I2C::Ticket   ticket_{};
-        TimePoint     conversionDue_{};
-        std::uint8_t  fault_{};
-        std::uint32_t faults_{};
-        std::uint32_t samples_{};
-        std::uint32_t seenConversion_{};
-        std::uint32_t seenRegisters_{};
+        DeviceT                 device_{};
+        Sample                  sample_{};
+        bool                    valid_{};
+        bool                    wasUp_{};
+        bool                    asked_{};
+        I2C::Ticket             ticket_{};
+        Kvasir::Deadline<Clock> conversionDue_{};   ///< armed from the first turn on
+        std::uint8_t            fault_{};
+        std::uint32_t           faults_{};
+        std::uint32_t           samples_{};
+        std::uint32_t           seenConversion_{};
+        std::uint32_t           seenRegisters_{};
         std::uint32_t unidentifiedWhenUp_{};   ///< unidentified() when the part last answered
         std::uint16_t rejected_{};
     };

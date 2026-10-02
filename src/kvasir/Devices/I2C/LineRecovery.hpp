@@ -2,9 +2,11 @@
 // Included by a chip's I2C driver, after its Io.hpp: the pin actions (makeInput, makeOutput,
 // read, clear) are found by ADL when `Base` is known.
 #include "../Log.hpp"
+#include "kvasir/Util/Periodic.hpp"
 #include "kvasir/Util/RateLimiter.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 
@@ -58,30 +60,52 @@ namespace Kvasir { namespace I2C {
 
         enum class TickResult { busy, idle, needsReinit };
 
-        inline static Phase phase_{Phase::Idle};
-        inline static int   pulseCount_{0};
-        inline static tp    phaseDeadline_{};
-        inline static tp    sickUntil_{};    // post-abort settle gate
-        inline static tp    stuckSince_{};   // when a line was first seen low while idle
-        inline static Kvasir::RateLimiter<Clock> log_{};   // a held-low SDA recovers in a loop
-        inline static std::uint32_t              recoveries_{};
-        inline static std::uint32_t              idleStuck_{};
-        inline static std::uint32_t              forcedStops_{};
+        inline static Phase                   phase_{Phase::Idle};
+        inline static int                     pulseCount_{0};
+        inline static Kvasir::Deadline<Clock> phaseWait_{};   // the current phase's wait
+        inline static tp                      sickUntil_{};   // post-abort settle gate
+        // when a line was first seen low while idle
+        inline static tp stuckSince_{};
+        // Set by noteBusFree(), from the driver's ISR too: taken by checkBusStuck().
+        inline static std::atomic<bool> busFree_{};
+
+        // The log limiter shares one static object with a counter: empty without logging, it then
+        // takes no byte ([[no_unique_address]] works on members, not on statics).
+        struct Counted {
+            std::uint32_t recoveries{};
+            // a held-low SDA recovers in a loop
+            [[no_unique_address]] Kvasir::LogRateLimiter<Clock> log{};
+        };
+
+        inline static Counted       counted_{};
+        static constexpr auto&      recoveries_ = counted_.recoveries;
+        static constexpr auto&      log_        = counted_.log;
+        inline static std::uint32_t idleStuck_{};
+        inline static std::uint32_t forcedStops_{};
 
         // A line must be continuously low for this long before recovery fires.
         // Scale with baud rate: ~500 bit-periods gives comfortable margin
         // (a legitimate STOP settles SDA in ~0.5 bit-periods).
         //   100 kHz -> 5 ms,  400 kHz -> 1.25 ms
         // Floor at 1 ms to avoid spurious triggers from noise/polling jitter.
+        // On a bus that runs each device at its own clock, the slowest one's bit period
+        // (minBaudRate; the chip drivers default it to baudRate).
         // explicit std::max<std::uint32_t>: uint32_t differs between gcc and clang, breaking deduction
-        static constexpr auto kStuckThreshold = std::chrono::microseconds{
-          std::max<std::uint32_t>(1000U, 500'000'000U / base::I2CConfig::baudRate)};
+        static constexpr std::uint32_t kSlowestBaud = [] {
+            if constexpr(requires { base::I2CConfig::minBaudRate; }) {
+                return static_cast<std::uint32_t>(base::I2CConfig::minBaudRate);
+            } else {
+                return static_cast<std::uint32_t>(base::I2CConfig::baudRate);
+            }
+        }();
+        static constexpr auto kStuckThreshold
+          = std::chrono::microseconds{std::max<std::uint32_t>(1000U, 500'000'000U / kSlowestBaud)};
 
         /// Backoff for a bus no clocking can free; reset once both lines read high again.
         static constexpr auto kBackoffMin = std::chrono::milliseconds{100};
         static constexpr auto kBackoffMax = std::chrono::milliseconds{2000};
 
-        inline static tp                        retryNotBefore_{};
+        inline static Kvasir::Deadline<Clock>   retryHoldOff_{};
         inline static std::chrono::milliseconds backoff_{kBackoffMin};
 
         static bool isActive() { return phase_ != Phase::Idle; }
@@ -120,12 +144,27 @@ namespace Kvasir { namespace I2C {
         /// Clocks left over from the nine when SDA came back; 0 means it never did.
         static int clocksLeft() { return pulseCount_; }
 
-        /// SDA held low while the bus is idle: start recovery.
+        /// A transfer started, so the bus was free: whatever low SDA an earlier idle look saw
+        /// is over. The driver calls this for every transfer it starts, from its ISR as well.
+        ///
+        /// Without it the stuck timer only restarted when an idle look happened to see SDA
+        /// high. A transfer is over for the driver before its end is on the wire (a read with
+        /// its NAK and STOP still to go, SDA low for the STOP's setup), so on a busy bus an
+        /// idle look lands in such a tail, the next transfers start from the ISR, and the
+        /// next look that lands in a tail 20 ms later "found SDA held for kStuckThreshold".
+        /// Seen on the interconnector (2026-09-30): ~1.4 recoveries a second on a working bus,
+        /// each ending "SDA high, 8 of 9 clocks unused"; a wire tap showed traffic up to the
+        /// recovery and SDA never low for more than one byte.
+        static void noteBusFree() { busFree_.store(true, std::memory_order_relaxed); }
+
+        /// SDA held low while the bus is idle, and no transfer started since it was first
+        /// seen low: start recovery.
         ///
         /// SDA only. A briefly low SCL between transactions is normal (the block is
         /// disabled after every transaction, a STOP may still be propagating), and a
         /// genuinely held clock cannot be recovered by a master anyway.
         static bool checkBusStuck(tp now) {
+            if(busFree_.exchange(false, std::memory_order_relaxed)) { stuckSince_ = tp{}; }
             if(sdaIsHigh()) {
                 stuckSince_ = tp{};
                 backoff_    = kBackoffMin;
@@ -153,9 +192,9 @@ namespace Kvasir { namespace I2C {
         /// Begin unless a recent attempt is still backing off; says whether it did.
         /// Every automatic trigger goes through this.
         static bool beginThrottled(tp now) {
-            if(now < retryNotBefore_) { return false; }
-            retryNotBefore_ = now + backoff_;
-            backoff_        = backoff_ * 2 > kBackoffMax ? kBackoffMax : backoff_ * 2;
+            if(retryHoldOff_.armed(now)) { return false; }
+            retryHoldOff_.restart(backoff_, now);
+            backoff_ = backoff_ * 2 > kBackoffMax ? kBackoffMax : backoff_ * 2;
             begin();
             return true;
         }
@@ -166,8 +205,8 @@ namespace Kvasir { namespace I2C {
         static void begin() {
             ++recoveries_;
             apply(base::softAbortRequest);
-            phase_         = Phase::Aborting;
-            phaseDeadline_ = Clock::now() + std::chrono::microseconds{100};
+            phase_ = Phase::Aborting;
+            phaseWait_.restart(std::chrono::microseconds{100}, Clock::now());
         }
 
         // Advance the recovery state machine.  Call once per main-loop tick.
@@ -177,7 +216,7 @@ namespace Kvasir { namespace I2C {
         //   needsReinit — recovery finished, caller must reset() the peripheral
         static TickResult tick(tp now) {
             if(phase_ == Phase::Idle) { return TickResult::idle; }
-            if(now < phaseDeadline_) { return TickResult::busy; }
+            if(phaseWait_.armed(now)) { return TickResult::busy; }
 
             switch(phase_) {
             case Phase::Aborting: phase_ = Phase::PinTakeover; [[fallthrough]];
@@ -195,25 +234,25 @@ namespace Kvasir { namespace I2C {
                 break;
             case Phase::PulseLow:
                 driveLow_(base::I2CConfig::sclPinLocation);
-                phaseDeadline_ = now + std::chrono::microseconds{20};
-                phase_         = Phase::PulseHigh;
+                phaseWait_.restart(std::chrono::microseconds{20}, now);
+                phase_ = Phase::PulseHigh;
                 break;
             case Phase::PulseHigh:
                 release_(base::I2CConfig::sclPinLocation);
-                phaseDeadline_ = now + std::chrono::microseconds{20};
+                phaseWait_.restart(std::chrono::microseconds{20}, now);
                 // Stop as soon as the slave has let SDA go; pulseCount_ keeps the rest.
                 phase_ = (--pulseCount_ > 0 && !sdaIsHigh()) ? Phase::PulseLow : Phase::StopSdaLow;
                 break;
             case Phase::StopSdaLow:
                 // SDA is taken back for the STOP: low while SCL is high, then released.
                 driveLow_(base::I2CConfig::sdaPinLocation);
-                phaseDeadline_ = now + std::chrono::microseconds{20};
-                phase_         = Phase::StopSdaHigh;
+                phaseWait_.restart(std::chrono::microseconds{20}, now);
+                phase_ = Phase::StopSdaHigh;
                 break;
             case Phase::StopSdaHigh:
                 release_(base::I2CConfig::sdaPinLocation);
-                phaseDeadline_ = now + std::chrono::microseconds{20};
-                phase_         = Phase::ForceStop;
+                phaseWait_.restart(std::chrono::microseconds{20}, now);
+                phase_ = Phase::ForceStop;
                 break;
             case Phase::ForceStop:
                 // 20 us after the STOP's release: a line that is high has had its STOP. One that
@@ -225,15 +264,15 @@ namespace Kvasir { namespace I2C {
                 }
                 ++forcedStops_;
                 apply(makeOutputInitHigh(base::I2CConfig::sdaPinLocation));
-                phaseDeadline_ = now + std::chrono::microseconds{20};
-                phase_         = Phase::ForceRelease;
+                phaseWait_.restart(std::chrono::microseconds{20}, now);
+                phase_ = Phase::ForceRelease;
                 break;
             case Phase::ForceRelease:
                 apply(clear(base::I2CConfig::
                               sdaPinLocation));   // the latch low again, as PinTakeover left it
                 release_(base::I2CConfig::sdaPinLocation);
-                phaseDeadline_ = now + std::chrono::microseconds{20};
-                phase_         = Phase::Reinit;
+                phaseWait_.restart(std::chrono::microseconds{20}, now);
+                phase_ = Phase::Reinit;
                 break;
             case Phase::Reinit:
                 apply(base::initStepPinConfig);
@@ -247,6 +286,7 @@ namespace Kvasir { namespace I2C {
         static void resetState() {
             phase_      = Phase::Idle;
             stuckSince_ = tp{};
+            busFree_.store(false, std::memory_order_relaxed);
         }
 
         /// How long the next attempt is held off for.

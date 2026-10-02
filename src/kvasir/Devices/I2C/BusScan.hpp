@@ -204,8 +204,10 @@ private:
 
     template<std::size_t... Ks>
     void bindOwn_(std::index_sequence<Ks...>) {
+        // With the switch's turn the Bus bound (its device set's engine, Bus::bindSwitchTurns_).
         ((std::get<Ks>(ports_).bind(bus_.template get<typename BusT::template SwitchDeviceAt<Ks>>(),
-                                    bus_.template arbiter<Ks>())),
+                                    bus_.template arbiter<Ks>(),
+                                    bus_.template arbiter<Ks>().turnSwitch)),
          ...);
     }
 

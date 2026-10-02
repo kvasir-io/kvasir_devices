@@ -16,6 +16,7 @@
 #include <kvasir/Devices/SPI/chips/Max7219.hpp>
 #include <kvasir/Devices/SPI/chips/Mpu9250.hpp>
 #include <support/FakeClock.hpp>
+#include <type_traits>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -30,6 +31,10 @@ struct Tag {};
 using Bus = QueuedSpi::Bus<Tag>;
 using Bme = Kvasir::SPI::Device<Bus, FakeClock, Kvasir::SPI::Chips::Bme280, Spi::Cs>;
 using Bmp = Kvasir::SPI::Device<Bus, FakeClock, Kvasir::SPI::Chips::Bmp280, Spi::Cs>;
+
+// Two SPI devices are one engine port, so they share one Engine (Transport.hpp, TransportRequest).
+static_assert(std::is_same_v<Kvasir::I2C::detail::PortOf<Bme::TransportT>,
+                             Kvasir::I2C::detail::PortOf<Bmp::TransportT>>);
 
 SpiRegisters part{};
 

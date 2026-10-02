@@ -23,7 +23,7 @@
     #define UC_LOG_E(...) static_cast<void>(0)
 #endif
 #ifndef KVASIR_LOG_LIMITED
-    #define KVASIR_LOG_LIMITED(decision, LOG, ...) static_cast<void>(decision)
+    #define KVASIR_LOG_LIMITED(decision, LOG, ...) static_cast<void>(sizeof(decision))
 #endif
 // uc_log's scoped settings (uc_log/LogEnv.hpp); nothing where uc_log is not there. The drivers'
 // log modules need no declaration: uc_log derives each line's from the scope of its function

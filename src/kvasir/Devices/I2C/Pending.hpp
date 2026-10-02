@@ -1,8 +1,11 @@
 #pragma once
 
+#include "EngineFeatures.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <type_traits>
 
 namespace Kvasir::I2C {
 
@@ -39,7 +42,7 @@ struct Pending {
     void complete(std::uint32_t         gen,
                   typename Port::Result r) {
         if(gen != generation_.load(std::memory_order_relaxed)) { return; }   // given up on
-        stamp_             = Clock::now();
+        if constexpr(Port::Features.timestamps) { stamp_ = Clock::now(); }
         auto const outcome = r == Port::Result::succeeded       ? Outcome::ok
                            : r == Port::Result::notAcknowledged ? Outcome::notAcknowledged
                                                                 : Outcome::failed;
@@ -63,13 +66,22 @@ struct Pending {
 
     /// When the last completion arrived, on the clock; written before the release-store,
     /// read after the acquire-load.
-    [[nodiscard]] TimePoint stamp() const { return stamp_; }
+    /// TimePoint{} on a port without timestamps (nothing reads it there: Device's Timed<G>).
+    [[nodiscard]] TimePoint stamp() const {
+        if constexpr(Port::Features.timestamps) {
+            return stamp_;
+        } else {
+            return TimePoint{};
+        }
+    }
 
 private:
     std::atomic<bool>          done_{false};
     std::atomic<Outcome>       result_{Outcome::failed};
     std::atomic<std::uint32_t> generation_{0};
-    TimePoint                  stamp_{};
+    /// Nothing, and no clock read in the interrupt, on a port without timestamps.
+    [[no_unique_address]] std::conditional_t<Port::Features.timestamps, TimePoint, detail::NoStamp>
+      stamp_{};
 };
 
 }   // namespace Kvasir::I2C

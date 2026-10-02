@@ -4,6 +4,7 @@
 #include "../../Link.hpp"
 #include "../../Quantities.hpp"
 #include "../QueueCore.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <array>
 #include <chrono>
@@ -198,12 +199,12 @@ struct NorFlash {
         case State::settle:
             // A part left busy by an operation that failed or timed out: nothing but Read
             // Status is taken until it is done.
-            deadline_ = now + ChipEraseTimeout;
-            pollAt_   = now;
-            state_    = State::settlePoll;
+            deadline_.restart(ChipEraseTimeout, now);
+            pollGap_.stop();   // the first Read Status at once
+            state_ = State::settlePoll;
             break;
         case State::settlePoll:
-            if(now >= pollAt_ && statusFrame_()) { state_ = State::settleWait; }
+            if(!pollGap_.armed(now) && statusFrame_()) { state_ = State::settleWait; }
             break;
         case State::settleWait:
             if(auto const o = take_(); o != Outcome::running) {
@@ -215,12 +216,12 @@ struct NorFlash {
                 if((status_ & StatusBusy) == 0) {
                     settled_ = true;
                     state_   = State::start;
-                } else if(now >= deadline_) {
+                } else if(deadline_.expired(now)) {
                     ++timeouts_;
                     finish_(Result::timedOut);
                 } else {
-                    pollAt_ = now + StatusPollInterval;
-                    state_  = State::settlePoll;
+                    pollGap_.restart(StatusPollInterval, now);
+                    state_ = State::settlePoll;
                 }
             }
             break;
@@ -234,12 +235,12 @@ struct NorFlash {
                     break;
                 }
                 // tRES1 after 0xAB, tRST after 0x99: well under the poll interval
-                pollAt_ = now + StatusPollInterval;
-                state_  = State::wakeGap;
+                pollGap_.restart(StatusPollInterval, now);
+                state_ = State::wakeGap;
             }
             break;
         case State::wakeGap:
-            if(now >= pollAt_) {
+            if(!pollGap_.armed(now)) {
                 if(++wakeStep_ < WakeSequence.size()) {
                     state_ = State::wake;
                 } else {
@@ -271,13 +272,13 @@ struct NorFlash {
                     finish_(Result::failed);
                     break;
                 }
-                deadline_ = now + timeoutFor_(op_);
-                pollAt_   = now + StatusPollInterval;
-                state_    = State::poll;
+                deadline_.restart(timeoutFor_(op_), now);
+                pollGap_.restart(StatusPollInterval, now);
+                state_ = State::poll;
             }
             break;
         case State::poll:
-            if(now >= pollAt_ && statusFrame_()) { state_ = State::pollWait; }
+            if(!pollGap_.armed(now) && statusFrame_()) { state_ = State::pollWait; }
             break;
         case State::pollWait:
             if(auto const o = take_(); o != Outcome::running) {
@@ -288,12 +289,12 @@ struct NorFlash {
                 status_ = static_cast<std::uint8_t>(rx_[1]);
                 if((status_ & StatusBusy) == 0) {
                     finish_(Result::ok);
-                } else if(now >= deadline_) {
+                } else if(deadline_.expired(now)) {
                     ++timeouts_;
                     finish_(Result::timedOut);
                 } else {
-                    pollAt_ = now + StatusPollInterval;
-                    state_  = State::poll;
+                    pollGap_.restart(StatusPollInterval, now);
+                    state_ = State::poll;
                 }
             }
             break;
@@ -570,20 +571,20 @@ private:
     std::uint16_t bringUps_{};
     std::uint32_t errors_{};
 
-    Op                         op_{Op::none};
-    State                      state_{State::idle};
-    Result                     result_{Result::none};
-    std::uint32_t              address_{};
-    std::size_t                length_{};
-    std::span<std::byte>       target_{};
-    typename Clock::time_point pollAt_{};
-    typename Clock::time_point deadline_{};
-    Jedec                      jedec_{};
-    std::uint8_t               status_{};
-    bool                       finished_{false};
-    bool                       settled_{false};   ///< the part is known not to be busy
-    std::size_t                wakeStep_{};
-    std::uint32_t              timeouts_{};
+    Op                      op_{Op::none};
+    State                   state_{State::idle};
+    Result                  result_{Result::none};
+    std::uint32_t           address_{};
+    std::size_t             length_{};
+    std::span<std::byte>    target_{};
+    Kvasir::Deadline<Clock> pollGap_{};    ///< no Read Status before it ends
+    Kvasir::Deadline<Clock> deadline_{};   ///< the operation's (or the settle's) timeout
+    Jedec                   jedec_{};
+    std::uint8_t            status_{};
+    bool                    finished_{false};
+    bool                    settled_{false};   ///< the part is known not to be busy
+    std::size_t             wakeStep_{};
+    std::uint32_t           timeouts_{};
 };
 
 }   // namespace Kvasir::SPI

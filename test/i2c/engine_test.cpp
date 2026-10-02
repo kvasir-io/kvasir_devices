@@ -286,6 +286,180 @@ namespace LinkTest {
 
 }   // namespace LinkTest
 
+namespace FeaturesTest {
+    using Kvasir::I2C::EngineFeatures;
+    using Kvasir::I2C::WithFeatures;
+    namespace D = Kvasir::I2C::detail;
+
+    /// The fake with every feature off, and one with only the in-flight net off.
+    using MinBus
+      = WithFeatures<FakeBus,
+                     EngineFeatures{.switchable = false, .presence = false, .inFlightNet = false}>;
+    using NoNetBus
+      = WithFeatures<FakeBus,
+                     EngineFeatures{.switchable = true, .presence = true, .inFlightNet = false}>;
+
+    struct NoFeaturesMember {
+        using Request = FakeBus::Request;
+        using Result  = FakeBus::Result;
+    };
+
+    static_assert(D::featuresOf<NoFeaturesMember>() == EngineFeatures{},
+                  "a bus that says nothing gets the defaults");
+    static_assert(!EngineFeatures{}.switchable && EngineFeatures{}.presence
+                  && EngineFeatures{}.inFlightNet);
+    static_assert(!std::is_same_v<D::PortOf<MinBus>,
+                                  D::PortOf<FakeBus>>,
+                  "other features, another port");
+    static_assert(std::is_same_v<D::PortOf<WithFeatures<FakeBus,
+                                                        Kvasir::I2C::AllEngineFeatures>>,
+                                 D::PortOf<FakeBus>>,
+                  "the same features, the same port: one engine");
+    // What a feature that is off leaves out of every device's state.
+    static_assert(sizeof(D::EngineState<D::PortOf<MinBus>,
+                                        FakeClock>)
+                    + sizeof(Kvasir::I2C::Presence<FakeClock>) + sizeof(D::BridgeState)
+                  <= sizeof(D::EngineState<D::PortOf<FakeBus>,
+                                           FakeClock>));
+
+    /// Everything but the statistics.
+    using NoStatsBus = WithFeatures<FakeBus,
+                                    EngineFeatures{.switchable  = true,
+                                                   .presence    = true,
+                                                   .inFlightNet = true,
+                                                   .timestamps  = true,
+                                                   .stats       = false}>;
+    template<typename Dv>
+    concept HasCounters = requires(Dv const& d) {
+        d.samples();
+        d.errors();
+        d.rejected();
+        d.turns();
+    };
+    using CountedProbe   = Kvasir::I2C::Device<FakeBus, FakeClock, PresenceTest::Probe>;
+    using UncountedProbe = Kvasir::I2C::Device<NoStatsBus, FakeClock, PresenceTest::Probe>;
+    // The per-device table (flash, one a device) loses what the features that are off need:
+    // five hooks and pointers, the presence knobs and the in-flight timeout.
+    static_assert(sizeof(D::DeviceOps<D::PortOf<MinBus>,
+                                      FakeClock>)
+                      + 5 * sizeof(void*) + sizeof(Kvasir::I2C::PresenceKnobs)
+                      + sizeof(std::uint32_t)
+                    <= sizeof(D::DeviceOps<D::PortOf<FakeBus>,
+                                           FakeClock>),
+                  "the table has no fields for the features that are off");
+    /// Without a run-time period: no period<G>(ms) and no check of a stored one per reschedule.
+    /// ReadSlotBase alone does not shrink (the 8-byte time point's padding takes the 5 bytes),
+    /// but a device's slot does: its own members move into the base's freed tail - the
+    /// i2c_testing matrix measured -32 B of Bus RAM for 8 devices (2026-09-30).
+    using FixedBus = WithFeatures<FakeBus,
+                                  EngineFeatures{.switchable    = true,
+                                                 .presence      = true,
+                                                 .inFlightNet   = true,
+                                                 .timestamps    = true,
+                                                 .stats         = true,
+                                                 .runtimePeriod = false}>;
+    template<typename Dv>
+    concept HasPeriodSetter = requires(Dv& d) {
+        d.template period<PresenceTest::Probe::Value>(std::chrono::milliseconds{5});
+    };
+    static_assert(HasPeriodSetter<CountedProbe>
+                    && !HasPeriodSetter<Kvasir::I2C::Device<FixedBus,
+                                                            FakeClock,
+                                                            PresenceTest::Probe>>,
+                  "period<G>(ms) exists only with the run-time period");
+    static_assert(HasCounters<CountedProbe> && !HasCounters<UncountedProbe>,
+                  "the counters exist only with the stats feature");
+    static_assert(sizeof(UncountedProbe) < sizeof(CountedProbe),
+                  "and take no RAM without it");
+}   // namespace FeaturesTest
+
+void features() {
+    using namespace PresenceTest;
+    using namespace FeaturesTest;
+
+    testCase("features: without presence, a part that NAKs is never parked and is asked on");
+    fresh();
+    FakeBus::respond = alwaysNak;
+    Kvasir::I2C::Device<MinBus, FakeClock, Probe> d{};
+    runFor(d, 500ms);
+    check(!d.absent(), "not parked");
+    checkEq(d.consecutiveNaks(), 0U, "no streak is kept");
+    {
+        auto const sent = FakeBus::log.size();
+        runFor(d, 500ms);   // a parked part would send nothing here (first probe after 1 s)
+        check(FakeBus::log.size() > sent, "still asked");
+    }
+
+    testCase("features: without the in-flight net, a request the bus never answers is waited for");
+    fresh();
+    FakeBus::respond = zeros;
+    Kvasir::I2C::Device<NoNetBus, FakeClock, Probe, ShortNet> lost{};
+    check(runUntil(lost, [&] { return lost.valid(); }, 500ms), "up");
+    {
+        bool dropped = false;
+        for(int i = 0; i < 200 && !dropped; ++i) {
+            lost.handler();
+            if(!FakeBus::pending.empty()) {
+                FakeBus::pending.clear();
+                dropped = true;
+            }
+            FakeClock::current += 1ms;
+        }
+        check(dropped, "a request was dropped");
+        auto const errors = lost.errors();
+        runFor(lost, 200ms);   // four times ShortNet's 50 ms
+        checkEq(lost.errors(), errors, "not given up on");
+        checkEq(Log::warnings, 0, "and nothing said");
+    }
+
+    testCase("features: without resting turns every loop turn is a full turn");
+    {
+        using NoRestBus = WithFeatures<FakeBus, EngineFeatures{.switchable = true, .rest = false}>;
+        fresh();
+        FakeBus::respond = zeros;
+        Kvasir::I2C::Device<NoRestBus, FakeClock, Probe> busy{};
+        Dev<Probe>                                       calm{};
+        check(runUntil(
+                all(busy, calm),
+                [&] { return busy.valid() && calm.valid(); },
+                500ms),
+              "both up");
+        auto const busyTurns = busy.turns();
+        auto const calmTurns = calm.turns();
+        runFor(all(busy, calm), 50ms);   // half a period of nothing to do
+        checkEq(busy.turns() - busyTurns, 50U, "without resting: one full turn a millisecond");
+        check(calm.turns() - calmTurns < 10U, "with it: the turns with nothing due are skipped");
+    }
+
+    testCase("features: without fault back-off a failing bring-up is tried again at once");
+    {
+        using NoBackoffBus
+          = WithFeatures<FakeBus, EngineFeatures{.switchable = true, .faultBackoff = false}>;
+        fresh();
+        FakeBus::respond = alwaysFault;   // bus faults: presence does not park for them
+        Kvasir::I2C::Device<NoBackoffBus, FakeClock, Probe> eager{};
+        runFor(eager, 100ms);
+        auto const eagerTries = FakeBus::log.size();
+        fresh();
+        FakeBus::respond = alwaysFault;
+        Dev<Probe> patient{};
+        runFor(patient, 100ms);
+        // A try is three turns (reset, settle, the Init read): every ~3 ms without the back-off,
+        // every ~8 ms with the default 5 ms (measured: 33 against 13 in 100 ms).
+        check(eagerTries > 2 * FakeBus::log.size(),
+              "more than twice the tries without the back-off");
+    }
+
+    testCase("features: without statistics a device comes up, reads, and logs its health");
+    fresh();
+    FakeBus::respond = zeros;
+    UncountedProbe quiet{};
+    check(runUntil(quiet, [&] { return quiet.valid(); }, 500ms), "up and reading");
+    auto const infos = Log::infos;
+    quiet.logHealth();
+    checkEq(Log::infos, infos + 1, "one health line, without counters");
+}
+
 void linkState() {
     using LinkTest::TwoGroups;
 
@@ -293,11 +467,12 @@ void linkState() {
     fresh();
     RegisterModel<1, 1> model{TwoGroups::Address};
     model.set(0x00, {7, 9});
-    bool answer = false;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            return answer ? model(a, sent, recv) : FakeBus::Result::notAcknowledged;
-        };
+    bool             answer = false;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          return answer ? model(a, sent, recv) : FakeBus::Result::notAcknowledged;
+      }};
     Dev<TwoGroups> d{};
     check(d.link() == Link::starting, "starting before anything happened");
     turn(d);
@@ -1284,6 +1459,23 @@ namespace NetTest {
 
 }   // namespace NetTest
 
+/// Found by i2c_testing's feature matrix, not by these tests: a verified write group decided
+/// by its `writes` counter, which the statistics feature had taken away.
+void statsOffVerify() {
+    testCase("features: without statistics a verified write is written once, read back, and kept");
+    fresh();
+    RegisterModel<1> vs{0x40};
+    vs.set(0x00, {0x00});
+    FakeBus::respond = std::ref(vs);
+    Kvasir::I2C::Device<FeaturesTest::NoStatsBus, FakeClock, VerifyChip> x{};
+    check(runUntil(x, [&] { return x.valid(); }, 500ms), "up");
+    x.set<VerifyChip::Config>(0x77);
+    check(runUntil(x, [&] { return x.writes<VerifyChip::Config>() == 1; }, 400ms), "written");
+    auto const at = FakeClock::current;
+    while(FakeClock::current - at < 1200ms) { turn(x); }   // past two verify intervals
+    checkEq(x.writes<VerifyChip::Config>(), 1U, "the read-back matched: never rewritten");
+}
+
 void nets() {
     using namespace NetTest;
 
@@ -1499,10 +1691,12 @@ void knobs() {
 
     testCase("Device: broughtUp(seen) is true once per bring-up, and logHealth() is one line");
     fresh();
-    bool away        = false;
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        return away ? alwaysNak(a, s, r) : zeros(a, s, r);
-    };
+    bool             away = false;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          return away ? alwaysNak(a, s, r) : zeros(a, s, r);
+      }};
     Dev<Probe>    b{};
     std::uint16_t up = 0;
     check(!b.broughtUp(up), "nothing yet");
@@ -1627,9 +1821,10 @@ void countedReads() {
     using Long  = Counted::Long;
 
     fresh();
-    std::uint8_t  shortCount = 0;
-    std::uint16_t longCount  = 0;
-    FakeBus::respond =
+    std::uint8_t     shortCount = 0;
+    std::uint16_t    longCount  = 0;
+    ScopedHook const answering{
+      FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
           if(a != Counted::Address) { return FakeBus::Result::notAcknowledged; }
           auto const reg = sent.empty() ? -1 : static_cast<int>(static_cast<std::uint8_t>(sent[0]));
@@ -1644,7 +1839,7 @@ void countedReads() {
               }
           }
           return FakeBus::Result::succeeded;
-      };
+      }};
     auto const readsOf = [](int reg) {
         std::vector<std::size_t> lengths;
         for(auto const& t : FakeBus::log) {
@@ -2208,14 +2403,15 @@ void confirmChange() {
     {
         // both registers read 0x10, and once 0xFF each (the third read of each)
         std::array<std::size_t, 2> reads{};
-        FakeBus::respond
-          = [&](std::uint8_t, std::span<std::byte const> sent, std::span<std::byte> r) {
-                if(r.empty()) { return FakeBus::Result::succeeded; }
-                auto const reg = static_cast<std::size_t>(std::to_integer<unsigned>(sent[0]));
-                auto const n   = reads[reg]++;
-                std::ranges::fill(r, n == 2 ? std::byte{0xFF} : std::byte{0x10});
-                return FakeBus::Result::succeeded;
-            };
+        ScopedHook const           answering{
+          FakeBus::respond,
+          [&](std::uint8_t, std::span<std::byte const> sent, std::span<std::byte> r) {
+              if(r.empty()) { return FakeBus::Result::succeeded; }
+              auto const reg = static_cast<std::size_t>(std::to_integer<unsigned>(sent[0]));
+              auto const n   = reads[reg]++;
+              std::ranges::fill(r, n == 2 ? std::byte{0xFF} : std::byte{0x10});
+              return FakeBus::Result::succeeded;
+          }};
         Dev<TwoGroups, LevelsOnly> d{};
         bool                       levelsGlitched = false;
         bool                       countGlitched  = false;
@@ -2346,6 +2542,29 @@ namespace RestTest {
         static constexpr bool (*enabledBy)(void const*) = &flagSet;
         static constexpr void const* enabledArg         = &flags[1];
     };
+
+    /// With a generation: enabled() is asked only after the counter moved. `stepWhileAsked`
+    /// plays an interrupt that changes the answer and steps the counter while enabled() runs,
+    /// after it has read the old answer.
+    inline bool          genEnabled = true;
+    inline std::uint32_t generation{};
+    inline int           asked{};
+    inline bool          stepWhileAsked{};
+
+    struct GenSwitched {
+        static bool enabled() {
+            ++asked;
+            bool const answer = genEnabled;
+            if(stepWhileAsked) {
+                stepWhileAsked = false;
+                genEnabled     = !genEnabled;
+                ++generation;
+            }
+            return answer;
+        }
+
+        static constexpr std::uint32_t const* enabledGeneration = &generation;
+    };
 }   // namespace RestTest
 
 void resting() {
@@ -2449,12 +2668,74 @@ void resting() {
         RestTest::flags[1] = true;
         check(runUntil(s, [&] { return s.valid(); }, 50ms), "its own flag, not another's");
     }
+
+    testCase("resting: with an enabled generation, enabled() is asked only after it moved");
+    fresh();
+    {
+        FakeBus::respond     = zeros;
+        RestTest::genEnabled = true;
+        RestTest::asked      = 0;
+        Dev<Probe, RestTest::GenSwitched> s{};
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "up");
+        auto const askedUp = RestTest::asked;
+        check(askedUp >= 1 && askedUp <= 2, "asked once or twice on the way up");
+        runFor(s, 500ms);
+        checkEq(RestTest::asked, askedUp, "not asked again while the generation stands");
+
+        RestTest::genEnabled = false;   // without a step the engine keeps the old answer
+        runFor(s, 50ms);
+        check(!s.offline(), "an unannounced change is not seen: the contract");
+        ++RestTest::generation;
+        turn(s);
+        check(s.offline(), "offline on the next turn after the step");
+        auto const sent = FakeBus::log.size();
+        runFor(s, 500ms);
+        checkEq(FakeBus::log.size(), sent, "nothing said to it while disabled");
+
+        auto const askedOff = RestTest::asked;
+        ++RestTest::generation;   // a step whose answer did not change
+        runFor(s, 50ms);
+        checkEq(RestTest::asked, askedOff + 1, "asked once for the step, then not again");
+        check(s.offline(), "still offline");
+
+        RestTest::genEnabled = true;
+        ++RestTest::generation;
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "back up after the next step");
+    }
+
+    testCase("resting: a generation step while enabled() runs is not taken for its answer");
+    fresh();
+    {
+        FakeBus::respond     = zeros;
+        RestTest::genEnabled = true;
+        Dev<Probe, RestTest::GenSwitched> s{};
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "up");
+        runFor(s, 20ms);
+        // enabled() answers "enabled", and meanwhile the part is disabled and the step made.
+        RestTest::stepWhileAsked = true;
+        ++RestTest::generation;
+        turn(s);
+        check(!RestTest::stepWhileAsked, "asked, and stepped while asked");
+        check(runUntil(
+                s,
+                [&] { return s.offline(); },
+                50ms),
+              "the step made during the question is asked about again: offline");
+        auto const sent = FakeBus::log.size();
+        runFor(s, 200ms);
+        checkEq(FakeBus::log.size(), sent, "and stays quiet");
+        RestTest::genEnabled = true;
+        ++RestTest::generation;
+        check(runUntil(s, [&] { return s.valid(); }, 50ms), "back");
+    }
 }
 
 }   // namespace
 
 int main() {
     presence();
+    features();
+    statsOffVerify();
     linkState();
     ticketsAndWrites();
     engine();

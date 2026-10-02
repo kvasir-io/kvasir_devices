@@ -167,27 +167,28 @@ void sht3x() {
     fresh();
     std::vector<std::uint8_t> reply;
     bool                      corrupt = false;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x44) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                auto const cmd = static_cast<std::uint16_t>(
-                  (static_cast<std::uint8_t>(sent[0]) << 8) | static_cast<std::uint8_t>(sent[1]));
-                if(cmd == 0xF32D) { reply = withCrc(0x8010); }
-                if(cmd == 0x2400) {
-                    reply         = withCrc(0x6666);
-                    auto const rh = withCrc(0x8000);
-                    reply.insert(reply.end(), rh.begin(), rh.end());
-                    if(corrupt) { reply[2] ^= 0xFF; }
-                }
-                return FakeBus::Result::succeeded;
-            }
-            if(recv.size() != reply.size()) { return FakeBus::Result::failed; }
-            for(std::size_t i = 0; i < recv.size(); ++i) {
-                recv[i] = static_cast<std::byte>(reply[i]);
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const          answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x44) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              auto const cmd = static_cast<std::uint16_t>((static_cast<std::uint8_t>(sent[0]) << 8)
+                                                          | static_cast<std::uint8_t>(sent[1]));
+              if(cmd == 0xF32D) { reply = withCrc(0x8010); }
+              if(cmd == 0x2400) {
+                  reply         = withCrc(0x6666);
+                  auto const rh = withCrc(0x8000);
+                  reply.insert(reply.end(), rh.begin(), rh.end());
+                  if(corrupt) { reply[2] ^= 0xFF; }
+              }
+              return FakeBus::Result::succeeded;
+          }
+          if(recv.size() != reply.size()) { return FakeBus::Result::failed; }
+          for(std::size_t i = 0; i < recv.size(); ++i) {
+              recv[i] = static_cast<std::byte>(reply[i]);
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Sht3x> d{};
     check(runUntil(d, [&] { return d.samples() == 1; }, 2s), "first sample");
     check(writes() == std::vector<std::vector<std::uint8_t>>{{0x30, 0x93}, {0x30, 0xA2}, {0xF3, 0x2D}, {0x24, 0x00}}, "break, reset, status, measure");
@@ -221,41 +222,42 @@ void sht3x() {
 void aht20() {
     testCase("AHT20");
     fresh();
-    bool triggered = false;
-    int  busyLeft  = 2;   // the first two frames read say busy; a retry re-triggers
-    int  triggers  = 0;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x38) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                if(static_cast<std::uint8_t>(sent[0]) == 0xAC) {
-                    triggered = true;
-                    ++triggers;
-                }
-                return FakeBus::Result::succeeded;
-            }
-            if(recv.size() == 1) {
-                recv[0] = std::byte{0x18};
-                return FakeBus::Result::succeeded;
-            }
-            if(recv.size() == 7 && triggered) {
-                if(busyLeft > 0) {
-                    --busyLeft;
-                    recv[0] = std::byte{0x9C};
-                    return FakeBus::Result::succeeded;
-                }
-                std::array<std::byte, 6> f{std::byte{0x1C},
-                                           std::byte{0x80},
-                                           std::byte{0x00},
-                                           std::byte{0x06},
-                                           std::byte{0x66},
-                                           std::byte{0x66}};
-                for(std::size_t i = 0; i < 6; ++i) { recv[i] = f[i]; }
-                recv[6] = static_cast<std::byte>(Sensirion::crc8(Bytes{f}));
-                return FakeBus::Result::succeeded;
-            }
-            return FakeBus::Result::failed;
-        };
+    bool             triggered = false;
+    int              busyLeft  = 2;   // the first two frames read say busy; a retry re-triggers
+    int              triggers  = 0;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x38) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) {
+              if(static_cast<std::uint8_t>(sent[0]) == 0xAC) {
+                  triggered = true;
+                  ++triggers;
+              }
+              return FakeBus::Result::succeeded;
+          }
+          if(recv.size() == 1) {
+              recv[0] = std::byte{0x18};
+              return FakeBus::Result::succeeded;
+          }
+          if(recv.size() == 7 && triggered) {
+              if(busyLeft > 0) {
+                  --busyLeft;
+                  recv[0] = std::byte{0x9C};
+                  return FakeBus::Result::succeeded;
+              }
+              std::array<std::byte, 6> f{std::byte{0x1C},
+                                         std::byte{0x80},
+                                         std::byte{0x00},
+                                         std::byte{0x06},
+                                         std::byte{0x66},
+                                         std::byte{0x66}};
+              for(std::size_t i = 0; i < 6; ++i) { recv[i] = f[i]; }
+              recv[6] = static_cast<std::byte>(Sensirion::crc8(Bytes{f}));
+              return FakeBus::Result::succeeded;
+          }
+          return FakeBus::Result::failed;
+      }};
     Dev<Chips::Aht20> d{};
     check(runUntil(d, [&] { return d.samples() == 1; }, 3s), "first sample");
     check(FakeBus::log[0].at >= FakeClock::time_point{} + 1s + 100ms, "100 ms power-up");
@@ -388,19 +390,20 @@ void hdc1080() {
     m.set(0xFE, {0x54, 0x49, 0x10, 0x50});
     std::vector<std::uint8_t> result{0x66, 0x66, 0x80, 0x00};
     bool                      pointerOnly = false;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x40) { return FakeBus::Result::notAcknowledged; }
-            if(sent.size() == 1 && recv.empty()) {
-                pointerOnly = static_cast<std::uint8_t>(sent[0]) == 0x00;
-                return FakeBus::Result::succeeded;
-            }
-            if(sent.empty() && recv.size() == 4 && pointerOnly) {
-                for(std::size_t i = 0; i < 4; ++i) { recv[i] = static_cast<std::byte>(result[i]); }
-                return FakeBus::Result::succeeded;
-            }
-            return m(addr, sent, recv);
-        };
+    ScopedHook const          answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x40) { return FakeBus::Result::notAcknowledged; }
+          if(sent.size() == 1 && recv.empty()) {
+              pointerOnly = static_cast<std::uint8_t>(sent[0]) == 0x00;
+              return FakeBus::Result::succeeded;
+          }
+          if(sent.empty() && recv.size() == 4 && pointerOnly) {
+              for(std::size_t i = 0; i < 4; ++i) { recv[i] = static_cast<std::byte>(result[i]); }
+              return FakeBus::Result::succeeded;
+          }
+          return m(addr, sent, recv);
+      }};
     Dev<Chips::Hdc1080> d{};
     check(runUntil(d, [&] { return d.samples() == 1; }, 2s), "first sample");
     check(d.identified() && d.state().deviceId == 0x1050, "TI, HDC1080");
@@ -425,17 +428,19 @@ void tmp102() {
     m.readOnly                    = {0x00};
     bool                  written = false;
     FakeClock::time_point configured{};
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(s.size() == 3 && s[0] == std::byte{0x01}) {
-            written    = true;
-            configured = FakeClock::now();
-        }
-        if(written && FakeClock::now() >= configured + 15ms) {
-            m.set(0x00, {0x19, 0x00});
-            written = false;
-        }
-        return m(a, s, r);
-    };
+    ScopedHook const      answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(s.size() == 3 && s[0] == std::byte{0x01}) {
+              written    = true;
+              configured = FakeClock::now();
+          }
+          if(written && FakeClock::now() >= configured + 15ms) {
+              m.set(0x00, {0x19, 0x00});
+              written = false;
+          }
+          return m(a, s, r);
+      }};
     Dev<Chips::Tmp102> t{};
     check(runUntil(t, [&] { return t.samples() == 1; }, 500ms), "first sample");
     check(t.identified(), "R1:R0 read 11, the low nibble 0");
@@ -471,15 +476,16 @@ void lm75() {
     fresh();
     // the configuration register is one byte on a chip whose others are two: the model
     // takes that write itself
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr == 0x48 && sent.size() == 2 && recv.empty()
-               && static_cast<std::uint8_t>(sent[0]) == 0x01)
-            {
-                return FakeBus::Result::succeeded;
-            }
-            return m(addr, sent, recv);
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr == 0x48 && sent.size() == 2 && recv.empty()
+             && static_cast<std::uint8_t>(sent[0]) == 0x01)
+          {
+              return FakeBus::Result::succeeded;
+          }
+          return m(addr, sent, recv);
+      }};
     m.set(0x00, {0x19, 0x00});
     Dev<Chips::Lm75> l{};
     check(runUntil(l, [&] { return l.samples() == 1; }, 500ms), "first sample");
@@ -526,23 +532,25 @@ void dps310() {
     bool                  running     = false;
     bool                  resultRead  = false;
     int                   resultReads = 0;
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(s.size() == 2 && s[0] == std::byte{0x08}) {
-            running    = s[1] == std::byte{0x07};
-            startedAt  = FakeClock::now();
-            resultRead = false;
-        }
-        auto const res       = dps(a, s, r);
-        auto const converted = running && FakeClock::now() >= startedAt + 110ms;
-        if(s.size() == 1 && s[0] == std::byte{0x08} && r.size() == 1) {
-            r[0] |= converted && !resultRead ? std::byte{0xF0} : std::byte{0xC0};
-        }
-        if(s.size() == 1 && s[0] == std::byte{0x00} && r.size() == 6) {
-            if(converted) { resultRead = true; }
-            ++resultReads;
-        }
-        return res;
-    };
+    ScopedHook const      answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(s.size() == 2 && s[0] == std::byte{0x08}) {
+              running    = s[1] == std::byte{0x07};
+              startedAt  = FakeClock::now();
+              resultRead = false;
+          }
+          auto const res       = dps(a, s, r);
+          auto const converted = running && FakeClock::now() >= startedAt + 110ms;
+          if(s.size() == 1 && s[0] == std::byte{0x08} && r.size() == 1) {
+              r[0] |= converted && !resultRead ? std::byte{0xF0} : std::byte{0xC0};
+          }
+          if(s.size() == 1 && s[0] == std::byte{0x00} && r.size() == 6) {
+              if(converted) { resultRead = true; }
+              ++resultReads;
+          }
+          return res;
+      }};
     Dev<Chips::Dps310<>> dp{};
     check(runUntil(dp, [&] { return dp.valid(); }, 2s), "first sample");
     check(resultReads >= 2 && dp.samples() == 1,
@@ -615,20 +623,21 @@ void tmp117() {
     bool ready       = true;
     bool bringUpRead = true;   // the bring-up's configuration read; the conversion after it
                                // is what the first Temperature read finds ready
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            auto const r = t17(addr, sent, recv);
-            if(r == FakeBus::Result::succeeded && sent.size() == 1 && recv.size() == 2) {
-                auto const reg = static_cast<std::uint8_t>(sent[0]);
-                if(reg == 0x01) { recv[0] |= ready ? std::byte{0xA0} : std::byte{0x80}; }
-                if(reg == 0x01 && bringUpRead) {
-                    bringUpRead = false;
-                } else if(reg == 0x00 || reg == 0x01) {
-                    ready = false;
-                }
-            }
-            return r;
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          auto const r = t17(addr, sent, recv);
+          if(r == FakeBus::Result::succeeded && sent.size() == 1 && recv.size() == 2) {
+              auto const reg = static_cast<std::uint8_t>(sent[0]);
+              if(reg == 0x01) { recv[0] |= ready ? std::byte{0xA0} : std::byte{0x80}; }
+              if(reg == 0x01 && bringUpRead) {
+                  bringUpRead = false;
+              } else if(reg == 0x00 || reg == 0x01) {
+                  ready = false;
+              }
+          }
+          return r;
+      }};
     Dev<Chips::Tmp117> t1{};
     check(runUntil(t1, [&] { return t1.valid(); }, 2s), "first sample");
     check(t1.identified(), "device id 0x0117");
@@ -759,29 +768,30 @@ void adt7420() {
     fresh();
     RegisterModel<1, 2> ad{0x48};
     ad.set(0x00, {0x0C, 0x80});   // 13-bit: 0x0C80 >> 3 = 400 sixteenths = 25.00 degC
-    ad.readOnly        = {0x00};
-    std::uint8_t adCfg = 0xFF, adHyst = 0xFF;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr == 0x48 && sent.size() == 2 && recv.empty()) {
-                auto const r = static_cast<std::uint8_t>(sent[0]);
-                if(r == 0x03) {
-                    adCfg = static_cast<std::uint8_t>(sent[1]);
-                    return FakeBus::Result::succeeded;
-                }
-                if(r == 0x0A) {
-                    adHyst = static_cast<std::uint8_t>(sent[1]);
-                    return FakeBus::Result::succeeded;
-                }
-            }
-            if(addr == 0x48 && sent.size() == 1 && recv.size() == 1) {
-                // the two 8-bit registers: the ID, and the configuration read back
-                recv[0]
-                  = static_cast<std::uint8_t>(sent[0]) == 0x0B ? std::byte{0xCB} : std::byte{adCfg};
-                return FakeBus::Result::succeeded;
-            }
-            return ad(addr, sent, recv);
-        };
+    ad.readOnly            = {0x00};
+    std::uint8_t     adCfg = 0xFF, adHyst = 0xFF;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr == 0x48 && sent.size() == 2 && recv.empty()) {
+              auto const r = static_cast<std::uint8_t>(sent[0]);
+              if(r == 0x03) {
+                  adCfg = static_cast<std::uint8_t>(sent[1]);
+                  return FakeBus::Result::succeeded;
+              }
+              if(r == 0x0A) {
+                  adHyst = static_cast<std::uint8_t>(sent[1]);
+                  return FakeBus::Result::succeeded;
+              }
+          }
+          if(addr == 0x48 && sent.size() == 1 && recv.size() == 1) {
+              // the two 8-bit registers: the ID, and the configuration read back
+              recv[0]
+                = static_cast<std::uint8_t>(sent[0]) == 0x0B ? std::byte{0xCB} : std::byte{adCfg};
+              return FakeBus::Result::succeeded;
+          }
+          return ad(addr, sent, recv);
+      }};
     Dev<Chips::Adt7420<>> aa{};
     check(runUntil(aa, [&] { return aa.samples() == 1; }, 800ms), "first sample");
     check(aa.identified(), "ID 0xCB");
@@ -914,18 +924,19 @@ void mcp9808() {
     RegisterModel<1, 2> c{0x18};
     c.set(0x06, {0x00, 0x54, 0x04, 0x00});
     c.set(0x05, {0x01, 0x90});
-    c.readOnly              = {0x05, 0x06, 0x07};
-    std::uint8_t resolution = 0xFF;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr == 0x18 && sent.size() == 2 && recv.empty()
-               && static_cast<std::uint8_t>(sent[0]) == 0x08)
-            {
-                resolution = static_cast<std::uint8_t>(sent[1]);   // the one 8-bit register
-                return FakeBus::Result::succeeded;
-            }
-            return c(addr, sent, recv);
-        };
+    c.readOnly                  = {0x05, 0x06, 0x07};
+    std::uint8_t     resolution = 0xFF;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr == 0x18 && sent.size() == 2 && recv.empty()
+             && static_cast<std::uint8_t>(sent[0]) == 0x08)
+          {
+              resolution = static_cast<std::uint8_t>(sent[1]);   // the one 8-bit register
+              return FakeBus::Result::succeeded;
+          }
+          return c(addr, sent, recv);
+      }};
     Dev<Chips::Mcp9808> p{};
     check(runUntil(p, [&] { return p.samples() == 1; }, 500ms), "first sample");
     check(p.identified(), "manufacturer 0x0054, device 0x04");
@@ -976,7 +987,7 @@ void dht20() {
 
     testCase("DHT20: calibrated at power-up -- a status read, then measurements");
     fresh();
-    FakeBus::respond = respond;
+    ScopedHook const  answering{FakeBus::respond, respond};
     Dev<Chips::Dht20> d{};
     check(runUntil(d, [&] { return d.valid(); }, 3s), "first sample");
     check(FakeBus::log[0].at >= FakeClock::time_point{} + 1s + 100ms, "100 ms power-up");
@@ -998,8 +1009,8 @@ void dht20() {
 
     testCase("DHT20: without the calibration bits, Restore rewrites 0x1B, 0x1C and 0x1E");
     fresh();
-    status           = 0x08;
-    FakeBus::respond = respond;
+    status = 0x08;
+    ScopedHook const  answeringAgain{FakeBus::respond, respond};
     Dev<Chips::Dht20> e{};
     check(runUntil(e, [&] { return e.answering(); }, 3s), "up");
     check(!e.state().calibrated(), "0x08 is not calibrated");
@@ -1178,12 +1189,14 @@ void mpl3115a2() {
     m.set(0x01, {0x62, 0xF3, 0x40, 0x19, 0x80});
     m.readOnly = {0x0C, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05};
     // RST resets the part's I2C interface too: that write is not acknowledged.
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(s.size() == 2 && s[0] == std::byte{0x26} && s[1] == std::byte{0x04}) {
-            return FakeBus::Result::notAcknowledged;
-        }
-        return m(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(s.size() == 2 && s[0] == std::byte{0x26} && s[1] == std::byte{0x04}) {
+              return FakeBus::Result::notAcknowledged;
+          }
+          return m(a, s, r);
+      }};
 
     Dev<Chips::Mpl3115a2> d{};
     check(runUntil(d, [&] { return d.answering(); }, 500ms), "bring-up completes");

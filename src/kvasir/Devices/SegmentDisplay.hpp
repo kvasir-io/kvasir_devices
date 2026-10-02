@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Duration.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <array>
 #include <bitset>
@@ -541,7 +542,7 @@ public:
                std::chrono::milliseconds on  = BlinkOn,
                std::chrono::milliseconds off = BlinkOff) {
         auto const enable = mode == Blink::on;
-        if(enable && !blinking_) { toggleAt_ = TimePoint{}; }
+        if(enable && !blinking_) { toggle_.stop(); }   // toggles at the next update()
         blinking_ = enable;
         on_       = std::chrono::duration_cast<Duration>(on);
         off_      = std::chrono::duration_cast<Duration>(off);
@@ -585,9 +586,9 @@ public:
 
         if(!blinking_) {
             lit_ = true;
-        } else if(now >= toggleAt_) {
-            lit_      = !lit_;
-            toggleAt_ = now + (lit_ ? on_ : off_);
+        } else if(!toggle_.armed(now)) {
+            lit_ = !lit_;
+            toggle_.restart(lit_ ? on_ : off_, now);
         }
 
         Digits const* shown = &digits_;
@@ -600,8 +601,8 @@ public:
 
         bool changed = false;
         if constexpr(Multiplexed) {
-            if(now < scanAt_) { return false; }
-            scanAt_   = now + std::chrono::duration_cast<Duration>(DigitPeriod);
+            if(scan_.armed(now)) { return false; }
+            scan_.restart(std::chrono::duration_cast<Duration>(DigitPeriod), now);
             position_ = (position_ + 1) % Count;
             (void)backend_.show(scanFrame<Outputs>(LayoutV, *shown, Count));
             changed = backend_.show(scanFrame<Outputs>(LayoutV, *shown, position_));
@@ -635,16 +636,17 @@ private:
         }
     }
 
-    B             backend_;
-    Digits        digits_{};
-    Duration      on_{std::chrono::duration_cast<Duration>(BlinkOn)};
-    Duration      off_{std::chrono::duration_cast<Duration>(BlinkOff)};
-    TimePoint     toggleAt_{};
-    TimePoint     scanAt_{};
-    std::size_t   position_{Count - 1};
-    std::uint32_t updates_{};
-    bool          blinking_{};
-    bool          lit_{true};
+    B        backend_;
+    Digits   digits_{};
+    Duration on_{std::chrono::duration_cast<Duration>(BlinkOn)};
+    Duration off_{std::chrono::duration_cast<Duration>(BlinkOff)};
+    // Stopped = due at once: the next update() toggles / switches to the next digit.
+    Kvasir::Deadline<typename TimePoint::clock> toggle_{};
+    Kvasir::Deadline<typename TimePoint::clock> scan_{};
+    std::size_t                                 position_{Count - 1};
+    std::uint32_t                               updates_{};
+    bool                                        blinking_{};
+    bool                                        lit_{true};
 };
 
 }   // namespace Kvasir::SegmentDisplay

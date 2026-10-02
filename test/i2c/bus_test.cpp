@@ -12,6 +12,7 @@
 #include <functional>
 #include <kvasir/Devices/I2C/Bus.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
+#include <kvasir/Devices/I2C/DeviceSet.hpp>
 #include <kvasir/Devices/I2C/MonoPanel.hpp>
 #include <kvasir/Devices/I2C/Mux.hpp>
 #include <kvasir/Devices/I2C/Scanner.hpp>
@@ -45,15 +46,16 @@ void scanner() {
     using Scan = Scanner<FakeBus, FakeClock, Cat>;
     bool                      busFault = false;
     std::vector<std::uint8_t> probed;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            probed.push_back(a);
-            if(busFault && a == 0x50) { return FakeBus::Result::failed; }
-            if(a != 0x23 && a != 0x48) { return FakeBus::Result::notAcknowledged; }
-            static_cast<void>(sent);
-            if(!recv.empty()) { recv[0] = std::byte{0x00}; }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const          answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          probed.push_back(a);
+          if(busFault && a == 0x50) { return FakeBus::Result::failed; }
+          if(a != 0x23 && a != 0x48) { return FakeBus::Result::notAcknowledged; }
+          static_cast<void>(sent);
+          if(!recv.empty()) { recv[0] = std::byte{0x00}; }
+          return FakeBus::Result::succeeded;
+      }};
     Scan sc{};
     sc.start();
     for(int i = 0; i < 1000 && !sc.done(); ++i) {
@@ -437,6 +439,14 @@ namespace BusMetaTest {
         using Reads = List<Data>;
     };
 
+    /// What a device offers for Stamped::Data (the timestamps-off test).
+    template<typename D>
+    concept HasGaps = requires(D& d) { d.template takeGaps<Stamped::Data>(); };
+    template<typename D>
+    concept HasStamp = requires(D const& d) { d.template stamp<Stamped::Data>(); };
+    template<typename D>
+    concept HasUnchanged = requires(D const& d) { d.template unchanged<Stamped::Data>(); };
+
 }   // namespace BusMetaTest
 
 void busMetadata() {
@@ -549,6 +559,24 @@ void busMetadata() {
     checkEq(gaps.late, 1U, "and the one gap of two periods or more");
     check(runUntil(st, [&] { return st.samples() >= before + 10; }, 200ms), "and on");
     checkEq(st.takeGaps<Stamped::Data>().late, 0U, "none since: taken and cleared");
+
+    testCase("timestamps off: a timestamped group samples on, without the time and its gaps");
+    fresh();
+    FakeBus::respond = zeros;
+    using NoStampBus = Kvasir::I2C::WithFeatures<FakeBus,
+                                                 Kvasir::I2C::EngineFeatures{.switchable  = true,
+                                                                             .presence    = true,
+                                                                             .inFlightNet = true,
+                                                                             .timestamps  = false}>;
+    using Unstamped  = Kvasir::I2C::Device<NoStampBus, FakeClock, Stamped>;
+    static_assert(!BusMetaTest::HasGaps<Unstamped>, "no gaps without timestamps");
+    static_assert(!BusMetaTest::HasStamp<Unstamped>, "and no time");
+    static_assert(BusMetaTest::HasUnchanged<Unstamped>, "the unchanged count stays");
+    static_assert(BusMetaTest::HasGaps<Dev<Stamped>> && BusMetaTest::HasStamp<Dev<Stamped>>,
+                  "all three with them");
+    static_assert(sizeof(Unstamped) < sizeof(Dev<Stamped>), "the time and the gaps are not kept");
+    Unstamped un{};
+    check(runUntil(un, [&] { return un.samples() >= 5; }, 200ms), "samples as before");
 }
 
 // -- two buses: a FakeBusFor per tag, each with its own queue, model and transcript -------
@@ -649,7 +677,41 @@ void twoBuses() {
 
 }   // namespace
 
+namespace {
+
+void deviceSet() {
+    using namespace BusTest;
+    using PairBus = Kvasir::I2C::Bus<RatedBus, FakeClock, Bh, Veml>;
+    using Parts   = Kvasir::I2C::DeviceSet<PairBus, Sht>;
+    static_assert(Parts::SetOpsT::CoreCount == 3,
+                  "one set over the Bus's chips and the lone part's");
+    static_assert(
+      std::is_same_v<Parts::SetOpsT,
+                     Kvasir::I2C::detail::SetOpsFor<Parts::PortT, FakeClock, Bh, Veml, Sht>>,
+      "the same set as the three devices on one Bus: one engine");
+    static_assert(Parts::SetOpsT::Flags
+                    == Kvasir::I2C::detail::SetFlags{.anyGate = false, .anyReset = false},
+                  "no gate, no reset line: the engine's paths for them are left out");
+    static_assert(BusMetaTest::Two::Flags.anyGate, "a Bus behind a switch has gates");
+
+    testCase("DeviceSet: a Bus and a part on its own driven as one device set");
+    fresh();
+    Wiring wiring{};
+    FakeBus::respond = std::ref(wiring);
+    Parts parts{};
+    checkEq(parts.get<Sht>().setIndex_, std::uint8_t{2}, "the lone part is the set's third chip");
+    runFor(parts, 1500ms);
+    check(parts.get<PairBus>().get<Bh>().valid() && parts.get<PairBus>().get<Veml>().valid(),
+          "the Bus's parts read");
+    check(parts.get<Sht>().valid(), "and so does the one on its own");
+    parts.restart();
+    check(!parts.get<Sht>().valid(), "restart() starts every part over");
+}
+
+}   // namespace
+
 int main() {
+    deviceSet();
     scanner();
     bus();
     busMetadata();

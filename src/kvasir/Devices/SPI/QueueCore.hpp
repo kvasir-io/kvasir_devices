@@ -6,6 +6,7 @@
 // main loop, a callback or any interrupt; each runs under the policy's mask, depth-counted. A
 // callback runs where the completion is found (DMA interrupt on the RP, handler() on the SAM), from
 // a copy of itself, and may submit(), releaseHold() or reset(); what it submits starts after it.
+#include "../I2C/EngineFeatures.hpp"
 #include "../Log.hpp"
 #include "kvasir/Atomic/Queue.hpp"
 #include "kvasir/Util/RateLimiter.hpp"
@@ -18,6 +19,7 @@
 #include <limits>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 namespace Kvasir { namespace SPI {
 
@@ -74,6 +76,19 @@ namespace Kvasir { namespace SPI {
         bool             wide{};
     };
 
+    /// What a queue keeps beside moving frames: `Timing::QueueFeatures`, else all of it. Off,
+    /// a part costs nothing, and its accessors do not compile.
+    struct QueueCoreFeatures {
+        /// takeLatency(): the queue wait and the lateness of every transfer - a time stamp in
+        /// every queue slot and a clock read per submit().
+        bool latency = true;
+        /// timeouts(), overruns(), holdTimeouts(), drainedRequests(), resuscitations(),
+        /// staleCompletions(), transfers(), refused().
+        bool counters = true;
+        /// lastTimeout() / logLastTimeout(): the hardware's state at the last timeout.
+        bool timeoutSnapshot = true;
+    };
+
     struct QueueCoreDefaults {
         /// Timeout = 2 x wire time + this.
         static constexpr std::chrono::microseconds TimeoutMargin{2000};
@@ -117,6 +132,14 @@ namespace Kvasir { namespace SPI {
               { s.usPerBitQ10 } -> std::convertible_to<std::uint32_t>;
           },
           "a policy's Setup carries hz and usPerBitQ10 (SPI::usPerBitQ10(hz))");
+
+        static constexpr QueueCoreFeatures Features = [] {
+            if constexpr(requires { Timing::QueueFeatures; }) {
+                return QueueCoreFeatures{Timing::QueueFeatures};
+            } else {
+                return QueueCoreFeatures{};
+            }
+        }();
 
         static constexpr auto TimeoutMargin = [] {
             if constexpr(requires { Timing::TimeoutMargin; }) {
@@ -198,12 +221,12 @@ namespace Kvasir { namespace SPI {
             bool accepted = false;
             if(holding_ && req.lines.select == holder_.select) {
                 if(!haveContinuation_) {
-                    continuation_     = Entry{req, Clock::now()};
+                    continuation_     = entryOf_(req);
                     haveContinuation_ = true;
                     accepted          = true;
                 }
             } else if(queue_.size() < queue_.max_size()) {
-                queue_.push(Entry{req, Clock::now()});
+                queue_.push(entryOf_(req));
                 accepted = true;
             }
             if(accepted) { tryStart_(); }
@@ -250,14 +273,14 @@ namespace Kvasir { namespace SPI {
             lock_();
             if(active_ && now > deadline_) {
                 ++timeouts_;
-                lastTimeout_ = snapshot_(now);
+                if constexpr(Features.timeoutSnapshot) { lastTimeout_ = snapshot_(now); }
                 KVASIR_LOG_LIMITED(faultLog_.allow(rateLimitKey(Fault::timeout), now),
                                    UC_LOG_W,
                                    "spi{} transfer of {} frame(s) lost: {} us, {} expected",
                                    Hw::Instance,
-                                   lastTimeout_.frames,
-                                   lastTimeout_.usAge,
-                                   lastTimeout_.usExpected);
+                                   frames_,
+                                   usSince_(now),
+                                   static_cast<std::uint32_t>(expected_.count()));
                 Hw::abort();
                 finish_(Result::failed);
                 tryStart_();
@@ -307,30 +330,68 @@ namespace Kvasir { namespace SPI {
 
         // -- counters ---------------------------------------------------------------------------
 
-        static std::uint32_t timeouts() { return timeouts_; }
+        static std::uint32_t timeouts()
+            requires(Features.counters)
+        {
+            return timeouts_;
+        }
 
-        static std::uint32_t overruns() { return overruns_; }
+        static std::uint32_t overruns()
+            requires(Features.counters)
+        {
+            return overruns_;
+        }
 
-        static std::uint32_t holdTimeouts() { return holdTimeouts_; }
+        static std::uint32_t holdTimeouts()
+            requires(Features.counters)
+        {
+            return holdTimeouts_;
+        }
 
         /// Failed without going on the wire.
-        static std::uint32_t drainedRequests() { return drained_; }
+        static std::uint32_t drainedRequests()
+            requires(Features.counters)
+        {
+            return drained_;
+        }
 
         static std::uint32_t consecutiveFailures() { return consecutiveFailures_; }
 
-        static std::uint32_t resuscitations() { return resuscitations_; }
+        static std::uint32_t resuscitations()
+            requires(Features.counters)
+        {
+            return resuscitations_;
+        }
 
         /// Completions that came after their transfer's timeout.
-        static std::uint32_t staleCompletions() { return stale_; }
+        static std::uint32_t staleCompletions()
+            requires(Features.counters)
+        {
+            return stale_;
+        }
 
-        static std::uint32_t transfers() { return transfers_; }
+        static std::uint32_t transfers()
+            requires(Features.counters)
+        {
+            return transfers_;
+        }
 
         /// Not wellFormed(): a driver bug.
-        static std::uint32_t refused() { return refused_; }
+        static std::uint32_t refused()
+            requires(Features.counters)
+        {
+            return refused_;
+        }
 
-        static TimeoutSnapshot const& lastTimeout() { return lastTimeout_; }
+        static TimeoutSnapshot const& lastTimeout()
+            requires(Features.timeoutSnapshot)
+        {
+            return lastTimeout_;
+        }
 
-        static void logLastTimeout() {
+        static void logLastTimeout()
+            requires(Features.timeoutSnapshot)
+        {
             [[maybe_unused]] auto const& t = lastTimeout_;
             UC_LOG_W(
               "spi{} last timeout: {} frame(s), {} us old, {} us expected, {} queued "
@@ -345,7 +406,9 @@ namespace Kvasir { namespace SPI {
         }
 
         /// Taken and cleared.
-        static Latency takeLatency() {
+        static Latency takeLatency()
+            requires(Features.latency)
+        {
             lock_();
             Latency const l = latency_;
             latency_        = {};
@@ -363,11 +426,13 @@ namespace Kvasir { namespace SPI {
                 return;
             }
             auto const now = Clock::now();
-            auto const late
-              = std::chrono::duration_cast<std::chrono::microseconds>(now - startedAt_ - expected_)
-                  .count();
-            if(late > 0 && static_cast<std::uint32_t>(late) > latency_.lateUs) {
-                latency_.lateUs = static_cast<std::uint32_t>(late);
+            if constexpr(Features.latency) {
+                auto const late = std::chrono::duration_cast<std::chrono::microseconds>(
+                                    now - startedAt_ - expected_)
+                                    .count();
+                if(late > 0 && static_cast<std::uint32_t>(late) > latency_.lateUs) {
+                    latency_.lateUs = static_cast<std::uint32_t>(late);
+                }
             }
             if(overrun) {
                 ++overruns_;
@@ -399,7 +464,8 @@ namespace Kvasir { namespace SPI {
     private:
         struct Entry {
             RequestT request{};
-            tp       queuedAt{};
+            [[no_unique_address]] std::conditional_t<Features.latency, tp, I2C::detail::NoStamp>
+              queuedAt{};
         };
 
         enum class Fault : std::uint8_t { timeout = 1, overrun, holdTimeout };
@@ -424,19 +490,45 @@ namespace Kvasir { namespace SPI {
         inline static std::chrono::microseconds                    expected_{};
         inline static std::uint32_t                                frames_{};
 
-        inline static std::uint32_t   timeouts_{};
-        inline static std::uint32_t   overruns_{};
-        inline static std::uint32_t   holdTimeouts_{};
-        inline static std::uint32_t   drained_{};
-        inline static std::uint32_t   consecutiveFailures_{};
-        inline static std::uint32_t   resuscitations_{};
-        inline static std::uint32_t   stale_{};
-        inline static std::uint32_t   transfers_{};
-        inline static std::uint32_t   refused_{};
-        inline static Latency         latency_{};
-        inline static TimeoutSnapshot lastTimeout_{};
+        /// The optional parts (QueueCoreFeatures, and the log limiter without logging) as members
+        /// of ONE static object, next to a counter that is always there: a static member takes a
+        /// byte even when empty, a [[no_unique_address]] member of a struct takes none.
+        template<typename T>
+        using Counter = I2C::detail::StatCount<Features.counters, T>;
 
-        inline static Kvasir::RateLimiter<Clock> faultLog_{};
+        struct Extras {
+            std::uint32_t                                consecutiveFailures{};   // logic: dead bus
+            [[no_unique_address]] Counter<std::uint32_t> timeouts{};
+            [[no_unique_address]] Counter<std::uint32_t> overruns{};
+            [[no_unique_address]] Counter<std::uint32_t> holdTimeouts{};
+            [[no_unique_address]] Counter<std::uint32_t> drained{};
+            [[no_unique_address]] Counter<std::uint32_t> resuscitations{};
+            [[no_unique_address]] Counter<std::uint32_t> stale{};
+            [[no_unique_address]] Counter<std::uint32_t> transfers{};
+            [[no_unique_address]] Counter<std::uint32_t> refused{};
+            [[no_unique_address]] std::
+              conditional_t<Features.latency, Latency, I2C::detail::NoStamp> latency{};
+            [[no_unique_address]] std::conditional_t<Features.timeoutSnapshot,
+                                                     TimeoutSnapshot,
+                                                     I2C::detail::NoStamp>   lastTimeout{};
+            [[no_unique_address]] Kvasir::LogRateLimiter<Clock>              faultLog{};
+        };
+
+        inline static Extras x_{};
+
+        // The old names, so the code reads as before.
+        static constexpr auto& consecutiveFailures_ = x_.consecutiveFailures;
+        static constexpr auto& timeouts_            = x_.timeouts;
+        static constexpr auto& overruns_            = x_.overruns;
+        static constexpr auto& holdTimeouts_        = x_.holdTimeouts;
+        static constexpr auto& drained_             = x_.drained;
+        static constexpr auto& resuscitations_      = x_.resuscitations;
+        static constexpr auto& stale_               = x_.stale;
+        static constexpr auto& transfers_           = x_.transfers;
+        static constexpr auto& refused_             = x_.refused;
+        static constexpr auto& latency_             = x_.latency;
+        static constexpr auto& lastTimeout_         = x_.lastTimeout;
+        static constexpr auto& faultLog_            = x_.faultLog;
 
         // Non-incrementing DMA source/sink: MOSI high while reading, what a write clocks in.
         alignas(2) inline static std::byte const fill_[2]{std::byte{0xFF},
@@ -453,15 +545,26 @@ namespace Kvasir { namespace SPI {
             if(--lockDepth_ == 0) { Hw::unmask(); }
         }
 
+        /// Microseconds since the transfer on the wire started.
+        static std::uint32_t usSince_(tp now) {
+            return static_cast<std::uint32_t>(
+              std::chrono::duration_cast<std::chrono::microseconds>(now - startedAt_).count());
+        }
+
+        static Entry entryOf_(RequestT const& r) {
+            Entry e{.request = r};
+            if constexpr(Features.latency) { e.queuedAt = Clock::now(); }
+            return e;
+        }
+
         static TimeoutSnapshot snapshot_(tp now) {
             return TimeoutSnapshot{
               .hw         = Hw::snapshot(),
               .frames     = frames_,
               .usExpected = static_cast<std::uint32_t>(expected_.count()),
-              .usAge      = static_cast<std::uint32_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(now - startedAt_).count()),
-              .queued = static_cast<std::uint32_t>(queue_.size()),
-              .held   = holding_,
+              .usAge      = usSince_(now),
+              .queued     = static_cast<std::uint32_t>(queue_.size()),
+              .held       = holding_,
             };
         }
 
@@ -517,11 +620,13 @@ namespace Kvasir { namespace SPI {
             auto const t   = inCommand_ ? commandOf_(r) : transferOf_(r);
             auto const now = Clock::now();
 
-            auto const waited
-              = std::chrono::duration_cast<std::chrono::microseconds>(now - current_.queuedAt)
-                  .count();
-            if(waited > 0 && static_cast<std::uint32_t>(waited) > latency_.queueWaitUs) {
-                latency_.queueWaitUs = static_cast<std::uint32_t>(waited);
+            if constexpr(Features.latency) {
+                auto const waited
+                  = std::chrono::duration_cast<std::chrono::microseconds>(now - current_.queuedAt)
+                      .count();
+                if(waited > 0 && static_cast<std::uint32_t>(waited) > latency_.queueWaitUs) {
+                    latency_.queueWaitUs = static_cast<std::uint32_t>(waited);
+                }
             }
 
             // Before CS goes low, so SCK settles to a new idle level first.

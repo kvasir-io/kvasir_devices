@@ -60,6 +60,10 @@ function(kvasir_devices_warnings target)
                     -Wno-nrvo
                     -Wno-exit-time-destructors
                     -Wno-global-constructors
+                    # clang 23: only proposals for [[clang::lifetimebound]] marks, off in the firmware build too
+                    # (Kvasir_SDK/cmake/arm_clang.cmake); the dangling-reference checks stay on.
+                    -Wno-lifetime-safety-intra-tu-suggestions
+                    -Wno-lifetime-safety-intra-tu-constructor-suggestions
                     -fsanitize=address,undefined
                     -fno-omit-frame-pointer)
         target_link_options(${target} PRIVATE -fsanitize=address,undefined)

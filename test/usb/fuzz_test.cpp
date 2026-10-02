@@ -29,6 +29,24 @@ constexpr std::size_t  Ep    = 1;
 constexpr std::uint8_t InEp  = 0x81;
 constexpr std::uint8_t OutEp = 0x01;
 
+/// What has to come out. A struct rather than locals captured by a lambda: clang 23's lifetime analysis takes a
+/// container captured by reference as a borrow of its contents, so every later clear() looked like a use after
+/// invalidation (-Wlifetime-safety-invalidation).
+struct Model {
+    std::deque<std::vector<std::byte>> expectedMessages;   // sent, not yet fully read
+    std::vector<std::byte>             reading;            // the transfer the host is in
+    std::deque<std::byte>              expectedBytes;      // acknowledged to the host, not yet read
+    bool                               inHalted{};
+    bool                               outHalted{};
+
+    void dropInFlight() {
+        expectedMessages.clear();
+        reading.clear();
+        expectedBytes.clear();
+        inHalted = outHalted = false;
+    }
+};
+
 template<typename Fake>
 bool run(char const*   name,
          bool          eager,
@@ -41,24 +59,13 @@ bool run(char const*   name,
     auto const   pick
       = [&](std::size_t n) { return std::uniform_int_distribution<std::size_t>{0, n - 1}(rng); };
 
-    // The model.
-    std::deque<std::vector<std::byte>> expectedMessages;   // sent, not yet fully read
-    std::vector<std::byte>             reading;            // the transfer the host is in
-    std::deque<std::byte>              expectedBytes;      // acknowledged to the host, not yet read
-    bool                               inHalted  = false;
-    bool                               outHalted = false;
-    std::size_t                        counter   = 0;
-    int                                before    = failures;
+    Model       model;
+    std::size_t counter = 0;
+    int         before  = failures;
 
-    auto const dropInFlight = [&] {
-        expectedMessages.clear();
-        reading.clear();
-        expectedBytes.clear();
-        inHalted = outHalted = false;
-    };
     auto const bringUp = [&] {
         check(Host::enumerate(), "enumerated");
-        dropInFlight();
+        model.dropInFlight();
         check(Device::getRecvBuffer().empty(), "the application polls: the OUT endpoint is armed");
     };
 
@@ -73,7 +80,9 @@ bool run(char const*   name,
             {   // the application sends a message
                 std::size_t const size = pick(5) == 0 ? pick(3) * 64 : pick(399);
                 auto const        msg  = pattern(size, ++counter);
-                if(Device::isSendReady() && Device::send(msg)) { expectedMessages.push_back(msg); }
+                if(Device::isSendReady() && Device::send(msg)) {
+                    model.expectedMessages.push_back(msg);
+                }
                 break;
             }
         case 2:
@@ -82,17 +91,20 @@ bool run(char const*   name,
             {   // the host reads a packet
                 auto in = Fake::hostIn(Ep);
                 Host::pump();
-                if(inHalted) {
+                if(model.inHalted) {
                     check(in.handshake == Fake::Handshake::stall, "a halted endpoint reads STALL");
                     break;
                 }
                 if(in.handshake != Fake::Handshake::ack) { break; }
-                reading.insert(reading.end(), in.packet.data.begin(), in.packet.data.end());
+                model.reading.insert(model.reading.end(),
+                                     in.packet.data.begin(),
+                                     in.packet.data.end());
                 if(in.packet.data.size() < Fake::MaxPacket) {
-                    check(!expectedMessages.empty() && reading == expectedMessages.front(),
+                    check(!model.expectedMessages.empty()
+                            && model.reading == model.expectedMessages.front(),
                           "a transfer is the oldest message, whole");
-                    if(!expectedMessages.empty()) { expectedMessages.pop_front(); }
-                    reading.clear();
+                    if(!model.expectedMessages.empty()) { model.expectedMessages.pop_front(); }
+                    model.reading.clear();
                 }
                 break;
             }
@@ -105,9 +117,9 @@ bool run(char const*   name,
                 auto const hs   = Fake::hostOut(Ep, data);
                 Host::pump();
                 if(hs == Fake::Handshake::ack) {
-                    expectedBytes.insert(expectedBytes.end(), data.begin(), data.end());
+                    model.expectedBytes.insert(model.expectedBytes.end(), data.begin(), data.end());
                 }
-                check(hs != Fake::Handshake::stall || outHalted, "STALL only while halted");
+                check(hs != Fake::Handshake::stall || model.outHalted, "STALL only while halted");
                 break;
             }
         case 7:
@@ -116,16 +128,16 @@ bool run(char const*   name,
                 std::size_t n = pick(200);
                 std::byte   b{};
                 while(n-- != 0 && Device::getRecvBuffer().pop_into(b)) {
-                    check(!expectedBytes.empty() && expectedBytes.front() == b,
+                    check(!model.expectedBytes.empty() && model.expectedBytes.front() == b,
                           "a byte read is the oldest byte written");
-                    if(!expectedBytes.empty()) { expectedBytes.pop_front(); }
+                    if(!model.expectedBytes.empty()) { model.expectedBytes.pop_front(); }
                 }
                 break;
             }
         case 9:
             {   // a halt, or its clear: nothing is lost across either
                 bool const in     = pick(2) == 0;
-                bool&      halted = in ? inHalted : outHalted;
+                bool&      halted = in ? model.inHalted : model.outHalted;
                 check(
                   (halted ? Host::clearHalt(in ? InEp : OutEp) : Host::setHalt(in ? InEp : OutEp))
                     .ok(),
@@ -141,7 +153,7 @@ bool run(char const*   name,
                     check(Host::controlOut(Host::makeSetup(0x01, 11, 0, 0, 0)).ok(),
                           "SET_INTERFACE");
                 }
-                dropInFlight();
+                model.dropInFlight();
                 check(Device::getRecvBuffer().empty(), "received data is dropped with it");
             }
             break;
@@ -155,29 +167,30 @@ bool run(char const*   name,
     }
 
     // Everything still owed arrives.
-    if(inHalted) { check(Host::clearHalt(InEp).ok(), "halt cleared"); }
-    for(int i = 0; i != 64 && !expectedMessages.empty() && failures == before; ++i) {
+    if(model.inHalted) { check(Host::clearHalt(InEp).ok(), "halt cleared"); }
+    for(int i = 0; i != 64 && !model.expectedMessages.empty() && failures == before; ++i) {
         auto const r = Host::bulkIn(Ep);
-        reading.insert(reading.end(), r.data.begin(), r.data.end());
+        model.reading.insert(model.reading.end(), r.data.begin(), r.data.end());
         if(r.endedShort) {
-            check(reading == expectedMessages.front(), "a queued message arrives in the end");
-            expectedMessages.pop_front();
-            reading.clear();
+            check(model.reading == model.expectedMessages.front(),
+                  "a queued message arrives in the end");
+            model.expectedMessages.pop_front();
+            model.reading.clear();
         }
     }
-    check(expectedMessages.empty(), "no message is left over");
+    check(model.expectedMessages.empty(), "no message is left over");
     std::byte b{};
     // Whole packets a controller still holds come up once the reading side has looked twice,
     // a while apart.
     for(int look = 0; look != 3; ++look) {
         while(Device::getRecvBuffer().pop_into(b)) {
-            check(!expectedBytes.empty() && expectedBytes.front() == b,
+            check(!model.expectedBytes.empty() && model.expectedBytes.front() == b,
                   "the rest of the bytes, in order");
-            if(!expectedBytes.empty()) { expectedBytes.pop_front(); }
+            if(!model.expectedBytes.empty()) { model.expectedBytes.pop_front(); }
         }
         Clock::advance(std::chrono::milliseconds{3});
     }
-    check(expectedBytes.empty(), "no acknowledged byte is missing");
+    check(model.expectedBytes.empty(), "no acknowledged byte is missing");
     checkEq(Fake::violations, 0, "the backend contract was kept");
 
     Fake::eagerInterrupts = false;

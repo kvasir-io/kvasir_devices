@@ -31,13 +31,15 @@ void ht16k33() {
     testCase("HT16K33");
     fresh();
     std::vector<std::vector<std::uint8_t>> sent;
-    FakeBus::respond = [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
-        if(addr != 0x70) { return FakeBus::Result::notAcknowledged; }
-        std::vector<std::uint8_t> v;
-        for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
-        sent.push_back(v);
-        return FakeBus::Result::succeeded;
-    };
+    ScopedHook const                       answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
+          if(addr != 0x70) { return FakeBus::Result::notAcknowledged; }
+          std::vector<std::uint8_t> v;
+          for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
+          sent.push_back(v);
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Ht16k33> d{};
     check(runUntil(
             d,
@@ -64,13 +66,15 @@ void lcd1602() {
     testCase("LCD1602 (HD44780 behind a PCF8574)");
     fresh();
     std::vector<std::vector<std::uint8_t>> sent;
-    FakeBus::respond = [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
-        if(addr != 0x27) { return FakeBus::Result::notAcknowledged; }
-        std::vector<std::uint8_t> v;
-        for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
-        sent.push_back(v);
-        return FakeBus::Result::succeeded;
-    };
+    ScopedHook const                       answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
+          if(addr != 0x27) { return FakeBus::Result::notAcknowledged; }
+          std::vector<std::uint8_t> v;
+          for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
+          sent.push_back(v);
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Lcd1602> d{};
     check(runUntil(d, [&] { return d.answering() && !d.pending(); }, 1s), "bring-up completes");
     check(sent.size() >= 9 && sent[0] == std::vector<std::uint8_t>{0x3C, 0x38}
@@ -93,13 +97,15 @@ void lcd1602() {
     testCase("LCD2004: twenty columns, rows 2 and 3 at DDRAM 0x14 and 0x54");
     fresh();
     sent.clear();
-    FakeBus::respond = [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
-        if(addr != 0x27) { return FakeBus::Result::notAcknowledged; }
-        std::vector<std::uint8_t> v;
-        for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
-        sent.push_back(v);
-        return FakeBus::Result::succeeded;
-    };
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
+          if(addr != 0x27) { return FakeBus::Result::notAcknowledged; }
+          std::vector<std::uint8_t> v;
+          for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
+          sent.push_back(v);
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Lcd2004> w{};
     check(runUntil(w, [&] { return w.answering() && !w.pending(); }, 1s), "bring-up completes");
     w.set<Chips::Lcd2004::Line>(3, Chips::Lcd2004::Text::of("20x4"));
@@ -270,16 +276,17 @@ void ssd1306() {
 
     testCase("SSD1315: a failure mid-page retries the page from its window command");
     fresh();
-    int nak = 1;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte>) {
-            if(addr != 0x3C) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty() && static_cast<std::uint8_t>(sent[0]) == 0x40 && nak > 0) {
-                --nak;
-                return FakeBus::Result::notAcknowledged;
-            }
-            return FakeBus::Result::succeeded;
-        };
+    int              nak = 1;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte>) {
+          if(addr != 0x3C) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty() && static_cast<std::uint8_t>(sent[0]) == 0x40 && nak > 0) {
+              --nak;
+              return FakeBus::Result::notAcknowledged;
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<W> f{};
     check(runUntil(
             f,

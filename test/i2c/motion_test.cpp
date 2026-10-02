@@ -138,15 +138,16 @@ void lsm303agr() {
     la.set(0x0C, {0x34, 0x12});   // temperature raw 0x1234
     la.readOnly = {0x0F, 0x0C, 0x0D, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D};
     // the accelerometer takes auto-increment as the sub-address MSB
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(a == 0x19 && !sent.empty() && !recv.empty()) {
-                std::array<std::byte, 1> r{
-                  static_cast<std::byte>(static_cast<std::uint8_t>(sent[0]) & 0x7FU)};
-                return la(a, r, recv);
-            }
-            return la(a, sent, recv);
-        };
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(a == 0x19 && !sent.empty() && !recv.empty()) {
+              std::array<std::byte, 1> r{
+                static_cast<std::byte>(static_cast<std::uint8_t>(sent[0]) & 0x7FU)};
+              return la(a, r, recv);
+          }
+          return la(a, sent, recv);
+      }};
     Dev<Chips::Lsm303agrAccel<>> l3{};
     check(runUntil(l3, [&] { return l3.valid(); }, 500ms), "first sample");
     check(l3.identified(), "WHO_AM_I_A 0x33");
@@ -179,15 +180,16 @@ void lsm303agr() {
     lm3.set(0x4F, {0x40});
     lm3.set(0x67, {0x08, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00});   // STATUS_REG_M zyxda; x = 1000
     lm3.readOnly = {0x4F, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D};
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(a == 0x1E && !sent.empty() && !recv.empty()) {
-                std::array<std::byte, 1> r{
-                  static_cast<std::byte>(static_cast<std::uint8_t>(sent[0]) & 0x7FU)};
-                return lm3(a, r, recv);
-            }
-            return lm3(a, sent, recv);
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(a == 0x1E && !sent.empty() && !recv.empty()) {
+              std::array<std::byte, 1> r{
+                static_cast<std::byte>(static_cast<std::uint8_t>(sent[0]) & 0x7FU)};
+              return lm3(a, r, recv);
+          }
+          return lm3(a, sent, recv);
+      }};
     Dev<Chips::Lsm303agrMag<>> l3m{};
     check(runUntil(l3m, [&] { return l3m.valid(); }, 500ms), "magnetometer sample");
     check(l3m.identified(), "WHO_AM_I_M 0x40");
@@ -222,15 +224,16 @@ void iis2dulpx() {
     iis.set(0x25, {0x01});   // STATUS: DRDY
     iis.readOnly = {0x0F, 0x25, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F};
     // deep power-down: the address is NAKed while the part powers up
-    int asleep = 2;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(asleep > 0) {
-                --asleep;
-                return FakeBus::Result::notAcknowledged;
-            }
-            return iis(a, sent, recv);
-        };
+    int              asleep = 2;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(asleep > 0) {
+              --asleep;
+              return FakeBus::Result::notAcknowledged;
+          }
+          return iis(a, sent, recv);
+      }};
     Dev<Chips::Iis2dulpx<>> iu{};
     check(runUntil(iu, [&] { return iu.valid(); }, 500ms), "first sample");
     check(iu.identified(), "WHO_AM_I 0x47");
@@ -373,16 +376,17 @@ void lsm9ds1() {
     mg.set(0x0F, {0x3D});
     mg.set(0x27, {0x08, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00});   // STATUS_REG_M ZYXDA, then x = 4096
     mg.readOnly = {0x0F, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D};
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(a == 0x1E && !sent.empty() && !recv.empty()) {
-                // the magnetometer takes auto-increment as the sub-address MSB
-                std::array<std::byte, 1> r{
-                  static_cast<std::byte>(static_cast<std::uint8_t>(sent[0]) & 0x7FU)};
-                return mg(a, r, recv);
-            }
-            return mg(a, sent, recv);
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(a == 0x1E && !sent.empty() && !recv.empty()) {
+              // the magnetometer takes auto-increment as the sub-address MSB
+              std::array<std::byte, 1> r{
+                static_cast<std::byte>(static_cast<std::uint8_t>(sent[0]) & 0x7FU)};
+              return mg(a, r, recv);
+          }
+          return mg(a, sent, recv);
+      }};
     Dev<Chips::Lsm9ds1Mag<>> lm{};
     check(runUntil(lm, [&] { return lm.valid(); }, 500ms), "magnetometer sample");
     check(lm.identified(), "WHO_AM_I_M 0x3D");

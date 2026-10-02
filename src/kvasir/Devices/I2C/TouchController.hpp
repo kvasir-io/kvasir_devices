@@ -78,6 +78,7 @@ template<typename I2c,
 struct Controller : Kvasir::I2C::detail::ResetClaims<Reset> {
     using Chip      = Kvasir::I2C::Chips::TouchPanel<Ctrl, Config>;
     using Device    = Kvasir::I2C::Device<I2c, Clock, Chip, Config, Reset>;
+    using DeviceT   = Device;   ///< for a DeviceSet (DeviceSet.hpp)
     using Data      = typename Chip::Data;
     using Sample    = typename Chip::Sample;
     using TimePoint = typename Clock::time_point;
@@ -145,7 +146,14 @@ struct Controller : Kvasir::I2C::detail::ResetClaims<Reset> {
 
     /// Once per loop turn: the device's own turn, then anything it has to say.
     void handler() {
-        device_.handler();
+        handler([](auto& d) { d.handler(); });
+    }
+
+    /// With `turn(device())` in place of the device's own turn: how a DeviceSet drives it
+    /// together with the other parts of its port (DeviceSet.hpp), one engine for all of them.
+    template<typename Turn>
+    void handler(Turn&& turn) {
+        turn(device_);
 
         if(!device_.answering()) {
             // The controller went away, or is being brought up again. A finger it was

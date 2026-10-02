@@ -2,6 +2,7 @@
 
 #include "Bridge.hpp"
 #include "Device.hpp"
+#include "SetOps.hpp"
 
 #include <array>
 #include <bit>
@@ -401,6 +402,9 @@ namespace detail {
 
 }   // namespace detail
 
+/// Bus(DeferBinding): built unbound, for a DeviceSet to bind with its own device set.
+struct DeferBinding {};
+
 template<typename I2c, typename Clock, typename... Ds>
 class Bus {
 public:
@@ -421,6 +425,31 @@ public:
       detail::firstBehindSwitch<K, Ds...>()>::GateT::Arbiter;
 
     static constexpr std::size_t Count = sizeof...(Ds);
+
+    /// Every member an engine device (a Device, with a chip Core): the Bus drives them as one
+    /// device set, with compile-time hooks (SetOps.hpp) instead of each chip's pointer table.
+    static constexpr bool IsDeviceSet
+      = (requires { typename Ds::Core; } && ...) && sizeof...(Ds) > 0;
+
+    /// The chips of its devices, for a DeviceSet that drives this Bus among others.
+    template<bool Devices_>
+    struct CoresOf {
+        using type = detail::setops::List<>;
+    };
+
+    template<bool Devices_>
+        requires Devices_
+    struct CoresOf<Devices_> {
+        using type = detail::setops::List<typename Ds::Core...>;
+    };
+
+    using ChipCores = typename CoresOf<IsDeviceSet>::type;
+    /// What its devices have (a gate, a reset line), for a DeviceSet's flags.
+    static constexpr detail::SetFlags Flags = detail::flagsOfAll<Ds...>();
+    using PortT                             = detail::PortOf<I2c>;
+
+    using SetOpsT
+      = std::conditional_t<IsDeviceSet, detail::SetOpsFor<detail::PortOf<I2c>, Clock, Ds...>, void>;
 
     /// Whether a device is one of the Bus's parts: anything but a Broadcast (Concepts.hpp),
     /// which is written on demand and has nothing to answer until then.
@@ -488,10 +517,17 @@ public:
 
     /// The same as a fraction of the bus clock: 0.42 is "the periodic traffic wants 42% of a
     /// 400 kHz bus". Available when the bus type says what it is clocked at.
+    /// On a bus that runs each device at its own clock (I2CConfig::perDeviceClock) it is the
+    /// share of the time: each device's bits over the rate it runs at (Device::BusHz).
     [[nodiscard]] static constexpr double busLoad()
         requires(detail::HasBaudRate<I2c>)
     {
-        return bitsPerSecond() / static_cast<double>(I2c::BaudRate);
+        if constexpr((Ds::PerDeviceClock || ...)) {
+            return ((detail::cyclicBitsPerSecond<Ds>() / static_cast<double>(Ds::BusHz)) + ...
+                    + 0.0);
+        } else {
+            return bitsPerSecond() / static_cast<double>(I2c::BaudRate);
+        }
     }
 
     // -- where the devices are --------------------------------------------------------------
@@ -575,9 +611,27 @@ public:
     ///
     /// The same for a device behind a bridge (Bridge.hpp): the Bus owns the bridge's line,
     /// binds the device to it, and binds the line to the part a PartBridge is switched through.
-    Bus() {
+    Bus() { bindWith<SetOpsT>(); }
+
+    /// For a DeviceSet that drives this Bus as part of a wider device set (DeviceSet.hpp):
+    /// nothing is bound until it calls bindWith<S>(), so this Bus's own set - and an engine copy
+    /// for it - never gets into the image.
+    explicit Bus(DeferBinding) {}
+
+    /// Binds the switches, gates and bridges, the switches' own turns and every device's place
+    /// in the device set S that drives them (SetOps.hpp; `void`: each device's own handler()).
+    template<typename S>
+    void bindWith() {
+        bindSwitchTurns_<S>(std::make_index_sequence<Switches>{});
         bindGates_(std::make_index_sequence<Count>{});
         bindBridgeParts_(std::make_index_sequence<Bridges>{});
+        if constexpr(!std::is_void_v<S>) {
+            std::apply(
+              [](auto&... d) {
+                  ((d.setIndex_ = S::template indexOf<std::remove_cvref_t<decltype(d)>>), ...);
+              },
+              devices_);
+        }
     }
 
     Bus(Bus const&)            = delete;
@@ -615,18 +669,37 @@ public:
 
     /// The bridges' lines, then every device's handler in declaration order. Call once per
     /// main-loop turn, after the bus behavior's own handler.
-    void handler() {
+    void handler() { handlerWith<SetOpsT>(Clock::now()); }
+
+    /// The same, driven by device set S (a DeviceSet's) with its clock reading.
+    template<typename S>
+    void handlerWith(typename Clock::time_point now) {
         handleBridges_(std::make_index_sequence<Bridges>{});
-        // One clock read for every device.
-        auto const now  = Clock::now();
         auto const turn = [&](auto& d) {
-            if constexpr(requires { d.handler(now); }) {
+            if constexpr(!std::is_void_v<S>) {
+                // The engine with the set's compile-time hooks: no table, no pointer.
+                detail::Engine<detail::PortOf<I2c>, Clock>::handler(d, S{}, now);
+            } else if constexpr(requires { d.handler(now); }) {
                 d.handler(now);
             } else {
                 d.handler();
             }
         };
         std::apply([&](auto&... d) { (turn(d), ...); }, devices_);
+    }
+
+    /// One device's turn alone, with the set's engine: for a phase in which only some parts may
+    /// run (i2c_testing's boot scan runs the switch alone). `bus.get<D>().handler()` would do the
+    /// same through the chip's table - a second copy of the engine in the image.
+    template<typename D,
+             typename S = SetOpsT>
+    void handlerOf() {
+        auto& d = std::get<detail::IndexOf<D, Devices>::value>(devices_);
+        if constexpr(!std::is_void_v<S>) {
+            detail::Engine<detail::PortOf<I2c>, Clock>::handler(d, S{}, Clock::now());
+        } else {
+            d.handler();
+        }
     }
 
     /// Every device starts over from its reset (Device::restart()): what a supply the parts
@@ -766,14 +839,46 @@ private:
         (bindGate_<Is>(), ...);
     }
 
+    /// Every switch's own turn, for whatever claims it (its gates, a BusScan's ports): through
+    /// the device set's engine when the Bus is one, else the switch's handler().
+    template<typename S,
+             std::size_t... Ks>
+    void bindSwitchTurns_(std::index_sequence<Ks...>) {
+        (
+          [&] {
+              using Mux = SwitchDeviceAt<Ks>;
+              if constexpr(!std::is_void_v<S>) {
+                  std::get<Ks>(arbiters_).turnSwitch = [](void* m) {
+                      detail::Engine<detail::PortOf<I2c>, Clock>::handler(*static_cast<Mux*>(m),
+                                                                          S{},
+                                                                          Clock::now());
+                  };
+              } else {
+                  std::get<Ks>(arbiters_).turnSwitch
+                    = [](void* m) { static_cast<Mux*>(m)->handler(); };
+              }
+          }(),
+          ...);
+    }
+
     template<std::size_t I>
     void bindGate_() {
         using D = typename detail::Nth<Devices>::template type<I>;
         if constexpr(detail::OnSwitch<typename D::GateT>) {
             // By the switch map and not by the segment: a MuxFrontGate is on segment 0.
             constexpr auto K = detail::switchMap<Ds...>().ordinal[I];
-            std::get<I>(devices_).gate().bind(get<typename D::GateT::Mux>(),
-                                              std::get<K>(arbiters_));
+            using Mux        = typename D::GateT::Mux;
+            using Turn       = void (*)(void*);
+            auto& arbiter    = std::get<K>(arbiters_);
+            if constexpr(requires(D& d, Mux& m, decltype(arbiter) a, Turn t) {
+                             d.gate().bind(m, a, t);
+                         })
+            {
+                // The switch's turn as bindSwitchTurns_() set it (the set's engine).
+                std::get<I>(devices_).gate().bind(get<Mux>(), arbiter, arbiter.turnSwitch);
+            } else {
+                std::get<I>(devices_).gate().bind(get<Mux>(), arbiter);
+            }
         }
         if constexpr(D::Bridged) {
             std::get<I>(devices_).gate().bind(bridge<typename D::GateT::Bridge>());

@@ -1,8 +1,9 @@
 #pragma once
-
 #include "../Log.hpp"
 #include "../ResetLine.hpp"
 #include "Dcs.hpp"
+#include "kvasir/StartUp/Hooks.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <array>
 #include <cassert>
@@ -224,9 +225,9 @@ namespace Kvasir { namespace Display {
 
         static void fail() { state_ = State::failed; }
 
-        static inline typename Clock::time_point failedAt_{};
-        static inline std::uint32_t              failures_{};
-        static inline bool                       failureSeen_{};
+        static inline Kvasir::Deadline<Clock> retry_{};   ///< armed when a failure is seen
+        static inline std::uint32_t           failures_{};
+        static inline bool                    failureSeen_{};
 
         static constexpr unsigned RetryAfterMs = static_cast<unsigned>(Config::RetryAfterMs);
 
@@ -409,7 +410,7 @@ namespace Kvasir { namespace Display {
 
             if(state_ == State::failed && !failureSeen_) {
                 failureSeen_ = true;
-                failedAt_    = now;
+                retry_.restart(std::chrono::milliseconds{RetryAfterMs}, now);
                 ++failures_;
                 UC_LOG_W(
                   "{}: the panel or its bus failed (failure {}), bringing it up again in {} ms",
@@ -479,14 +480,17 @@ namespace Kvasir { namespace Display {
 
             case State::ready: break;
             case State::failed:
-                if(RetryAfterMs != 0 && now - failedAt_ >= std::chrono::milliseconds{RetryAfterMs})
-                {
+                if(RetryAfterMs != 0 && retry_.expired(now)) {
                     Bus::clearError();
                     restart();
                 }
                 break;
             }
         }
+
+        // once per main-loop turn: Startup::run<Kvasir::Hook::MainLoop>() / SecondaryCore::run calls
+        // it (StartUp/Hooks.hpp); a firmware that runs the hook must not also call it by hand
+        using Extends = Kvasir::Startup::Extend<Kvasir::Hook::MainLoop, &DcsPanel::handler>;
     };
 
 }}   // namespace Kvasir::Display

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kvasir/Util/Periodic.hpp"
+
 #include <cstdint>
 
 /// A part that goes on answering and stops delivering: acknowledged transactions, no new
@@ -31,15 +33,15 @@ public:
                  TimePoint now) {
         auto const seq = d.template seq<G>();
         if(!primed_ || seq != lastSeq_ || !d.answering()) {
-            primed_       = true;
-            lastSeq_      = seq;
-            lastProgress_ = now;
+            primed_  = true;
+            lastSeq_ = seq;
+            stall_.restart(stalled_, now);
             return false;
         }
-        if(now - lastProgress_ < stalled_ || now < notBefore_) { return false; }
+        if(stall_.armed(now) || holdOff_.armed(now)) { return false; }
         ++stalls_;
-        notBefore_    = now + between_;
-        lastProgress_ = now;
+        holdOff_.restart(between_, now);
+        stall_.restart(stalled_, now);
         return true;
     }
 
@@ -49,13 +51,13 @@ public:
     [[nodiscard]] Duration stalled() const { return stalled_; }
 
 private:
-    Duration      stalled_;
-    Duration      between_;
-    TimePoint     lastProgress_{};
-    TimePoint     notBefore_{};
-    std::uint32_t lastSeq_{};
-    std::uint32_t stalls_{};
-    bool          primed_{};
+    Duration                             stalled_;
+    Duration                             between_;
+    Kvasir::Deadline<typename D::ClockT> stall_{};     ///< runs from the last progress
+    Kvasir::Deadline<typename D::ClockT> holdOff_{};   ///< no second report before it ends
+    std::uint32_t                        lastSeq_{};
+    std::uint32_t                        stalls_{};
+    bool                                 primed_{};
 };
 
 /// The other way a part can be lost without being gone: it is there, and not at its address.
@@ -81,13 +83,13 @@ public:
     bool handler(D const&  d,
                  TimePoint now) {
         if(!primed_ || d.answering()) {
-            primed_     = true;
-            lastAnswer_ = now;
+            primed_ = true;
+            absence_.restart(absent_, now);
             return false;
         }
-        if(now - lastAnswer_ < absent_ || now < notBefore_) { return false; }
+        if(absence_.armed(now) || holdOff_.armed(now)) { return false; }
         ++count_;
-        notBefore_ = now + between_;
+        holdOff_.restart(between_, now);
         return true;
     }
 
@@ -95,12 +97,12 @@ public:
     [[nodiscard]] std::uint32_t count() const { return count_; }
 
 private:
-    Duration      absent_;
-    Duration      between_;
-    TimePoint     lastAnswer_{};
-    TimePoint     notBefore_{};
-    std::uint32_t count_{};
-    bool          primed_{};
+    Duration                             absent_;
+    Duration                             between_;
+    Kvasir::Deadline<typename D::ClockT> absence_{};   ///< runs from the last answer
+    Kvasir::Deadline<typename D::ClockT> holdOff_{};   ///< no second report before it ends
+    std::uint32_t                        count_{};
+    bool                                 primed_{};
 };
 
 }   // namespace Kvasir::I2C

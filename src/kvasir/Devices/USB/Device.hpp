@@ -232,8 +232,18 @@ private:
     static inline std::span<std::byte const> remainingControlData{};
     static inline bool                       endOfTransferPending{false};
     static inline detail::EP0ControlState    ep0_ctrl{};
-    static inline std::uint8_t               isrMaskDepth{};
-    static inline std::atomic<bool>          suspended{false};
+
+    // Shares one static object with the fault log's limiter, which is empty without logging and
+    // then takes no byte there ([[no_unique_address]] works on members, not on statics).
+    struct MaskAndLog {
+        std::uint8_t isrMaskDepth{};
+        [[no_unique_address]] Kvasir::LogRateLimiter<Clock, Kvasir::RateLimiterConfig{.burst = 8}>
+          faultLog{};
+    };
+
+    static inline MaskAndLog        maskAndLog_{};
+    static constexpr std::uint8_t&  isrMaskDepth = maskAndLog_.isrMaskDepth;
+    static inline std::atomic<bool> suspended{false};
 
     enum class Fault : std::uint8_t {
         unhandledBufferDone = 1,
@@ -244,7 +254,7 @@ private:
     };
     // Fault logging goes through this: a misbehaving host repeats these per packet, from inside
     // the ISR.
-    static inline Kvasir::RateLimiter<Clock, Kvasir::RateLimiterConfig{.burst = 8}> faultLog_{};
+    static constexpr auto& faultLog_ = maskAndLog_.faultLog;
 
     // What the backend's dispatchEvents reports to.
     struct Sink {

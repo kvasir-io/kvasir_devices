@@ -23,8 +23,16 @@ namespace {
 using Tof = Device<FakeBus, FakeClock, Chips::Vl53l1x>;
 
 // The engine carries the configuration eight bytes at a time: nothing over Step::InlineBytes.
-static_assert(Tof::MaxPayload == Step::InlineBytes,
-              "no write over eight bytes");
+static_assert(
+  [] {
+      std::size_t longest = 0;
+      for(auto const& s : Tof::InitSteps) {
+          if(s.kind == Step::Kind::write && s.count > longest) { longest = s.count; }
+      }
+      return longest;
+  }()
+    == Step::InlineBytes,
+  "no write over eight bytes");
 static_assert(
   Tof::InitSteps.size() == 27,
   "the engine's two identity reads and their comparison, then the description's own: the "

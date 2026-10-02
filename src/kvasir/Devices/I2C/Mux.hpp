@@ -143,6 +143,9 @@ struct BasicMuxArbiter {
     std::uint8_t  holders{};          ///< parts of that channel holding it now
     std::uint8_t  waiting{};          ///< a bit per channel refused since it last got it
     std::uint32_t stint{};            ///< steps at every grant: a hold from before it is over
+    /// Runs the switch's own turn now (its channel write): bound by whoever binds the gates -
+    /// a Bus with its device set's engine, a hand-wired gate with the switch's handler().
+    void (*turnSwitch)(void*){};
 
     /// How long a channel held the switch, and when the current holder got it: typed
     /// durations, in whatever the clock counts, so a stats line converts once.
@@ -189,8 +192,17 @@ public:
     /// switch. Called once, before the client runs.
     void bind(Mux&     mux,
               Arbiter& arbiter) {
-        mux_     = &mux;
-        arbiter_ = &arbiter;
+        bind(mux, arbiter, [](void* m) { static_cast<Mux*>(m)->handler(); });
+    }
+
+    /// With the switch's turn run by the caller's engine (Bus: its device set's, SetOps.hpp);
+    /// the two-argument form above would compile the table's engine into the image as well.
+    void bind(Mux&     mux,
+              Arbiter& arbiter,
+              void (*turnSwitch)(void*)) {
+        mux_               = &mux;
+        arbiter_           = &arbiter;
+        arbiter.turnSwitch = turnSwitch;
     }
 
     [[nodiscard]] bool bound() const { return mux_ != nullptr && arbiter_ != nullptr; }
@@ -231,7 +243,7 @@ public:
                 // the switch to lose samples.
                 if(mux_->template value<Channels>() != mask) {
                     mux_->template set<Channels>(mask);
-                    mux_->handler();
+                    arbiter_->turnSwitch(mux_);
                     return false;   // the write has to complete first
                 }
             } else if(arbiter_->holder == position && Policy::mayJoin(*arbiter_, position)) {
@@ -340,6 +352,12 @@ struct MuxGate {
         port_.bind(mux, arbiter);
     }
 
+    void bind(Mux&     mux,
+              Arbiter& arbiter,
+              void (*turnSwitch)(void*)) {
+        port_.bind(mux, arbiter, turnSwitch);
+    }
+
     [[nodiscard]] bool bound() const { return port_.bound(); }
 
     /// True once this part holds the switch *and* the switch has been told (MuxPort::claim).
@@ -397,6 +415,12 @@ struct MuxFrontGate {
     void bind(Mux&     mux,
               Arbiter& arbiter) {
         port_.bind(mux, arbiter);
+    }
+
+    void bind(Mux&     mux,
+              Arbiter& arbiter,
+              void (*turnSwitch)(void*)) {
+        port_.bind(mux, arbiter, turnSwitch);
     }
 
     [[nodiscard]] bool bound() const { return port_.bound(); }

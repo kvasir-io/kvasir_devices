@@ -60,13 +60,15 @@ struct Step {
     bool          fromBuffer{};      ///< write: the payload is buffer[offset, offset + count)
     bool          regFromBuffer{};   ///< the register bytes are buffer[reg, reg + RegisterBytes)
     bool          counted{};         ///< read: its length is in the buffer (readCounted)
+    bool          mayNak{};   ///< write: a NAK is what the part does here, and the script goes on
     std::uint16_t reg{};
     std::uint8_t  count{};    ///< payload bytes (write), bytes read, or a counted read's most
     std::uint8_t  offset{};   ///< in the group's buffer: where a read lands / a payload is taken
     std::uint8_t  countOffset{};   ///< counted read: where in the buffer its count is
     std::uint8_t  countBytes{};    ///< counted read: 1 or 2 (big-endian)
-    bool          mayNak{};   ///< write: a NAK is what the part does here, and the script goes on
-    std::chrono::milliseconds delay{};   ///< after the transaction completes
+    /// After the transaction completes. 32 bits, so a Step is 24 bytes rather than 32: in every
+    /// script in flash and in each device's current step in RAM.
+    Millis32 delay{};
 
     std::array<std::uint8_t, InlineBytes> bytes{};
 
@@ -92,8 +94,8 @@ struct Step {
     static constexpr Step write(WriteArgs a) {
         Step step{.kind        = Kind::write,
                   .hasRegister = true,
-                  .reg         = a.reg,
                   .mayNak      = a.mayNak,
+                  .reg         = a.reg,
                   .delay       = a.delay};
         for(auto const byte : a.payload) {
             if(step.count < InlineBytes) { step.bytes[step.count] = byte; }
@@ -307,16 +309,6 @@ struct Step {
             auto const end = static_cast<std::size_t>(s.reg) + 2;
             n              = end > n ? end : n;
         }
-    }
-    return n;
-}
-
-/// The longest payload any write in the script sends, for the engine's staging buffer. A
-/// counted read stages nothing: what it reads lands in the group's buffer.
-[[nodiscard]] constexpr std::size_t maxPayload(std::span<Step const> steps) {
-    std::size_t n = 0;
-    for(auto const& s : steps) {
-        if(s.kind == Step::Kind::write && s.count > n) { n = s.count; }
     }
     return n;
 }

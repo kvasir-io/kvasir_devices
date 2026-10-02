@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <functional>
 #include <kvasir/Atomic/Queue.hpp>
+#include <kvasir/Util/Periodic.hpp>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -478,10 +479,10 @@ struct BulkOutEndpoint {
     static inline std::atomic<std::size_t> armedSize{};
     static inline std::uint8_t packetArmsLeft{};   // full packets to see before transfers again
     // The reading side's alone: what the armed transfer held when it last looked, and when that
-    // changed. A new transfer that happens to hold as much is taken back early - harmless, the
-    // bytes are only handed up sooner.
-    static inline std::size_t                seenSoFar{};
-    static inline typename Clock::time_point seenAt{};
+    // changed (as the end of the wait for it to stall, StalledAfter from then). A new transfer that
+    // happens to hold as much is taken back early - harmless, the bytes are only handed up sooner.
+    static inline std::size_t             seenSoFar{};
+    static inline Kvasir::Deadline<Clock> stalledAt{};
 
     static inline QueueType         queue{};
     static inline std::atomic<bool> paused{false};
@@ -612,10 +613,10 @@ struct BulkOutEndpoint {
             auto const        now   = Clock::now();
             if(soFar != seenSoFar) {
                 seenSoFar = soFar;
-                seenAt    = now;
+                stalledAt.restart(StalledAfter, now);
                 return;
             }
-            if(soFar == 0 || now - seenAt < StalledAfter) { return; }
+            if(soFar == 0 || stalledAt.armed(now)) { return; }
             Derived::withIsrMasked([] {
                 if(armedSize == 0 || restartPending || flushPending) { return; }
                 // While halted too: what the transfer holds was acknowledged before the halt,

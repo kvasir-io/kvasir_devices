@@ -5,6 +5,10 @@
 ///
 /// With remote_fmt on the include path every line is also checked as on the target: the format
 /// string against its arguments, and a formatter for every argument (a `char const*` has none).
+///
+/// The tests count rate-limited lines too, so the drivers' log-only limiters stay real limiters
+/// here although USE_UC_LOG is not defined (Kvasir::LogRateLimiter).
+#define KVASIR_LOG_KEEP_LIMITERS 1
 #if __has_include(<remote_fmt/remote_fmt.hpp>)
     #include <remote_fmt/remote_fmt.hpp>
     #include <type_traits>

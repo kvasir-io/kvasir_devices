@@ -369,17 +369,18 @@ void corruptedFactoryRead() {
     check(configuredAndSampled(d, m, 1), "configured, then sampled");
     auto const writesBefore = m.written.size();
     // One ten-byte read answers with a flipped factory bit, as a bus error would.
-    int  corrupt = 1;
-    auto inner   = std::ref(m);
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            auto const r = inner(addr, sent, recv);
-            if(recv.size() == 10 && corrupt > 0) {
-                recv[8] = static_cast<std::byte>(static_cast<std::uint8_t>(recv[8]) ^ 0x01U);
-                --corrupt;
-            }
-            return r;
-        };
+    int              corrupt = 1;
+    auto             inner   = std::ref(m);
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          auto const r = inner(addr, sent, recv);
+          if(recv.size() == 10 && corrupt > 0) {
+              recv[8] = static_cast<std::byte>(static_cast<std::uint8_t>(recv[8]) ^ 0x01U);
+              --corrupt;
+          }
+          return r;
+      }};
     check(runUntil(
             d,
             [&] { return m.written.size() >= writesBefore + 2; },

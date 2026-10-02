@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <initializer_list>
+#include <kvasir/Devices/I2C/EngineFeatures.hpp>
 #include <map>
 #include <span>
 #include <support/FakeClock.hpp>
@@ -62,11 +63,31 @@ struct Transaction {
 /// lambda) answers on any of them.
 enum class FakeBusResult : std::uint8_t { failed, notAcknowledged, succeeded };
 
+/// The queued drivers' request: up to two prefix bytes (a register, an EEPROM address) go out
+/// ahead of sendData in the same write. The transcript and the models see the two joined:
+/// what is on the wire, not how the engine laid it out.
 struct FakeBusRequest {
+    static constexpr std::size_t MaxPrefix = 2;
+
     std::uint8_t                       address{};
+    std::uint8_t                       prefixBytes{};
+    std::array<std::byte, MaxPrefix>   prefix{};
     std::span<std::byte const>         sendData{};
     std::span<std::byte>               receiveData{};
     std::function<void(FakeBusResult)> callback{};
+
+    [[nodiscard]] std::size_t sendBytes() const { return prefixBytes + sendData.size(); }
+
+    [[nodiscard]] std::byte sendByte(std::size_t i) const {
+        return i < prefixBytes ? prefix[i] : sendData[i - prefixBytes];
+    }
+
+    /// Everything after the address, prefix first.
+    [[nodiscard]] std::vector<std::byte> sent() const {
+        std::vector<std::byte> out(sendBytes());
+        for(std::size_t i = 0; i < out.size(); ++i) { out[i] = sendByte(i); }
+        return out;
+    }
 };
 
 using FakeBusResponder
@@ -74,9 +95,11 @@ using FakeBusResponder
 
 template<typename Tag = void>
 struct FakeBusFor {
-    using Result    = FakeBusResult;
-    using Request   = FakeBusRequest;
-    using Responder = FakeBusResponder;
+    using Result  = FakeBusResult;
+    using Request = FakeBusRequest;
+    /// Every engine feature on, so the tests of each one run on the fake.
+    static constexpr Kvasir::I2C::EngineFeatures Features = Kvasir::I2C::AllEngineFeatures;
+    using Responder                                       = FakeBusResponder;
 
     /// What a real bus's transfer timeout is, for timeout(): tens of milliseconds.
     static constexpr auto TransferTimeout = std::chrono::milliseconds{25};
@@ -99,7 +122,7 @@ struct FakeBusFor {
         }
         Transaction t{};
         t.address = r.address;
-        for(auto const b : r.sendData) { t.sent.push_back(static_cast<std::uint8_t>(b)); }
+        for(auto const b : r.sent()) { t.sent.push_back(static_cast<std::uint8_t>(b)); }
         t.recvLen = r.receiveData.size();
         t.at      = FakeClock::now();
         log.push_back(t);
@@ -112,8 +135,9 @@ struct FakeBusFor {
         auto batch = std::move(pending);
         pending.clear();
         for(auto& r : batch) {
+            auto const sent = r.sent();
             auto const res
-              = respond ? respond(r.address, r.sendData, r.receiveData) : Result::notAcknowledged;
+              = respond ? respond(r.address, sent, r.receiveData) : Result::notAcknowledged;
             if(res == Result::succeeded) { received_(r, r.receiveData.size()); }
             ++answered;
             r.callback(res);
@@ -150,7 +174,8 @@ struct FakeBusFor {
         pending.pop_front();
         if(respond) {
             std::vector<std::byte> whole(req.receiveData.size());
-            static_cast<void>(respond(req.address, req.sendData, std::span<std::byte>{whole}));
+            auto const             sent = req.sent();
+            static_cast<void>(respond(req.address, sent, std::span<std::byte>{whole}));
             auto const got = n < whole.size() ? n : whole.size();
             for(std::size_t i = 0; i < got; ++i) { req.receiveData[i] = whole[i]; }
             received_(req, got);

@@ -29,10 +29,8 @@ namespace Kvasir::I2C::Chips {
 /// clock drifts. It defaults to 12.5 pF, the commoner part; the reset value is 7 pF, so a
 /// design with a 7 pF crystal must say so.
 namespace Pcf85063aDetail {
-    enum class LoadCapacitance : std::uint8_t {
-        pf7    = 0x00,
-        pf12_5 = 0x01
-    }; }   // namespace Pcf85063aDetail
+    enum class LoadCapacitance : std::uint8_t { pf7 = 0x00, pf12_5 = 0x01 };
+}   // namespace Pcf85063aDetail
 
 template<unsigned                         Epoch = 2000,
          Pcf85063aDetail::LoadCapacitance Load  = Pcf85063aDetail::LoadCapacitance::pf12_5>

@@ -28,16 +28,20 @@ namespace {
 template<typename Tag>
 struct Pin {
     static inline std::vector<bool> driven{};
-    static inline bool              isOn{false};
+    static inline bool              on_{false};
+
+    /// Read through a function: clang 23 counts a read of a class template's static from outside the class
+    /// (`Cut::on_`) as no use and warns -Wunused-but-set-global.
+    static bool isOn() { return on_; }
 
     static void drive(bool active) {
         driven.push_back(active);
-        isOn = active;
+        on_ = active;
     }
 
     static void clear() {
         driven.clear();
-        isOn = false;
+        on_ = false;
     }
 };
 
@@ -104,13 +108,15 @@ void driven(bool unpowered) {
     fresh();
     B::clear();
     light.gate().bind(line);
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(!B::isOn) {
-            talkedWhileOff = true;
-            return FakeBusResult::notAcknowledged;
-        }
-        return zeros(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(!B::isOn()) {
+              talkedWhileOff = true;
+              return FakeBusResult::notAcknowledged;
+          }
+          return zeros(a, s, r);
+      }};
     auto both = all(line, light);
 
     testCase(unpowered
@@ -139,7 +145,7 @@ void driven(bool unpowered) {
     line.off();
     check(light.link() == Link::offline, "offline with the call, not a turn later");
     runFor(both, 50ms);
-    check(line.state() == BridgeState::off && !B::isOn, "the pin followed");
+    check(line.state() == BridgeState::off && !B::isOn(), "the pin followed");
     auto const mark = FakeBus::log.size();
     runFor(both, 5s);
     checkEq(transactionsTo(Light::Address, mark), std::size_t{0}, "nothing more is said");
@@ -181,11 +187,11 @@ void driven(bool unpowered) {
         light.handler();
         FakeClock::current += 1ms;
     }
-    check(line.state() == BridgeState::closing && B::isOn, "the bridge waits for it");
+    check(line.state() == BridgeState::closing && B::isOn(), "the bridge waits for it");
     check(light.link() == Link::offline, "while the part is offline already");
     FakeBus::complete();
     runFor(both, 10ms);
-    check(line.state() == BridgeState::off && !B::isOn, "and goes when the wire is free");
+    check(line.state() == BridgeState::off && !B::isOn(), "and goes when the wire is free");
     checkEq(light.errors(), 0U, "no error from any of it");
 
     testCase("Bridge: nothing was ever said while the pin was off");
@@ -299,7 +305,7 @@ void inABus() {
     fresh();
     Cut::clear();
     FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a == FarLight::Address && !Cut::isOn) { return FakeBusResult::notAcknowledged; }
+        if(a == FarLight::Address && !Cut::isOn()) { return FakeBusResult::notAcknowledged; }
         return zeros(a, s, r);
     };
 
@@ -363,7 +369,7 @@ void behindAChannel() {
     wire.behind = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
         auto const control = wire.control[0x70];
         if(control == 0x08) {
-            if(!Cut::isOn) {
+            if(!Cut::isOn()) {
                 ++whileOff;
                 return FakeBusResult::notAcknowledged;
             }
@@ -372,11 +378,13 @@ void behindAChannel() {
         }
         return crcZeros(a, s, r);
     };
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        auto const result = wire(a, s, r);
-        if(wire.control[0x70] == 0x08) { ch3Selected = true; }
-        return result;
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          auto const result = wire(a, s, r);
+          if(wire.control[0x70] == 0x08) { ch3Selected = true; }
+          return result;
+      }};
 
     testCase("Bridge and switch: offline, the part never takes the switch");
     check(runUntil(bus, [&] { return bus.get<Left>().valid(); }, 5s), "channel 0 delivers");
@@ -419,14 +427,16 @@ void switchBehindABridge() {
         }
         return crcZeros(a, s, r);
     };
-    bool talkedWhileOff = false;
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(!Cut::isOn) {
-            talkedWhileOff = true;
-            return FakeBusResult::notAcknowledged;
-        }
-        return wire(a, s, r);
-    };
+    bool             talkedWhileOff = false;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(!Cut::isOn()) {
+              talkedWhileOff = true;
+              return FakeBusResult::notAcknowledged;
+          }
+          return wire(a, s, r);
+      }};
 
     testCase(
       "Switch behind a bridge: the switch is brought up again, and its channel written again");
@@ -434,7 +444,7 @@ void switchBehindABridge() {
     check(runUntil(bus, [&] { return bus.get<FarPart>().valid(); }, 5s), "the part delivers");
     bus.bridge<Cut>().off();
     runFor(bus, 100ms);
-    check(!Cut::isOn, "off");
+    check(!Cut::isOn(), "off");
     wire.control.clear();   // the switch lost its supply: every channel shut
     bus.bridge<Cut>().on();
     check(runUntil(bus, [&] { return bus.get<FarPart>().valid(); }, 5s), "the part delivers again");
@@ -462,18 +472,20 @@ void throughAPart() {
     bool         talkedShut = false;
 
     fresh();
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a == Expander::Address) {
-            if(!s.empty()) { port = static_cast<std::uint8_t>(s[0]); }
-            for(auto& b : r) { b = std::byte{port}; }
-            return FakeBusResult::succeeded;
-        }
-        if((port & 0x10) != 0) {
-            talkedShut = true;
-            return FakeBusResult::notAcknowledged;
-        }
-        return zeros(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(a == Expander::Address) {
+              if(!s.empty()) { port = static_cast<std::uint8_t>(s[0]); }
+              for(auto& b : r) { b = std::byte{port}; }
+              return FakeBusResult::succeeded;
+          }
+          if((port & 0x10) != 0) {
+              talkedShut = true;
+              return FakeBusResult::notAcknowledged;
+          }
+          return zeros(a, s, r);
+      }};
 
     testCase("PartBridge: the enable is a write of the expander, and the part waits for it");
     runFor(bus, 1s);
@@ -534,14 +546,14 @@ void oneAtATime() {
     SlotA::clear();
     SlotB::clear();
     FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(!SlotA::isOn && !SlotB::isOn) { return FakeBusResult::notAcknowledged; }
+        if(!SlotA::isOn() && !SlotB::isOn()) { return FakeBusResult::notAcknowledged; }
         return zeros(a, s, r);
     };
     auto watched = [&](auto done, std::chrono::milliseconds within) {
         auto const until = FakeClock::now() + within;
         while(FakeClock::now() < until) {
             turn(bus);
-            bothOn = bothOn || (SlotA::isOn && SlotB::isOn);
+            bothOn = bothOn || (SlotA::isOn() && SlotB::isOn());
             if(done()) { return true; }
         }
         return false;
@@ -636,21 +648,23 @@ void asASwitch() {
     PortA::clear();
     PortB::clear();
     // Two parts at 0x23: which one answers is where the bridges are. Each part says who it is.
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const>, std::span<std::byte> r) {
-        if(PortA::isOn && PortB::isOn) { ++bothOn; }
-        if(a == Before::Address && (PortA::isOn || PortB::isOn)) { ++overheard; }
-        if(a != Before::Address && !PortA::isOn && !PortB::isOn) {
-            return FakeBusResult::notAcknowledged;   // nobody there with both bridges off
-        }
-        std::uint8_t const who = a == Before::Address ? 0xF : PortA::isOn ? 0xA : 0xB;
-        for(auto& b : r) { b = std::byte{who}; }
-        return FakeBusResult::succeeded;
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const>, std::span<std::byte> r) {
+          if(PortA::isOn() && PortB::isOn()) { ++bothOn; }
+          if(a == Before::Address && (PortA::isOn() || PortB::isOn())) { ++overheard; }
+          if(a != Before::Address && !PortA::isOn() && !PortB::isOn()) {
+              return FakeBusResult::notAcknowledged;   // nobody there with both bridges off
+          }
+          std::uint8_t const who = a == Before::Address ? 0xF : PortA::isOn() ? 0xA : 0xB;
+          for(auto& b : r) { b = std::byte{who}; }
+          return FakeBusResult::succeeded;
+      }};
     auto watched = [&](auto done, std::chrono::milliseconds within) {
         auto const until = FakeClock::now() + within;
         while(FakeClock::now() < until) {
             turn(bus);
-            if(PortA::isOn && PortB::isOn) { ++bothOn; }
+            if(PortA::isOn() && PortB::isOn()) { ++bothOn; }
             if(done()) { return true; }
         }
         return false;
@@ -687,7 +701,7 @@ void asASwitch() {
 
     testCase("Switched bridges: off() disables one, and its part is offline");
     bus.bridge<PortA>().off();
-    check(watched([&] { return bus.get<OnA>().offline() && !PortA::isOn; }, 1s),
+    check(watched([&] { return bus.get<OnA>().offline() && !PortA::isOn(); }, 1s),
           "offline, pin off");
     auto const samplesA = bus.get<OnA>().samples();
     auto const samplesB = bus.get<OnB>().samples();

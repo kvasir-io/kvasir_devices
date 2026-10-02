@@ -17,6 +17,7 @@
 #include "../Log.hpp"
 #include "../Quantities.hpp"
 #include "QueueCore.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <array>
 #include <chrono>
@@ -141,7 +142,7 @@ namespace Kvasir { namespace SPI {
                 advance_(now);
                 return;
             }
-            if(phase_ == Phase::waiting && now >= retryAt_) { start_(); }
+            if(phase_ == Phase::waiting && !retry_.armed(now)) { start_(); }
         }
 
     private:
@@ -188,7 +189,7 @@ namespace Kvasir { namespace SPI {
         Step                       step_{};
         After                      after_{};
         std::optional<SdResult>    opDone_{};
-        typename Clock::time_point retryAt_{};
+        Kvasir::Deadline<Clock>    retry_{};   ///< stopped: the first bring-up at once
         typename Clock::time_point deadline_{};
         typename Clock::time_point initDeadline_{};
         bool                       inFlight_{};
@@ -378,9 +379,9 @@ namespace Kvasir { namespace SPI {
             if(phase_ == Phase::ready) {
                 UC_LOG_W("sd card lost ({}) -- bringing it up again", static_cast<std::uint8_t>(r));
             }
-            phase_   = Phase::waiting;
-            link_    = Link::absent;
-            retryAt_ = Clock::now() + Kvasir::asDuration(Config::RetryAfter);
+            phase_ = Phase::waiting;
+            link_  = Link::absent;
+            retry_.restart(Kvasir::asDuration(Config::RetryAfter), Clock::now());
         }
 
         /// Reported once the sequence and its clocks are over, so the next one can start at once.

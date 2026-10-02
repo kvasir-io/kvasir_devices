@@ -316,14 +316,14 @@ namespace Kvasir { namespace SPI {
         std::atomic<bool> running_{false};
         std::atomic<bool> ready_{false};
         bool volatile ok_{};
-        State                      state_{State::reset};
-        std::uint8_t               bringUpFailures_{};
-        std::array<std::byte, 4>   data_{};
-        std::atomic<std::uint32_t> errors_{};
-        std::atomic<std::uint32_t> skipped_{};
-        std::uint32_t              skippedLogged_{};
-        std::atomic<std::uint32_t> samples_{};
-        RateLimiter<Clock>         log_{};
+        State                                       state_{State::reset};
+        std::uint8_t                                bringUpFailures_{};
+        std::array<std::byte, 4>                    data_{};
+        std::atomic<std::uint32_t>                  errors_{};
+        std::atomic<std::uint32_t>                  skipped_{};
+        std::uint32_t                               skippedLogged_{};
+        std::atomic<std::uint32_t>                  samples_{};
+        [[no_unique_address]] LogRateLimiter<Clock> log_{};
     };
 
 }}   // namespace Kvasir::SPI

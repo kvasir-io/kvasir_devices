@@ -584,7 +584,14 @@ namespace Kvasir { namespace SPI {
         }
 
         void handler() {
-            device_.handler();
+            handler([](auto& d) { d.handler(); });
+        }
+
+        /// With `turn(device())` in place of the device's own turn: how a DeviceSet drives it
+        /// together with the other parts of its port (DeviceSet.hpp), one engine for all of them.
+        template<typename Turn>
+        void handler(Turn&& turn) {
+            turn(device_);
             if(!device_.answering()) {
                 valid_ = false;
                 return;

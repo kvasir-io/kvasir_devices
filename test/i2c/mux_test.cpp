@@ -416,7 +416,7 @@ std::chrono::microseconds now() {
 /// and, for a read, the repeated start's address and the bytes received, plus START and STOP,
 /// and ~100 us from submit to the driver's first interrupt.
 std::chrono::microseconds wireTime(FakeBus::Request const& r) {
-    std::size_t bytes = 1 + r.sendData.size();
+    std::size_t bytes = 1 + r.sendBytes();
     if(!r.receiveData.empty()) { bytes += 1 + r.receiveData.size(); }
     auto const bits = static_cast<std::int64_t>(bytes * 9 + 2);
     return std::chrono::microseconds{1s} * bits / static_cast<std::int64_t>(Wire::BaudRate) + 100us;
@@ -507,7 +507,7 @@ Outcome simulate(Loop const& loop) {
             // The switch keeps its control byte and answers the engine's read-back with it.
             auto const& r = FakeBus::pending.front();
             if(r.address == MuxDev::Address) {
-                if(!r.sendData.empty()) { control = static_cast<std::uint8_t>(r.sendData[0]); }
+                if(r.sendBytes() != 0) { control = static_cast<std::uint8_t>(r.sendByte(0)); }
                 for(auto& b : r.receiveData) { b = std::byte{control}; }
             }
             FakeBus::complete(FakeBus::Result::succeeded);

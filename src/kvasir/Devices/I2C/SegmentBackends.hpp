@@ -2,6 +2,7 @@
 
 #include "../SegmentDisplay.hpp"
 #include "Quantities.hpp"
+#include "kvasir/Util/Periodic.hpp"
 
 #include <array>
 #include <bitset>
@@ -80,12 +81,15 @@ public:
     /// The CLRERR after a bring-up.
     void update(TimePoint now) {
         if(device_->broughtUp(bringUp_)) {
-            clearPending_ = clearErrorsAfter_ != Duration::zero();
-            clearAt_      = now + clearErrorsAfter_;
+            if(clearErrorsAfter_ != Duration::zero()) {
+                clear_.restart(clearErrorsAfter_, now);
+            } else {
+                clear_.stop();
+            }
         }
-        if(clearPending_ && device_->answering() && now >= clearAt_) {
+        if(device_->answering() && clear_.expired(now)) {
             device_->template set<typename Chip::Mode2>(Chip::ClrErr);   // Mode2 always writes
-            clearPending_ = false;
+            clear_.stop();
         }
     }
 
@@ -108,13 +112,12 @@ public:
     [[nodiscard]] Device& device() const { return *device_; }
 
 private:
-    Device*       device_;
-    MilliAmp      current_;
-    std::uint8_t  brightness_;
-    Duration      clearErrorsAfter_;
-    TimePoint     clearAt_{};
-    std::uint16_t bringUp_{};   ///< the bring-up the CLRERR was armed for
-    bool          clearPending_{};
+    Device*                                   device_;
+    MilliAmp                                  current_;
+    std::uint8_t                              brightness_;
+    Duration                                  clearErrorsAfter_;
+    Kvasir::Deadline<typename Device::ClockT> clear_{};     ///< the CLRERR, armed per bring-up
+    std::uint16_t                             bringUp_{};   ///< the bring-up it was armed for
 };
 
 namespace SegmentBackendsDetail {

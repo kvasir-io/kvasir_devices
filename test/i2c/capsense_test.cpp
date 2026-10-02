@@ -322,17 +322,18 @@ void setAddress() {
 void syncMismatch() {
     testCase("CY8CMBR3102 sync counters disagree: retried, then read");
     fresh();
-    Part part{Soil::ConfigCrc};
-    int  torn = 2;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            auto const r = part.m(addr, sent, recv);
-            if(r == FakeBusResult::succeeded && recv.size() == 13 && torn > 0) {
-                --torn;
-                recv[12] = std::byte{4};   // SYNC_COUNTER2 moved on under the read
-            }
-            return r;
-        };
+    Part             part{Soil::ConfigCrc};
+    int              torn = 2;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          auto const r = part.m(addr, sent, recv);
+          if(r == FakeBusResult::succeeded && recv.size() == 13 && torn > 0) {
+              --torn;
+              recv[12] = std::byte{4};   // SYNC_COUNTER2 moved on under the read
+          }
+          return r;
+      }};
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "a sample in the end");
     checkEq(torn, 0, "both torn frames were read");
@@ -345,16 +346,17 @@ void syncMismatch() {
 void wakeNaks() {
     testCase("CY8CMBR3102 NAKs while it wakes: put on the wire again");
     fresh();
-    Part part{Soil::ConfigCrc};
-    int  naks = 3;   // the bring-up's first read
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(naks > 0) {
-                --naks;
-                return FakeBusResult::notAcknowledged;
-            }
-            return part.m(addr, sent, recv);
-        };
+    Part             part{Soil::ConfigCrc};
+    int              naks = 3;   // the bring-up's first read
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(naks > 0) {
+              --naks;
+              return FakeBusResult::notAcknowledged;
+          }
+          return part.m(addr, sent, recv);
+      }};
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
     check(d.identified(), "identified after the wake NAKs");

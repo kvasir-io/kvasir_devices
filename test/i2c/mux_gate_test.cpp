@@ -586,12 +586,14 @@ void muxFaults() {
 
     testCase("Mux: a switch that NAKs parks, its parts wait, and both come back after a probe");
     fresh();
-    bool       muxThere = false;
-    SwitchWire wire2{.behind = crcZeros};
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a == MuxDev::Address && !muxThere) { return FakeBus::Result::notAcknowledged; }
-        return wire2(a, s, r);
-    };
+    bool             muxThere = false;
+    SwitchWire       wire2{.behind = crcZeros};
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(a == MuxDev::Address && !muxThere) { return FakeBus::Result::notAcknowledged; }
+          return wire2(a, s, r);
+      }};
     Kvasir::I2C::MuxArbiter arbiter2{};
     MuxDev                  mux2{};
     Left                    left2{};
@@ -634,15 +636,17 @@ void muxFaults() {
 
     testCase("Mux: a NAK in the middle of a script lets the switch go at once");
     fresh();
-    bool       nakRead = false;
-    SwitchWire wire3{.behind = crcZeros};
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a == Chips::Sht3x::Address && nakRead && !r.empty()) {
-            nakRead = false;
-            return FakeBus::Result::notAcknowledged;
-        }
-        return wire3(a, s, r);
-    };
+    bool             nakRead = false;
+    SwitchWire       wire3{.behind = crcZeros};
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(a == Chips::Sht3x::Address && nakRead && !r.empty()) {
+              nakRead = false;
+              return FakeBus::Result::notAcknowledged;
+          }
+          return wire3(a, s, r);
+      }};
     Kvasir::I2C::MuxArbiter         arbiter3{};
     MuxDev                          mux3{};
     Left                            left3{};

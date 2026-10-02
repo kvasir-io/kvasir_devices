@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 /// Parts behind a bridge that is not always active: a buffer or an isolator with an enable pin,
 /// an analog switch, a port something can be plugged into. While the bridge is not active the
@@ -490,10 +491,10 @@ struct BridgeGate : detail::InnerSwitch<Inner> {
 
     /// The inner gate's binding (a MuxGate's switch and arbiter).
     template<typename... Ts>
-    void bind(Ts&... ts)
-        requires requires(Inner& i) { i.bind(ts...); }
+    void bind(Ts&&... ts)
+        requires requires(Inner& i) { i.bind(std::forward<Ts>(ts)...); }
     {
-        inner_.bind(ts...);
+        inner_.bind(std::forward<Ts>(ts)...);
     }
 
     [[nodiscard]] bool bound() const {

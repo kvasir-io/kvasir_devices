@@ -30,15 +30,16 @@ void bh1750() {
     testCase("BH1750");
     fresh();
     std::vector<std::uint8_t> reading{0x04, 0xB0};   // 1200 -> 1000 lx
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x23) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) { return FakeBus::Result::succeeded; }
-            for(std::size_t i = 0; i < recv.size(); ++i) {
-                recv[i] = static_cast<std::byte>(reading[i]);
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const          answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x23) { return FakeBus::Result::notAcknowledged; }
+          if(!sent.empty()) { return FakeBus::Result::succeeded; }
+          for(std::size_t i = 0; i < recv.size(); ++i) {
+              recv[i] = static_cast<std::byte>(reading[i]);
+          }
+          return FakeBus::Result::succeeded;
+      }};
     Dev<Chips::Bh1750> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
     check(writes()
@@ -187,12 +188,14 @@ void ltr390() {
     lt.set(0x10, {0xBE, 0x03, 0x00});   // UVS = 958
     lt.readOnly = {0x06, 0x07, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12};
     // The part resets before it acknowledges SW_RESET (0x00 = 0x10): that write NAKs.
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(s.size() == 2 && s[0] == std::byte{0x00} && s[1] == std::byte{0x10}) {
-            return FakeBus::Result::notAcknowledged;
-        }
-        return lt(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(s.size() == 2 && s[0] == std::byte{0x00} && s[1] == std::byte{0x10}) {
+              return FakeBus::Result::notAcknowledged;
+          }
+          return lt(a, s, r);
+      }};
     Dev<Chips::Ltr390<>> lr{};
     check(runUntil(lr, [&] { return lr.valid(); }, 2s), "first sample");
     check(lr.identified(), "PART_ID upper nibble 0xB");
@@ -385,17 +388,19 @@ void as7341() {
     as.set(0xA3, {0x00});   // STATUS2: AVALID once the integration has run
     as.readOnly = {0x92, 0xA3};
     // SMUXEN clears itself when the SMUX command is done; AVALID sets when SP_EN has run
-    int busyReadBacks = 1;   // the very first SMUX read-back finds it still running
-    FakeBus::respond  = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        auto const res = as(a, s, r);
-        if(s.size() == 2 && s[0] == std::byte{0x80}) {
-            as.set(0xA3, {s[1] == std::byte{0x03} ? std::uint8_t{0x40} : std::uint8_t{0x00}});
-        }
-        if(s.size() == 1 && s[0] == std::byte{0x80} && r.size() == 1) {
-            r[0] = busyReadBacks-- > 0 ? std::byte{0x11} : std::byte{0x01};
-        }
-        return res;
-    };
+    int              busyReadBacks = 1;   // the very first SMUX read-back finds it still running
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          auto const res = as(a, s, r);
+          if(s.size() == 2 && s[0] == std::byte{0x80}) {
+              as.set(0xA3, {s[1] == std::byte{0x03} ? std::uint8_t{0x40} : std::uint8_t{0x00}});
+          }
+          if(s.size() == 1 && s[0] == std::byte{0x80} && r.size() == 1) {
+              r[0] = busyReadBacks-- > 0 ? std::byte{0x11} : std::byte{0x01};
+          }
+          return res;
+      }};
     Dev<Chips::As7341<>> a7{};
     check(runUntil(a7, [&] { return a7.valid(); }, 1s), "a full spectrum");
     check(a7.identified(), "the chip id in bits 7:2 is 0x09");
@@ -465,12 +470,14 @@ void ktd2026() {
     fresh();
     RegisterModel<1> ktd{0x30};
     // "Reset Complete Chip" is not acknowledged (datasheet, the note under "Write").
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(s.size() == 2 && s[0] == std::byte{0x00} && s[1] == std::byte{0x07}) {
-            return FakeBus::Result::notAcknowledged;
-        }
-        return ktd(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(s.size() == 2 && s[0] == std::byte{0x00} && s[1] == std::byte{0x07}) {
+              return FakeBus::Result::notAcknowledged;
+          }
+          return ktd(a, s, r);
+      }};
     Dev<Chips::Ktd2026<>> kt{};
     check(runUntil(kt, [&] { return kt.answering() && hasWrite({0x00, 0x1C}); }, 800ms), "up");
     check(writes()

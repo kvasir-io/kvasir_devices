@@ -207,6 +207,13 @@ namespace Kvasir { namespace SPI {
 
         void handler() { device_.handler(); }
 
+        /// With `turn(device())` in place of the device's own turn: how a DeviceSet drives it
+        /// together with the other parts of its port (DeviceSet.hpp), one engine for all of them.
+        template<typename Turn>
+        void handler(Turn&& turn) {
+            turn(device_);
+        }
+
         /// Digit `digit` of module `module`: a BCD code with Decode, segments without.
         void setDigit(std::size_t  module,
                       std::size_t  digit,

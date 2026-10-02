@@ -100,15 +100,19 @@ using Request = Core::RequestT;
 
 template<int Id>
 struct Device {
-    static inline bool low{};
+    static inline bool low_{};
+
+    /// Read through a function: clang 23 counts a read of a class template's static from outside the class
+    /// (`Device<1>::low_`) as no use and warns -Wunused-but-set-global.
+    static bool low() { return low_; }
 
     static void select() {
-        low = true;
+        low_ = true;
         events.push_back("select " + std::to_string(Id));
     }
 
     static void deselect() {
-        low = false;
+        low_ = false;
         events.push_back("deselect " + std::to_string(Id));
     }
 
@@ -140,7 +144,7 @@ void fresh() {
     results.clear();
     FakeHw::reset();
     FakeClock::reset();
-    Device<1>::low = Device<2>::low = false;
+    Device<1>::low_ = Device<2>::low_ = false;
     Log::reset();
     static_cast<void>(Core::takeLatency());
 }
@@ -156,10 +160,10 @@ void oneCallbackEach() {
     fresh();
     check(Core::submit(write(Device<1>::lines, 1)), "first accepted");
     check(Core::submit(write(Device<2>::lines, 2)), "second accepted");
-    check(Device<1>::low && !Device<2>::low, "only the first is selected while it runs");
+    check(Device<1>::low() && !Device<2>::low(), "only the first is selected while it runs");
     FakeHw::finish();
-    check(!Device<1>::low, "CS released in the completion, not a loop turn later");
-    check(Device<2>::low, "the next one started from the completion");
+    check(!Device<1>::low(), "CS released in the completion, not a loop turn later");
+    check(Device<2>::low(), "the next one started from the completion");
     FakeHw::finish();
     checkEq(results.size(), 2U, "two callbacks");
     check(results[0].first == 1 && results[1].first == 2, "in submit order");
@@ -207,14 +211,14 @@ void holdKeepsTheBus() {
     Core::submit(cmd);
     Core::submit(write(Device<2>::lines, 2));   // queued behind the hold
     FakeHw::finish();
-    check(Device<1>::low, "CS stays low after the held part");
-    check(!Device<2>::low, "the other device waits");
+    check(Device<1>::low(), "CS stays low after the held part");
+    check(!Device<2>::low(), "the other device waits");
     auto data = write(Device<1>::lines, 3, 8);
     check(Core::submit(data), "the continuation is taken");
     checkEq(FakeHw::last.frames, 8U, "and started at once, ahead of the queue");
     FakeHw::finish();
-    check(!Device<1>::low, "the hold ends with a request without hold");
-    check(Device<2>::low, "then the queue moves on");
+    check(!Device<1>::low(), "the hold ends with a request without hold");
+    check(Device<2>::low(), "then the queue moves on");
     FakeHw::finish();
     checkEq(results.size(), 3U, "three callbacks");
     check(results[1].first == 3 && results[2].first == 2, "continuation before the queued one");
@@ -233,12 +237,12 @@ void holdTimeout() {
     FakeHw::finish();
     FakeClock::advance(49ms);
     Core::handler();
-    check(Device<1>::low, "still held before the timeout");
+    check(Device<1>::low(), "still held before the timeout");
     FakeClock::advance(2ms);
     Core::handler();
-    check(!Device<1>::low, "released after it");
+    check(!Device<1>::low(), "released after it");
     checkEq(Core::holdTimeouts(), 1U, "counted");
-    check(Device<2>::low, "and the queue moves on");
+    check(Device<2>::low(), "and the queue moves on");
     FakeHw::finish();
 }
 
@@ -250,9 +254,9 @@ void releaseHold() {
     Core::submit(cmd);
     FakeHw::finish();
     Core::releaseHold(Device<2>::lines);
-    check(Device<1>::low, "another device cannot end it");
+    check(Device<1>::low(), "another device cannot end it");
     Core::releaseHold(Device<1>::lines);
-    check(!Device<1>::low, "its own can");
+    check(!Device<1>::low(), "its own can");
     check(!Core::busy(), "idle");
 }
 
@@ -269,12 +273,12 @@ void timeoutAndLateCompletion() {
     Core::handler();
     checkEq(Core::timeouts(), 1U, "then it is lost");
     checkEq(FakeHw::aborts, 1, "the DMA aborted");
-    check(!Device<1>::low, "CS released");
+    check(!Device<1>::low(), "CS released");
     check(results.size() == 1 && results[0].second == TransferResult::failed, "failed once");
-    check(Device<2>::low, "the next one started");
+    check(Device<2>::low(), "the next one started");
     FakeHw::done(lostGen, false);   // the old DMA's completion, arriving late
     checkEq(Core::staleCompletions(), 1U, "a late completion is counted");
-    check(Device<2>::low, "and does not end the transfer that runs now");
+    check(Device<2>::low(), "and does not end the transfer that runs now");
     checkEq(results.size(), 1U, "nor gives anyone a second callback");
     FakeHw::finish();
     checkEq(count(TransferResult::succeeded), 1, "the second completes normally");
@@ -291,7 +295,7 @@ void overrun() {
     FakeHw::finish(true);
     checkEq(Core::overruns(), 1U, "counted");
     check(results.size() == 1 && results[0].second == TransferResult::failed, "failed");
-    check(!Device<1>::low, "CS released");
+    check(!Device<1>::low(), "CS released");
 }
 
 void failureInAHold() {
@@ -308,7 +312,7 @@ void failureInAHold() {
     auto third = write(Device<1>::lines, 3);
     check(Core::submit(third), "a continuation behind the running one is taken");
     FakeHw::finish(true);   // the running one fails
-    check(!Device<1>::low, "CS released");
+    check(!Device<1>::low(), "CS released");
     checkEq(count(TransferResult::failed), 2, "the failed one and the waiting continuation");
     checkEq(results.size(), 3U, "every request one callback");
     check(!Core::busy(), "idle");
@@ -325,7 +329,7 @@ void resetDrains() {
     checkEq(count(TransferResult::failed), 5, "all failed");
     checkEq(Core::drainedRequests() - drainedBefore, 4U, "four never went on the wire");
     checkEq(FakeHw::reinits, 1, "the block re-initialised");
-    check(!Device<1>::low, "CS released");
+    check(!Device<1>::low(), "CS released");
 }
 
 void submitFromACallbackDuringReset() {
@@ -343,7 +347,7 @@ void submitFromACallbackDuringReset() {
     };
     Core::submit(r);
     Core::reset();
-    check(Device<2>::low, "the resubmitted request starts once the reset is over");
+    check(Device<2>::low(), "the resubmitted request starts once the reset is over");
     FakeHw::finish();
 }
 
@@ -453,12 +457,12 @@ void commandPhase() {
           "what comes back with it is dropped");
     FakeHw::finish();
     checkEq(betweens, 1, "between() after the command");
-    check(Device<1>::low, "CS still low");
+    check(Device<1>::low(), "CS still low");
     check(FakeHw::last.rx == rxBuf.data() && FakeHw::last.frames == 3, "the data into the buffer");
     check(results.empty(), "no callback yet");
     FakeHw::finish();
     check(results.size() == 1 && results[0].second == TransferResult::succeeded, "one callback");
-    check(!Device<1>::low, "CS released at the end");
+    check(!Device<1>::low(), "CS released at the end");
     int selects = 0;
     for(auto const& e : events) { selects += e == "select 1" ? 1 : 0; }
     checkEq(selects, 1, "one CS edge");
@@ -466,7 +470,8 @@ void commandPhase() {
     Core::submit(Request{.lines = Device<1>::lines, .command = cmd, .callback = recordAs(2)});
     checkEq(FakeHw::last.frames, 1U, "a command alone");
     FakeHw::finish();
-    check(results.size() == 2 && results[1].second == TransferResult::succeeded && !Device<1>::low,
+    check(results.size() == 2 && results[1].second == TransferResult::succeeded
+            && !Device<1>::low(),
           "is the whole frame");
 
     Core::submit(Request{.lines    = l,
@@ -504,10 +509,11 @@ void polledCompletion() {
     Polled::submit(
       Polled::RequestT{.lines = Device<1>::lines, .tx = std::span{txBuf}, .callback = recordAs(1)});
     Polled::handler();
-    check(Device<1>::low && results.empty(), "nothing done until the wire is");
+    check(Device<1>::low() && results.empty(), "nothing done until the wire is");
     PolledHw::doneOnWire = true;
     Polled::handler();
-    check(!Device<1>::low && results.size() == 1 && results[0].second == TransferResult::succeeded,
+    check(!Device<1>::low() && results.size() == 1
+            && results[0].second == TransferResult::succeeded,
           "handler() finds the completion and releases CS");
     std::array<std::byte, 20> big{};
     check(!Polled::submit(
@@ -530,7 +536,7 @@ void callbacksMaySubmit() {
     Request     r = write(Device<1>::lines, 1);
     r.callback    = [tag = 1](TransferResult) {
         Core::submit(write(Device<2>::lines, 2));
-        startedInside = Device<2>::low;
+        startedInside = Device<2>::low();
         maskedInside  = FakeHw::masked;
         // the lambda's own storage is not reused underneath it by what it submitted
         captured = tag;
@@ -541,7 +547,7 @@ void callbacksMaySubmit() {
     check(!startedInside, "what the callback submitted did not start inside it");
     check(maskedInside, "the section stays masked through a nested submit");
     checkEq(captured, 1, "the callback still reads its own captures");
-    check(Device<2>::low, "and it started right after the callback");
+    check(Device<2>::low(), "and it started right after the callback");
     check(!FakeHw::masked, "unmasked once the completion is over");
     FakeHw::finish();
 
@@ -554,7 +560,7 @@ void callbacksMaySubmit() {
     Core::handler();
     checkEq(Core::timeouts() - timeoutsBefore, 1U, "timed out");
     check(!startedInside && maskedInside, "same from the timeout path");
-    check(Device<2>::low, "the queued one started once the callback was over");
+    check(Device<2>::low(), "the queued one started once the callback was over");
     check(!FakeHw::masked, "and handler() unmasked at its end, not the nested submit");
     FakeHw::finish();
 }
@@ -585,8 +591,8 @@ void resetAndReleaseHoldFromACallback() {
     Core::submit(held);
     Core::submit(write(Device<2>::lines, 2));
     FakeHw::finish();
-    check(!Device<1>::low, "the hold ended inside its own callback");
-    check(Device<2>::low, "and the next device started");
+    check(!Device<1>::low(), "the hold ended inside its own callback");
+    check(Device<2>::low(), "and the next device started");
     FakeHw::finish();
 }
 
@@ -599,6 +605,51 @@ void holdNeedsASelect() {
     check(!Core::submit(r), "refused");
     checkEq(Core::refused() - refused, 1U, "counted");
     check(!Core::busy(), "nothing queued");
+}
+
+}   // namespace
+
+namespace {
+
+/// Every optional part off (QueueCoreFeatures): what is left must still move frames and time
+/// a lost one out.
+struct BareTiming : Kvasir::SPI::QueueCoreDefaults {
+    static constexpr Kvasir::SPI::QueueCoreFeatures QueueFeatures{.latency         = false,
+                                                                  .counters        = false,
+                                                                  .timeoutSnapshot = false};
+};
+
+using Bare = Kvasir::SPI::QueueCore<FakeHw, FakeClock, 4, 16, BareTiming>;
+
+template<typename C>
+concept HasCounters = requires { C::timeouts(); };
+template<typename C>
+concept HasLatency = requires { C::takeLatency(); };
+template<typename C>
+concept HasSnapshot = requires { C::lastTimeout(); };
+static_assert(HasCounters<Core> && HasLatency<Core> && HasSnapshot<Core>,
+              "all on by default");
+static_assert(!HasCounters<Bare> && !HasLatency<Bare> && !HasSnapshot<Bare>,
+              "and gone when off");
+
+void bareQueue() {
+    testCase("without latency, counters and snapshot a lost transfer still times out");
+    Bare::reset();
+    events.clear();
+    results.clear();
+    FakeHw::reset();
+    FakeClock::reset();
+    Device<1>::low_ = Device<2>::low_ = false;
+    check(Bare::submit(write(Device<1>::lines, 1, 8)), "accepted");
+    check(Bare::submit(write(Device<2>::lines, 2)), "second accepted");
+    FakeClock::advance(2200us);
+    Bare::handler();
+    checkEq(FakeHw::aborts, 1, "aborted after twice the wire time plus the margin");
+    check(results.size() == 1 && results[0].second == TransferResult::failed, "failed once");
+    check(Device<2>::low(), "the next one started");
+    FakeHw::finish();
+    checkEq(count(TransferResult::succeeded), 1, "and completed");
+    Bare::reset();
 }
 
 }   // namespace
@@ -623,5 +674,6 @@ int main() {
     callbacksMaySubmit();
     resetAndReleaseHoldFromACallback();
     holdNeedsASelect();
+    bareQueue();
     return finish();
 }
