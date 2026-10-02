@@ -1259,6 +1259,11 @@ private:
             g,
             [&](auto i) { r = &std::get<decltype(i)::value>(self_(e).reads_); },
             std::make_index_sequence<Reads::size>{});
+          // g is always one of the groups. Said so, rather than left to `*r`: a sanitized build
+          // keeps the null path that `*r` alone would make dead, and its type-mismatch handler
+          // returns, so gcc's LTO sees an atomic load from address 0 there (-Wstringop-overflow).
+          // Unreachable is a panic with a report under UBSan and nothing otherwise.
+          if(r == nullptr) { std::unreachable(); }
           return *r;
       },
       .periodNow =
@@ -1335,6 +1340,7 @@ private:
             w,
             [&](auto i) { r = &std::get<decltype(i)::value>(self_(e).writes_); },
             std::make_index_sequence<Writes::size>{});
+          if(r == nullptr) { std::unreachable(); }   // as in readSlot
           return *r;
       },
       .encodeWrite =

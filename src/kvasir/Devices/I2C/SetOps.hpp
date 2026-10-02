@@ -258,7 +258,10 @@ struct SetOps {
 
     template<typename C>
     static TimePoint verifyDueOf(State& e) {
-        if constexpr(C::EngineOps.verifyDue != nullptr) {
+        // NeedsVerify, not `EngineOps.verifyDue != nullptr`: the hook is set exactly when it is
+        // true, and gcc does not fold a function pointer compared with null to a constant under
+        // -fsanitize=undefined.
+        if constexpr(C::NeedsVerify) {
             return C::EngineOps.verifyDue(e);
         } else {
             return TimePoint::max();
