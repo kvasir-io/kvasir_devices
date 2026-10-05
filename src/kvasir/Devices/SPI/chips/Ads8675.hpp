@@ -143,8 +143,8 @@ namespace Kvasir { namespace SPI {
         void pinInterrupt() {
             if(!ready() || running_.load(std::memory_order_acquire)) { return; }
             data_               = std::array<std::byte, 4>{};
-            bool const accepted = submit_([this](TransferResult r) {
-                if(r == TransferResult::succeeded) {
+            bool const accepted = submit_([this](auto r) {
+                if(r == decltype(r)::succeeded) {
                     std::uint16_t v{};
                     std::memcpy(&v, data_.data(), 2);
                     auto const code = static_cast<std::int32_t>(std::byteswap(v) >> 2) - 8192;
@@ -274,8 +274,8 @@ namespace Kvasir { namespace SPI {
                                  4> const& frame) {
             data_ = frame;
             ok_   = false;
-            static_cast<void>(submit_([this](TransferResult r) {
-                ok_ = r == TransferResult::succeeded;
+            static_cast<void>(submit_([this](auto r) {
+                ok_ = r == decltype(r)::succeeded;
                 running_.store(false, std::memory_order_release);
             }));
         }

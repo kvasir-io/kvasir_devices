@@ -412,6 +412,45 @@ void features() {
         checkEq(Log::warnings, 0, "and nothing said");
     }
 
+    testCase(
+      "features: a bus with request deadlines replaces the in-flight net: the engine stamps the "
+      "deadline");
+    {
+        struct DeadlineTag {};
+
+        using DeadlineBus = FakeBusFor<DeadlineTag, FakeDeadlineRequest>;
+        fresh();
+        DeadlineBus::reset();
+        DeadlineBus::respond = zeros;
+        Kvasir::I2C::Device<DeadlineBus, FakeClock, Probe, ShortNet> dd{};
+        for(int i = 0; i < 500 && !dd.valid();
+            ++i) {   // the harness's turn() knows tagged buses only
+            dd.handler();
+            DeadlineBus::complete();
+            FakeClock::current += 1ms;
+        }
+        check(dd.valid(), "up");
+        for(int i = 0; i < 200 && DeadlineBus::pending.empty(); ++i) {
+            dd.handler();
+            FakeClock::current += 1ms;
+        }
+        check(!DeadlineBus::pending.empty(), "a read is on the wire");
+        auto const left = DeadlineBus::pending.front().deadline - FakeClock::now();
+        check(left > 0ms && left <= ShortNet::InFlightTimeout,
+              "deadline = submit + the in-flight timeout");
+        auto late = DeadlineBus::lose();   // the bus answers it at its deadline, not the engine
+        auto const errors = dd.errors();
+        for(int i = 0; i < 200; ++i) {
+            dd.handler();
+            FakeClock::current += 1ms;
+        }
+        checkEq(dd.errors(), errors, "the engine's own net does not give up on it");
+        late.callback(DeadlineBus::Result::failed);   // the bus's timedOut, as the engine sees it
+        dd.handler();
+        checkEq(dd.errors(), errors + 1, "the bus's answer is the one failure");
+        DeadlineBus::reset();
+    }
+
     testCase("features: without resting turns every loop turn is a full turn");
     {
         using NoRestBus = WithFeatures<FakeBus, EngineFeatures{.switchable = true, .rest = false}>;

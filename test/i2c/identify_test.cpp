@@ -46,6 +46,9 @@ template<typename Chip>
 constexpr bool ZerosLookLikeIt = false;
 template<>
 constexpr bool ZerosLookLikeIt<Chips::Rv8803<>> = true;
+/// Nor can the TC74's: all it guarantees is CONFIG D5..D0 reading zero (TC74.md Table 4-2).
+template<>
+constexpr bool ZerosLookLikeIt<Chips::Tc74<>> = true;
 
 std::size_t held = 0;
 

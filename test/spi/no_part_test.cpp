@@ -15,6 +15,8 @@
 #include <kvasir/Devices/SPI/chips/Ads131m0X.hpp>
 #include <kvasir/Devices/SPI/chips/Ads8675.hpp>
 #include <kvasir/Devices/SPI/chips/Bme280.hpp>
+#include <kvasir/Devices/SPI/chips/Ltc2400.hpp>
+#include <kvasir/Devices/SPI/chips/Ltc2641.hpp>
 #include <kvasir/Devices/SPI/chips/Max31865.hpp>
 #include <kvasir/Devices/SPI/chips/Max7219.hpp>
 #include <kvasir/Devices/SPI/chips/Mpu9250.hpp>
@@ -133,6 +135,18 @@ void all(std::uint8_t l) {
     run(3s, [&] { m0x.handler(); });
     check(!m0x.present() && !m0x.valid(), "ADS131M0x: no reset acknowledge, no reading");
     check(Pins::level[Spi::Cs::id], "ADS131M0x: CS high");
+
+    fresh(l);
+    A::Ltc2400::Reader<Bus, FakeClock, Spi::Cs, Spi::Drdy> ltc{};
+    run(3s, [&] { ltc.handler(); });
+    check(!ltc.valid() && ltc.link() == Kvasir::Link::absent, "LTC2401: no reading, absent");
+
+    fresh(l);
+    A::Ltc2641::Dac<Bus, Spi::Cs> dac{};
+    dac.write(0x8000);
+    run(10ms, [] {});
+    check(dac.writes() == 1 && Pins::level[Spi::Cs::id],
+          "LTC2641: write-only, so the frame going out is all it can say; CS high after it");
 
     fresh(l);
     A::SdCard<Bus, FakeClock, Spi::Cs> card{};

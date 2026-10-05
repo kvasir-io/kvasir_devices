@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kvasir/Util/Crc.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +10,8 @@
 /// Reading numbers out of the bytes a device sent (on any bus: the I2C descriptions and the
 /// SPI drivers share this): big- and little-endian words of 16, 24
 /// and 32 bits, signed and unsigned, sign extension from an arbitrary width, packed BCD, and
-/// the two CRC-8 variants these parts use. Once, and constexpr.
+/// the CRC-8s these parts use (named presets of the SDK's Kvasir::Crc::Engine). Once, and
+/// constexpr.
 namespace Kvasir {
 
 struct Bytes {
@@ -94,11 +97,14 @@ constexpr std::uint8_t toBcd(std::uint8_t value) {
     return static_cast<std::uint8_t>(((value / 10) << 4) | (value % 10));
 }
 
-/// CRC-8, MSB first, no reflection and no final XOR. The two polynomials these parts use
-/// differ only in that constant, so they are one function.
+/// CRC-8, MSB first, no reflection and no final XOR, polynomial and init free. Superseded by
+/// Kvasir::Crc::Engine (kvasir/Util/Crc.hpp), whose parameters carry their check value; kept
+/// for code outside this repository.
 template<std::uint8_t Polynomial>
-[[nodiscard]] constexpr std::uint8_t crc8(Bytes        data,
-                                          std::uint8_t init) {
+[[deprecated(
+  "use a Kvasir::Crc::Engine preset (kvasir/Util/Crc.hpp)")]] [[nodiscard]] constexpr std::uint8_t
+crc8(Bytes        data,
+     std::uint8_t init) {
     std::uint8_t crc = init;
     for(std::size_t i = 0; i < data.size(); ++i) {
         crc ^= data.u8(i);
@@ -112,12 +118,11 @@ template<std::uint8_t Polynomial>
 }
 
 /// The CRC-8 Sensirion's parts use (SHT3x Table 20, also SHT4x, SHTC3, SGP30/40, SCD4x)
-/// and Aosong copied for the AHT20: polynomial 0x31, init 0xFF. CRC(0xBEEF) = 0x92.
+/// and Aosong copied for the AHT20: CRC-8/NRSC-5, polynomial 0x31, init 0xFF. CRC(0xBEEF) =
+/// 0x92. (The HTU21D / Si7021 use the same polynomial from 0x00: Kvasir::Crc::Crc8Htu21d.)
 namespace Sensirion {
-    /// `init` 0xFF is Sensirion's; the HTU21D / Si7021 use the same polynomial from 0x00.
-    [[nodiscard]] constexpr std::uint8_t crc8(Bytes        data,
-                                              std::uint8_t init = 0xFF) {
-        return Kvasir::crc8<0x31U>(data, init);
+    [[nodiscard]] constexpr std::uint8_t crc8(Bytes data) {
+        return Crc::Crc8Sensirion<>::compute(data.bytes);
     }
 
     static_assert(crc8(Bytes{
@@ -142,18 +147,19 @@ namespace Sensirion {
     }
 }   // namespace Sensirion
 
-/// SMBus PEC (MLX90614): CRC-8 polynomial 0x07, init 0, over the whole frame including
+/// SMBus PEC (MLX90614): CRC-8/SMBUS, polynomial 0x07, init 0, over the whole frame including
 /// the address bytes.
-[[nodiscard]] constexpr std::uint8_t crc8Smbus(Bytes        data,
-                                               std::uint8_t init = 0) {
-    return crc8<0x07U>(data, init);
+[[nodiscard]] constexpr std::uint8_t crc8Smbus(Bytes data) {
+    return Crc::Crc8Smbus<>::compute(data.bytes);
 }
 
-/// CRC-8 reflected (LSB first), no final XOR: the Dallas/Maxim CRC every 1-Wire ROM and
-/// scratchpad carries is `crc8Reflected<0x8C>(data, 0)`. Bit-serial, so it needs no table.
+/// CRC-8 reflected (LSB first), no final XOR, polynomial (reflected) and init free. Superseded
+/// by Kvasir::Crc::Engine (kvasir/Util/Crc.hpp); kept for code outside this repository.
 template<std::uint8_t ReflectedPolynomial>
-[[nodiscard]] constexpr std::uint8_t crc8Reflected(Bytes        data,
-                                                   std::uint8_t init) {
+[[deprecated(
+  "use a Kvasir::Crc::Engine preset (kvasir/Util/Crc.hpp)")]] [[nodiscard]] constexpr std::uint8_t
+crc8Reflected(Bytes        data,
+              std::uint8_t init) {
     std::uint8_t crc = init;
     for(std::size_t i = 0; i < data.size(); ++i) {
         crc ^= data.u8(i);
@@ -166,13 +172,12 @@ template<std::uint8_t ReflectedPolynomial>
     return crc;
 }
 
-/// The Dallas/Maxim CRC-8 (polynomial x^8 + x^5 + x^4 + 1, reflected 0x8C), init 0: 1-Wire
+/// The Dallas/Maxim CRC-8 (CRC-8/MAXIM-DOW: x^8 + x^5 + x^4 + 1, reflected, init 0): 1-Wire
 /// ROM codes and DS18B20 scratchpads. Maxim AN27's example ROM 02 1C B8 01 00 00 00 has the
 /// CRC A2.
 namespace Dallas {
-    [[nodiscard]] constexpr std::uint8_t crc8(Bytes        data,
-                                              std::uint8_t init = 0) {
-        return Kvasir::crc8Reflected<0x8CU>(data, init);
+    [[nodiscard]] constexpr std::uint8_t crc8(Bytes data) {
+        return Crc::Crc8MaximDow<>::compute(data.bytes);
     }
 
     static_assert(crc8(Bytes{

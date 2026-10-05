@@ -2,6 +2,7 @@
 
 #include "../Device.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Crc.hpp"
 
 #include <array>
 #include <chrono>
@@ -13,26 +14,19 @@ namespace Kvasir::I2C::Chips {
 
 namespace Htu21dDetail {
     /// A 3-byte result: 14-bit value with two status bits in the low LSBs, then a CRC-8
-    /// (polynomial 0x31, initialised to 0x00: HTU21D "CRC with I2C protocol"). Examples
-    /// from the datasheet: CRC(0x683A) = 0x7C, CRC(0x4E85) = 0x6B.
+    /// (polynomial 0x31, initialised to 0x00: HTU21D "CRC with I2C protocol"; no catalogue
+    /// name, Kvasir::Crc::Crc8Htu21d). Examples from the datasheet: CRC(0x683A) = 0x7C,
+    /// CRC(0x4E85) = 0x6B.
     [[nodiscard]] constexpr bool wordOk(Bytes       data,
                                         std::size_t i) {
-        return Sensirion::crc8(data.sub(i, 2), 0x00) == data.u8(i + 2);
+        return Crc::Crc8Htu21d<>::compute(data.sub(i, 2).bytes) == data.u8(i + 2);
     }
 
-    static_assert(Sensirion::crc8(
-                    Bytes{
-                      std::array{std::byte{0x68},
-                                 std::byte{0x3A}}
-    },
-                    0x00)
+    static_assert(Crc::Crc8Htu21d<>::compute(std::array{std::byte{0x68},
+                                                        std::byte{0x3A}})
                   == 0x7C);
-    static_assert(Sensirion::crc8(
-                    Bytes{
-                      std::array{std::byte{0x4E},
-                                 std::byte{0x85}}
-    },
-                    0x00)
+    static_assert(Crc::Crc8Htu21d<>::compute(std::array{std::byte{0x4E},
+                                                        std::byte{0x85}})
                   == 0x6B);
 
     /// Bit 1 of a result word says which measurement it is: 0 temperature, 1 humidity

@@ -8,8 +8,9 @@
 #include "Mpu9250.hpp"
 
 /// Every SPI chip description on the engine, with default parameters, for the tests that walk
-/// them all (test/spi/oracle_test.cpp). A new description gets a line here. NorFlash, ADS8675 and
-/// ADS131M0x are not descriptions; test/spi/no_part_test.cpp runs every driver.
+/// them all (test/spi/oracle_test.cpp). A new description gets a line here. NorFlash, ADS8675,
+/// ADS131M0x, the LTC2401 reader and the LTC2641 are not descriptions; test/spi/no_part_test.cpp
+/// runs every driver.
 namespace Kvasir::SPI::Chips {
 
 using Every

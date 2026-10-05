@@ -81,6 +81,7 @@
 #include "Shtc3.hpp"
 #include "SolderedEasyC.hpp"
 #include "Ssd1306.hpp"
+#include "Tc74.hpp"
 #include "Tca9548a.hpp"
 #include "Tca9555.hpp"
 #include "Tcs34725.hpp"

@@ -80,7 +80,7 @@ namespace Kvasir { namespace SPI {
         /// Datasheet "CRC Checksum": CRC-8/0x07, init 0, no reflection, over the communications byte
         /// and the data bytes.
         [[nodiscard]] constexpr std::uint8_t crc(std::span<std::byte const> frame) {
-            return Kvasir::crc8<0x07U>(Bytes{frame}, 0);
+            return Kvasir::Crc::Crc8Smbus<>::compute(frame);
         }
 
         // The CRC-8/0x07 check value: "123456789" -> 0xF4.

@@ -6,6 +6,7 @@
 // main loop, a callback or any interrupt; each runs under the policy's mask, depth-counted. A
 // callback runs where the completion is found (DMA interrupt on the RP, handler() on the SAM), from
 // a copy of itself, and may submit(), releaseHold() or reset(); what it submits starts after it.
+#include "../BusTypes.hpp"
 #include "../I2C/EngineFeatures.hpp"
 #include "../Log.hpp"
 #include "kvasir/Atomic/Queue.hpp"
@@ -24,6 +25,9 @@
 namespace Kvasir { namespace SPI {
 
     enum class TransferResult : std::uint8_t { failed, succeeded };
+
+    /// The result on a queue with `cancel` or `deadlines` (QueueCoreFeatures): the first two as TransferResult.
+    enum class TransferResultTracked : std::uint8_t { failed, succeeded, cancelled, timedOut };
 
     /// CPOL/CPHA; the PL022's SPO/SPH (TRM DDI0194H 2.4.4), SERCOM CPOL/CPHA (DS40001882L 27.6.2.5).
     enum class ClockMode : std::uint8_t { _0, _1, _2, _3 };
@@ -66,6 +70,27 @@ namespace Kvasir { namespace SPI {
         StaticFunction<void(TransferResult), CallbackSize> callback{};
     };
 
+    /// Request's fields with the tracked result, a ticket, the tombstone flag, `abortable` and an optional deadline
+    /// (BusTypes.hpp): a type of its own, so a queue with the features off keeps Request - and its mangled name -
+    /// untouched.
+    template<typename Setup, std::size_t CallbackSize, typename TimePoint, bool Deadlines>
+    struct TrackedRequest {
+        Setup                                                                  setup{};
+        Lines                                                                  lines{};
+        std::span<std::byte const>                                             command{};
+        std::span<std::byte const>                                             tx{};
+        std::span<std::byte>                                                   rx{};
+        std::uint32_t                                                          repeat{};
+        bool                                                                   wide{};
+        bool                                                                   hold{};
+        StaticFunction<void(TransferResultTracked), CallbackSize>              callback{};
+        std::uint16_t                                                          ticket{};
+        bool                                                                   cancelled{};
+        bool                                                                   abortable{true};
+        [[no_unique_address]] I2C::detail::IfFeature<Deadlines, TimePoint, 30> deadline{
+          TimePoint::max()};
+    };
+
     /// A request resolved to what the policy's DMA set-up needs.
     struct Transfer {
         std::byte const* tx{};
@@ -87,6 +112,10 @@ namespace Kvasir { namespace SPI {
         bool counters = true;
         /// lastTimeout() / logLastTimeout(): the hardware's state at the last timeout.
         bool timeoutSnapshot = true;
+        /// submitTracked() -> Bus::Ticket, cancel(ticket) (BusTypes.hpp). Off by default: today's request type.
+        bool cancel = false;
+        /// Request::deadline: done by then, queue wait included, else `timedOut` (checked by handler()).
+        bool deadlines = false;
     };
 
     struct QueueCoreDefaults {
@@ -122,8 +151,6 @@ namespace Kvasir { namespace SPI {
         static constexpr std::size_t QueueDepth   = QueueDepth_;
         static constexpr std::size_t CallbackSize = CallbackSize_;
         using Setup                               = typename Hw::Setup;
-        using RequestT                            = Request<Setup, CallbackSize>;
-        using Result                              = TransferResult;
         using tp                                  = typename Clock::time_point;
 
         static_assert(
@@ -140,6 +167,14 @@ namespace Kvasir { namespace SPI {
                 return QueueCoreFeatures{};
             }
         }();
+
+        static constexpr bool Tracked = Features.cancel || Features.deadlines;
+        using RequestT
+          = std::conditional_t<Tracked,
+                               TrackedRequest<Setup, CallbackSize, tp, Features.deadlines>,
+                               Request<Setup, CallbackSize>>;
+        using Result    = std::conditional_t<Tracked, TransferResultTracked, TransferResult>;
+        using CallbackT = decltype(RequestT::callback);
 
         static constexpr auto TimeoutMargin = [] {
             if constexpr(requires { Timing::TimeoutMargin; }) {
@@ -234,6 +269,51 @@ namespace Kvasir { namespace SPI {
             return accepted;
         }
 
+        /// submit(), with a ticket for cancel(); an invalid ticket (refused, no callback) when submit() would be false.
+        static Bus::Ticket submitTracked(RequestT req)
+            requires(Tracked)
+        {
+            lock_();
+            req.ticket = Bus::nextTicket(ticketCounter_);
+            unlock_();
+            return submit(req) ? Bus::Ticket{req.ticket} : Bus::Ticket{};
+        }
+
+        /// removed: queued (never started), or on the wire and stopped at once (SPI's abort is synchronous) - its
+        /// callback (cancelled) has run before this returns. tooLate: completed already, an unknown ticket, or on
+        /// the wire with `abortable` false (it runs to its end).
+        static Bus::Cancel cancel(Bus::Ticket t)
+            requires(Features.cancel)
+        {
+            if(!t.valid()) { return Bus::Cancel::tooLate; }
+            lock_();
+            auto r = Bus::Cancel::tooLate;
+            if(active_ && current_.request.ticket == t.id) {
+                if(current_.request.abortable) {
+                    Hw::abort();
+                    finish_(Result::cancelled);
+                    if(!resetting_) { tryStart_(); }
+                    r = Bus::Cancel::removed;
+                }
+            } else if(haveContinuation_ && continuation_.request.ticket == t.id) {
+                haveContinuation_ = false;   // the hold stays until its timeout or releaseHold()
+                auto const cb     = continuation_.request.callback;
+                invoke_(cb, Result::cancelled);
+                r = Bus::Cancel::removed;
+            } else {
+                queue_.forEachQueued([&](Entry& e) {
+                    if(e.request.ticket == t.id && !e.request.cancelled) {
+                        e.request.cancelled = true;
+                        auto const cb       = e.request.callback;
+                        invoke_(cb, Result::cancelled);
+                        r = Bus::Cancel::removed;
+                    }
+                });
+            }
+            unlock_();
+            return r;
+        }
+
         static void releaseHold(Lines const& lines) {
             lock_();
             if(holding_ && !active_ && holder_.select == lines.select) {
@@ -271,6 +351,7 @@ namespace Kvasir { namespace SPI {
             }
 
             lock_();
+            if constexpr(Features.deadlines) { expireDeadlines_(now); }
             if(active_ && now > deadline_) {
                 ++timeouts_;
                 if constexpr(Features.timeoutSnapshot) { lastTimeout_ = snapshot_(now); }
@@ -489,6 +570,8 @@ namespace Kvasir { namespace SPI {
         inline static tp                                           holdDeadline_{};
         inline static std::chrono::microseconds                    expected_{};
         inline static std::uint32_t                                frames_{};
+        // only odr-used (so only defined) on a tracked queue
+        inline static std::uint16_t ticketCounter_{};
 
         /// The optional parts (QueueCoreFeatures, and the log limiter without logging) as members
         /// of ONE static object, next to a counter that is always there: a static member takes a
@@ -608,10 +691,50 @@ namespace Kvasir { namespace SPI {
                 current_          = continuation_;
                 haveContinuation_ = false;
                 continuation      = true;
-            } else if(!queue_.pop_into(current_)) {
-                return;
+            } else {
+                while(true) {
+                    if(!queue_.pop_into(current_)) { return; }
+                    if constexpr(Tracked) {
+                        if(current_.request.cancelled) { continue; }   // a tombstone: dropped
+                    }
+                    if constexpr(Features.deadlines) {
+                        if(Clock::now()
+                           > current_.request.deadline) {   // out of time before it started
+                            ++drained_;
+                            auto const cb = current_.request.callback;
+                            invoke_(cb, Result::timedOut);
+                            continue;
+                        }
+                    }
+                    break;
+                }
             }
             start_(continuation);
+        }
+
+        /// Under the lock: the request on the wire past its deadline is stopped (timedOut), queued ones past theirs
+        /// become tombstones with their callback (timedOut).
+        static void expireDeadlines_(tp now)
+            requires(Features.deadlines)
+        {
+            if(active_ && now > current_.request.deadline) {
+                Hw::abort();
+                finish_(Result::timedOut);
+            }
+            queue_.forEachQueued([&](Entry& e) {
+                if(!e.request.cancelled && now > e.request.deadline) {
+                    e.request.cancelled = true;
+                    ++drained_;
+                    auto const cb = e.request.callback;
+                    invoke_(cb, Result::timedOut);
+                }
+            });
+            if(haveContinuation_ && now > continuation_.request.deadline) {
+                haveContinuation_ = false;
+                auto const cb     = continuation_.request.callback;
+                invoke_(cb, Result::timedOut);
+            }
+            if(!active_ && !resetting_) { tryStart_(); }
         }
 
         static void start_(bool continuation) {
@@ -654,9 +777,8 @@ namespace Kvasir { namespace SPI {
             Hw::start(t, generation_, &complete);
         }
 
-        static void invoke_(StaticFunction<void(TransferResult),
-                                           CallbackSize> const& cb,
-                            Result                              result) {
+        static void invoke_(CallbackT const& cb,
+                            Result           result) {
             if(!cb) { return; }
             auto const outer = inCallback_;
             inCallback_      = true;
@@ -679,7 +801,15 @@ namespace Kvasir { namespace SPI {
                     holding_ = false;
                 }
             } else {
-                if(consecutiveFailures_ != std::numeric_limits<std::uint32_t>::max()) {
+                // a cancel is the caller's choice, not a sign of a sick bus
+                bool const byCaller = [&] {
+                    if constexpr(Tracked) {
+                        return result == Result::cancelled;
+                    } else {
+                        return false;
+                    }
+                }();
+                if(!byCaller && consecutiveFailures_ != std::numeric_limits<std::uint32_t>::max()) {
                     ++consecutiveFailures_;
                 }
                 // A failure ends the device's transaction: the part sees CS go high.
@@ -704,6 +834,9 @@ namespace Kvasir { namespace SPI {
         static void drainQueue_(std::size_t n) {
             Entry e{};
             while(n-- != 0 && queue_.pop_into(e)) {
+                if constexpr(Tracked) {
+                    if(e.request.cancelled) { continue; }   // a tombstone: its callback has run
+                }
                 ++drained_;
                 invoke_(e.request.callback, Result::failed);
             }

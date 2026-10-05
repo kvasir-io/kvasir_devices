@@ -226,8 +226,8 @@ namespace Kvasir { namespace SPI {
                                           .tx    = std::span<std::byte const>{frame_},
                                           .rx    = std::span{frame_},
                                           .callback =
-                                            [this](TransferResult r) {
-                                                if(r == TransferResult::succeeded) {
+                                            [this](auto r) {
+                                                if(r == decltype(r)::succeeded) {
                                                     done_.store(true, std::memory_order_relaxed);
                                                 } else {
                                                     failed_.store(true, std::memory_order_relaxed);

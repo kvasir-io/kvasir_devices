@@ -652,6 +652,145 @@ void bareQueue() {
     Bare::reset();
 }
 
+// A queue with tickets and deadlines (QueueCoreFeatures::cancel / ::deadlines)
+
+struct TrackedTiming : Kvasir::SPI::QueueCoreDefaults {
+    static constexpr Kvasir::SPI::QueueCoreFeatures QueueFeatures{.cancel    = true,
+                                                                  .deadlines = true};
+};
+
+using TCore    = Kvasir::SPI::QueueCore<FakeHw, FakeClock, 4, 16, TrackedTiming>;
+using TRequest = TCore::RequestT;
+using Tracked  = Kvasir::SPI::TransferResultTracked;
+using Kvasir::Bus::Cancel;
+
+static_assert(std::is_same_v<Core::Result,
+                             TransferResult>,
+              "features off: the old result type");
+static_assert(std::is_same_v<Core::RequestT,
+                             Kvasir::SPI::Request<FakeHw::Setup,
+                                                  16>>,
+              "features off: the old request type");
+
+inline std::vector<std::pair<int, Tracked>> tresults{};
+
+TRequest twrite(Lines       l,
+                int         tag,
+                std::size_t n = 4) {
+    TRequest r{};
+    r.lines    = l;
+    r.tx       = std::span{txBuf}.first(n);
+    r.callback = [tag](Tracked res) { tresults.emplace_back(tag, res); };
+    return r;
+}
+
+void tfresh() {
+    TCore::reset();
+    fresh();
+    tresults.clear();
+}
+
+void cancelQueued() {
+    testCase(
+      "cancel a queued request: its callback (cancelled) inside cancel(), never started, the slot "
+      "comes back");
+    tfresh();
+    auto const a = TCore::submitTracked(twrite(Device<1>::lines, 1));
+    auto const b = TCore::submitTracked(twrite(Device<2>::lines, 2));
+    check(a.valid() && b.valid() && !(a == b), "two tickets");
+    check(TCore::cancel(b) == Cancel::removed, "removed");
+    check(tresults.size() == 1 && tresults[0].first == 2
+            && tresults[0].second == Tracked::cancelled,
+          "cancelled at once");
+    check(TCore::cancel(b) == Cancel::tooLate, "a second cancel is too late");
+    check(TCore::cancel(Kvasir::Bus::Ticket{}) == Cancel::tooLate, "ticket 0 is no request");
+    FakeHw::finish();
+    check(!Device<2>::low(), "B never selected");
+    checkEq(TCore::transfers(), 1U, "only A on the wire");
+    check(tresults.size() == 2 && tresults[1].second == Tracked::succeeded, "A succeeded");
+    for(int i = 0; i != 4; ++i) {
+        check(TCore::submitTracked(twrite(Device<1>::lines, 10 + i)).valid(), "slots");
+    }
+    check(TCore::cancel(a) == Cancel::tooLate, "A completed: too late");
+}
+
+void cancelActive() {
+    testCase(
+      "cancel the transfer on the wire: aborted, CS up, cancelled, the next starts; its late "
+      "completion dropped");
+    tfresh();
+    auto const a = TCore::submitTracked(twrite(Device<1>::lines, 1));
+    TCore::submitTracked(twrite(Device<2>::lines, 2));
+    auto const gen      = FakeHw::gen;
+    auto const failures = TCore::consecutiveFailures();
+    check(TCore::cancel(a) == Cancel::removed, "removed: SPI stops at once");
+    checkEq(FakeHw::aborts, 1, "aborted once");
+    check(!Device<1>::low() && Device<2>::low(), "CS up, the next one started");
+    check(tresults.size() == 1 && tresults[0].second == Tracked::cancelled, "cancelled");
+    FakeHw::done(gen, false);
+    checkEq(TCore::staleCompletions(), 1U, "the old completion counted stale");
+    checkEq(TCore::consecutiveFailures(), failures, "a cancel is not a bus failure");
+    FakeHw::finish();
+    check(tresults.size() == 2 && tresults[1].second == Tracked::succeeded, "B succeeded");
+}
+
+void notAbortable() {
+    testCase("a transfer on the wire that must not be cut: tooLate, it runs to its end");
+    tfresh();
+    auto r       = twrite(Device<1>::lines, 1);
+    r.abortable  = false;
+    auto const a = TCore::submitTracked(r);
+    check(TCore::cancel(a) == Cancel::tooLate, "too late");
+    checkEq(FakeHw::aborts, 0, "not aborted");
+    FakeHw::finish();
+    check(tresults.size() == 1 && tresults[0].second == Tracked::succeeded, "completed");
+}
+
+void cancelContinuation() {
+    testCase("cancel a hold's continuation: cancelled, the hold stays");
+    tfresh();
+    auto first = twrite(Device<1>::lines, 1);
+    first.hold = true;
+    TCore::submitTracked(first);
+    FakeHw::finish();
+    auto const next = TCore::submitTracked(twrite(Device<1>::lines, 2));
+    check(next.valid(), "continuation accepted");
+    // it started at once (the holder's turn): cancel it on the wire instead
+    check(TCore::cancel(next) == Cancel::removed, "removed");
+    check(tresults.size() == 2 && tresults[1].second == Tracked::cancelled, "cancelled");
+    check(!Device<1>::low(), "a cancel ends the device's transaction: CS up");
+}
+
+void deadlines() {
+    testCase(
+      "deadlines: a queued request past its deadline times out without starting; the active one is "
+      "stopped");
+    tfresh();
+    TCore::submitTracked(twrite(Device<1>::lines, 1, 8));
+    auto late     = twrite(Device<2>::lines, 2);
+    late.deadline = FakeClock::now() + 500us;
+    TCore::submitTracked(late);
+    FakeClock::advance(600us);
+    TCore::handler();
+    check(tresults.size() == 1 && tresults[0].first == 2 && tresults[0].second == Tracked::timedOut,
+          "B timed out in the queue");
+    FakeHw::finish();
+    check(!Device<2>::low(), "B never selected");
+    auto slow     = twrite(Device<1>::lines, 3, 8);
+    slow.deadline = FakeClock::now() + 10us;
+    TCore::submitTracked(slow);
+    FakeClock::advance(20us);
+    TCore::handler();
+    checkEq(FakeHw::aborts, 1, "the active one past its deadline is aborted");
+    check(tresults.back().first == 3 && tresults.back().second == Tracked::timedOut, "timedOut");
+    check(!Device<1>::low(), "CS up");
+    auto expired     = twrite(Device<2>::lines, 4);
+    expired.deadline = FakeClock::now() - 1us;
+    TCore::submitTracked(expired);
+    check(tresults.back().first == 4 && tresults.back().second == Tracked::timedOut
+            && !Device<2>::low(),
+          "out of time before it started: timedOut, never selected");
+}
 }   // namespace
 
 int main() {
@@ -675,5 +814,10 @@ int main() {
     resetAndReleaseHoldFromACallback();
     holdNeedsASelect();
     bareQueue();
+    cancelQueued();
+    cancelActive();
+    notAbortable();
+    cancelContinuation();
+    deadlines();
     return finish();
 }

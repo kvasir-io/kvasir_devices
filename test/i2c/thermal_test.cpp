@@ -498,6 +498,153 @@ void lm75() {
     if(failures != 0) { dump(); }
 }
 
+/// A TC74 on the wire: CONFIG (SHDN, read-only DATA_RDY) and TEMP behind the command byte. TEMP
+/// reads 00h until the first conversion after power-up or standby, which sets DATA_RDY (TC74.md
+/// Table 4-2, Table 4-5 note); in standby DATA_RDY is reset and TEMP frozen (3.1.1).
+struct Tc74Part {
+    std::uint8_t          address{0x49};
+    std::uint8_t          pointer{};
+    std::uint8_t          reserved{};   ///< bits D5..D0 as the part reads them: not a TC74 if set
+    bool                  standby{};
+    bool                  ready{};
+    std::uint8_t          temp{};      ///< what the next conversion measures
+    std::uint8_t          tempReg{};   ///< TEMP as read
+    FakeClock::time_point convertedAt{FakeClock::now() + 125ms};
+    int                   configWrites{};
+    std::uint8_t          lastConfigWritten{0xAA};
+
+    [[nodiscard]] std::uint8_t config() const {
+        return static_cast<std::uint8_t>((standby ? 0x80U : 0U) | (ready ? 0x40U : 0U) | reserved);
+    }
+
+    FakeBusResult operator()(std::uint8_t               addr,
+                             std::span<std::byte const> sent,
+                             std::span<std::byte>       recv) {
+        if(addr != address) { return FakeBusResult::notAcknowledged; }
+        if(!standby && FakeClock::now() >= convertedAt) {
+            ready   = true;
+            tempReg = temp;
+        }
+        if(!sent.empty()) {
+            pointer = static_cast<std::uint8_t>(sent[0]);
+            if(sent.size() == 2 && pointer == 0x01) {
+                ++configWrites;
+                lastConfigWritten = static_cast<std::uint8_t>(sent[1]);
+                bool const shdn   = (lastConfigWritten & 0x80U) != 0;
+                if(shdn) {
+                    standby = true;
+                    ready   = false;
+                } else if(standby) {
+                    standby     = false;
+                    convertedAt = FakeClock::now() + 125ms;
+                }
+            }
+        }
+        for(auto& b : recv) { b = std::byte{pointer == 0x00 ? tempReg : config()}; }
+        return FakeBusResult::succeeded;
+    }
+};
+
+void tc74() {
+    testCase("TC74");
+    // The variant is the address: A0..A7 at 0x48..0x4F, A5 the default (TC74.md:402-415).
+    static_assert(Chips::Tc74<0>::Address == 0x48 && Chips::Tc74<1>::Address == 0x49
+                  && Chips::Tc74<>::Address == 0x4D && Chips::Tc74<7>::Address == 0x4F);
+    // Table 4-4: 8-bit two's complement, one degree a count
+    static_assert([] {
+        using T      = Chips::Tc74<>::Temperature;
+        auto const t = [](std::uint8_t raw) {
+            auto const f = frame(0x40, raw);   // DATA_RDY set, normal mode
+            auto const o = T::decode(Bytes{f});
+            return isOk(o) ? centiOf(o.value.temperature) : -99999;
+        };
+        return t(0x7F) == 12700 && t(0x19) == 2500 && t(0x00) == 0 && t(0xFF) == -100
+            && t(0xE7) == -2500 && t(0xE6) == -2600 && t(0xC9) == -5500 && t(0xBF) == -6500
+            && t(0x80) == -12800;
+    }());
+    // Not ready, standby, a floating bus
+    static_assert([] {
+        using T           = Chips::Tc74<>::Temperature;
+        auto const notYet = frame(0x00, 0x19);
+        auto const asleep = frame(0x80, 0x19);
+        auto const frozen = frame(0xC0, 0x19);   // a standby the ready bit has not seen yet
+        auto const floats = frame(0xFF, 0xFF);
+        auto const odd    = frame(0x41, 0x19);
+        return isUnchanged(T::decode(Bytes{notYet})) && isUnchanged(T::decode(Bytes{asleep}))
+            && isUnchanged(T::decode(Bytes{frozen})) && isReject(T::decode(Bytes{floats}))
+            && isReject(T::decode(Bytes{odd}));
+    }());
+    static_assert([] {
+        std::array<std::byte, 1> b{};
+        using P = Chips::Tc74<>::Power;
+        static_cast<void>(P::encode(Chips::Tc74<>::Mode::standby, b));
+        bool const standby = b[0] == std::byte{0x80};
+        static_cast<void>(P::encode(Chips::Tc74<>::Mode::normal, b));
+        return standby && b[0] == std::byte{0x00};
+    }());
+
+    {
+        fresh();
+        Tc74Part part{};
+        part.temp = 0xE7;   // -25 degC
+        ScopedHook const    answering{FakeBus::respond, std::ref(part)};
+        Dev<Chips::Tc74<1>> t{};
+        check(runUntil(t, [&] { return t.samples() == 1; }, 1s), "first sample");
+        check(t.identified(), "CONFIG D5..D0 read zero");
+        check(FakeBus::log.front().isRead()
+                && FakeBus::log.front().sent == std::vector<std::uint8_t>{0x01},
+              "CONFIG read before anything is written");
+        checkEq(part.configWrites, 1, "normal mode written once at bring-up");
+        checkEq(part.lastConfigWritten, std::uint8_t{0x00}, "SHDN clear");
+        check(FakeClock::now() >= part.convertedAt, "no sample before DATA_RDY");
+        checkEq(centiOf(t.latest().temperature), -2500, "negative temperature through the engine");
+
+        part.temp = 0x7F;
+        check(runUntil(
+                t,
+                [&] { return centiOf(t.latest().temperature) == 12700; },
+                1s),
+              "a new conversion is read");
+
+        // standby: DATA_RDY goes, TEMP is frozen, no sample steps
+        static_cast<void>(t.set<Chips::Tc74<1>::Power>(Chips::Tc74<1>::Mode::standby));
+        check(runUntil(t, [&] { return part.standby; }, 1s), "SHDN written");
+        part.temp            = 0x00;
+        auto const asleepFor = t.samples();
+        runFor(t, 2s);
+        checkEq(t.samples(), asleepFor, "no samples in standby");
+        checkEq(centiOf(t.latest().temperature), 12700, "the last sample stands");
+
+        static_cast<void>(t.set<Chips::Tc74<1>::Power>(Chips::Tc74<1>::Mode::normal));
+        check(runUntil(t, [&] { return t.samples() > asleepFor; }, 1s), "readings resume");
+        checkEq(centiOf(t.latest().temperature), 0, "the new conversion");
+        if(failures != 0) { dump(); }
+    }
+    {
+        // a part with a reserved bit set is not a TC74, and is not written to
+        fresh();
+        Tc74Part part{};
+        part.reserved = 0x01;
+        ScopedHook const    answering{FakeBus::respond, std::ref(part)};
+        Dev<Chips::Tc74<1>> t{};
+        runFor(t, 3s);
+        check(!t.identified() && !t.answering(), "a reserved bit set: not identified");
+        checkEq(part.configWrites, 0, "and not written to");
+        if(failures != 0) { dump(); }
+    }
+    {
+        // TC74A5 ordered, TC74A1 assumed: the A1 description at 0x49 finds nothing at 0x4D
+        fresh();
+        Tc74Part part{};
+        part.address = 0x4D;
+        ScopedHook const    answering{FakeBus::respond, std::ref(part)};
+        Dev<Chips::Tc74<1>> t{};
+        runFor(t, 3s);
+        check(!t.identified() && !t.answering(), "nothing answers at the variant's address");
+        if(failures != 0) { dump(); }
+    }
+}
+
 void dps310() {
     testCase("DPS310 (worked example)");
     fresh();
@@ -1233,6 +1380,7 @@ int main() {
     hdc1080();
     tmp102();
     lm75();
+    tc74();
     dps310();
     tmp117();
     emc2101();

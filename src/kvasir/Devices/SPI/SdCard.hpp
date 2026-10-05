@@ -17,6 +17,7 @@
 #include "../Log.hpp"
 #include "../Quantities.hpp"
 #include "QueueCore.hpp"
+#include "kvasir/Util/Crc.hpp"
 #include "kvasir/Util/Periodic.hpp"
 
 #include <array>
@@ -234,12 +235,13 @@ namespace Kvasir { namespace SPI {
         // -- the wire ------------------------------------------------------------------------
 
         bool submit_(typename Spi::Request r) {
-            done_      = false;
-            ok_        = false;
-            r.callback = [this](TransferResult res) {
-                ok_   = res == TransferResult::succeeded;
-                done_ = true;
-            };
+            done_ = false;
+            ok_   = false;
+            r.callback
+              = [this](auto res) {   // the master's result type: TransferResult or ...Tracked
+                    ok_   = res == decltype(res)::succeeded;
+                    done_ = true;
+                };
             inFlight_ = Spi::submit(r);
             if(!inFlight_) {
                 // A full queue: the sequence is failed and the card tried again.
@@ -263,18 +265,10 @@ namespace Kvasir { namespace SPI {
             return phase_ == Phase::ready ? data_clock_ : identification_;
         }
 
-        /// CRC7, G(x) = x^7 + x^3 + 1 (SD spec 4.5), as CRC << 1 | end bit.
+        /// CRC7, G(x) = x^7 + x^3 + 1 (SD spec 4.5; CRC-7/MMC), as CRC << 1 | end bit.
         static constexpr std::uint8_t crc7_(std::span<std::byte const> bytes) {
-            std::uint8_t crc = 0;
-            for(auto b : bytes) {
-                auto v = std::to_integer<std::uint8_t>(b);
-                for(int i = 0; i < 8; ++i) {
-                    crc = static_cast<std::uint8_t>(crc << 1U);
-                    if(((v ^ crc) & 0x80U) != 0) { crc ^= 0x09U; }
-                    v = static_cast<std::uint8_t>(v << 1U);
-                }
-            }
-            return static_cast<std::uint8_t>(((crc & 0x7FU) << 1U) | 1U);
+            return static_cast<std::uint8_t>(
+              (static_cast<unsigned>(Crc::Crc7Mmc<>::compute(bytes)) << 1U) | 1U);
         }
 
         static_assert(crc7_(std::array{std::byte{0x40},
@@ -293,17 +287,10 @@ namespace Kvasir { namespace SPI {
                       "CMD8(0x1AA)'s CRC byte is 0x87");
 
     public:
-        /// CRC16-CCITT, G(x) = x^16 + x^12 + x^5 + 1 (SD spec 4.5), over a data block.
+        /// CRC16-CCITT, G(x) = x^16 + x^12 + x^5 + 1 (SD spec 4.5; CRC-16/XMODEM), over a data
+        /// block. A byte table (512 bytes of flash): it runs over every 512-byte block read.
         static constexpr std::uint16_t crc16(std::span<std::byte const> bytes) {
-            std::uint16_t crc = 0;
-            for(auto b : bytes) {
-                crc = static_cast<std::uint16_t>(crc ^ (std::to_integer<std::uint16_t>(b) << 8U));
-                for(int i = 0; i < 8; ++i) {
-                    auto const wide = static_cast<std::uint32_t>(crc) << 1U;
-                    crc = static_cast<std::uint16_t>((crc & 0x8000U) != 0 ? wide ^ 0x1021U : wide);
-                }
-            }
-            return crc;
+            return Crc::Crc16Xmodem<256>::compute(bytes);
         }
 
     private:

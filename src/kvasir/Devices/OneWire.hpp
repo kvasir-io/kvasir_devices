@@ -230,16 +230,9 @@ struct OneWire {
     template<typename IIT>
     [[nodiscard]] static constexpr std::uint8_t crc(IIT first,
                                                     IIT last) {
-        std::uint8_t c = 0;
-        while(first != last) {
-            std::byte const b = *first++;
-            c                 = Dallas::crc8(
-              Bytes{
-                std::span<std::byte const>{&b, 1}
-            },
-              c);
-        }
-        return c;
+        Crc::Crc8MaximDow<> c;
+        while(first != last) { c.update(std::byte{*first++}); }
+        return c.finish();
     }
 
 private:

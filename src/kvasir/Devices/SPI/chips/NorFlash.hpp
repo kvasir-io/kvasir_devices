@@ -534,8 +534,8 @@ private:
                                                       .lines    = lines_,
                                                       .tx       = tx,
                                                       .rx       = rx,
-                                                      .callback = [this](TransferResult r) {
-                                                          ok_   = r == TransferResult::succeeded;
+                                                      .callback = [this](auto r) {
+                                                          ok_   = r == decltype(r)::succeeded;
                                                           done_ = true;
                                                       }});
         return inFlight_;

@@ -90,13 +90,19 @@ struct FakeBusRequest {
     }
 };
 
+/// A request with a deadline on the test clock: a bus with requestDeadlines (kvasir_devices BusTypes.hpp), whose
+/// timeout the engine then uses instead of its own in-flight net.
+struct FakeDeadlineRequest : FakeBusRequest {
+    FakeClock::time_point deadline{FakeClock::time_point::max()};
+};
+
 using FakeBusResponder
   = std::function<FakeBusResult(std::uint8_t, std::span<std::byte const>, std::span<std::byte>)>;
 
-template<typename Tag = void>
+template<typename Tag = void, typename Req = FakeBusRequest>
 struct FakeBusFor {
     using Result  = FakeBusResult;
-    using Request = FakeBusRequest;
+    using Request = Req;
     /// Every engine feature on, so the tests of each one run on the fake.
     static constexpr Kvasir::I2C::EngineFeatures Features = Kvasir::I2C::AllEngineFeatures;
     using Responder                                       = FakeBusResponder;

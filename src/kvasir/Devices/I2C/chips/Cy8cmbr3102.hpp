@@ -2,6 +2,7 @@
 
 #include "../Device.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Crc.hpp"
 
 #include <array>
 #include <chrono>
@@ -55,25 +56,13 @@ namespace Cy8cmbr3102Detail {
 
     /// The configuration CRC. The TRM says only "CCITT CRC16 checksum for all data from offset
     /// 0 to 125" (1.5.77) and prints no example. Seed 0xFFFF and polynomial 0x1021, MSB first,
-    /// no final XOR, fed a nibble at a time high nibble first, is Cypress's host API
-    /// (CY8CMBR3xxx_CalculateCrc in its CY8CMBR3xxx_CRC.c) -- verify on a part: a Provision whose
-    /// CRC the part disagrees with is refused with CTRL_CMD_ERR 254, which the next bring-up
-    /// reports as State::lastError == CommandError::crcMismatch. The nibble step multiplies
-    /// the polynomial by the index; 0x1021 * i for i < 16 has no carries, so it is the
-    /// carry-less product and the whole is CRC-16/CCITT-FALSE, whose published check value
-    /// over "123456789" is 0x29B1 (asserted below).
+    /// no final XOR is Cypress's host API (CY8CMBR3xxx_CalculateCrc in its CY8CMBR3xxx_CRC.c,
+    /// which feeds a nibble at a time): CRC-16/IBM-3740 ("CCITT-FALSE"), check value 0x29B1 --
+    /// verify on a part: a Provision whose CRC the part disagrees with is refused with
+    /// CTRL_CMD_ERR 254, which the next bring-up reports as State::lastError ==
+    /// CommandError::crcMismatch.
     [[nodiscard]] constexpr std::uint16_t crc16(std::span<std::uint8_t const> data) {
-        auto const nibble = [](std::uint8_t value, std::uint16_t remainder) {
-            auto const index = static_cast<std::uint16_t>((value & 0x0FU) ^ (remainder >> 12U));
-            return static_cast<std::uint16_t>((0x1021U * index)
-                                              ^ (static_cast<unsigned>(remainder) << 4U));
-        };
-        std::uint16_t seed = 0xFFFF;
-        for(auto const byte : data) {
-            seed = nibble(static_cast<std::uint8_t>(byte >> 4U), seed);
-            seed = nibble(byte, seed);
-        }
-        return seed;
+        return Crc::Crc16Ccitt<16>::compute(data);
     }
 
     static_assert(crc16(std::array<std::uint8_t,

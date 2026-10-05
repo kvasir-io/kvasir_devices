@@ -144,8 +144,8 @@ namespace Kvasir { namespace SPI {
                 m.tx = r.sendData;
             }
             callback_  = r.callback;
-            m.callback = [](TransferResult res) {
-                callback_(res == TransferResult::succeeded ? Result::succeeded : Result::failed);
+            m.callback = [](auto res) {   // the master's result type: TransferResult or ...Tracked
+                callback_(res == decltype(res)::succeeded ? Result::succeeded : Result::failed);
             };
             return Master::submit(m);
         }

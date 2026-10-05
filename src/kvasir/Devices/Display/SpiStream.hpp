@@ -39,10 +39,10 @@ namespace Kvasir { namespace Display {
             // A send restart() abandoned may still complete; it must not judge the next one.
             auto const               gen = ++generation_;
             typename Master::Request r{.setup = Setup, .lines = lines_, .tx = bytes};
-            r.callback = [gen](SPI::TransferResult res) {
+            r.callback = [gen](auto res) {
                 if(gen != generation_) { return; }
-                state_ = res == SPI::TransferResult::succeeded ? OperationState::succeeded
-                                                               : OperationState::failed;
+                state_ = res == decltype(res)::succeeded ? OperationState::succeeded
+                                                         : OperationState::failed;
             };
             if(!Master::submit(r)) { state_ = OperationState::failed; }
         }

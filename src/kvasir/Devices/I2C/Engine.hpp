@@ -494,6 +494,20 @@ struct Engine {
 
     static constexpr EngineFeatures Features = Port::Features;
 
+    /// The bus bounds a request end to end (requestDeadlines: a `deadline` on the engine's clock): the engine's
+    /// in-flight net is replaced by it outright. The engine stamps the deadline from the
+    /// device's in-flight timeout, and the bus guarantees the callback by then - queued: timedOut without going
+    /// out; on the wire: stopped - so the request is never forgotten while the bus still holds its buffer.
+    static constexpr bool BusDeadline = [] {
+        if constexpr(Features.inFlightNet && requires(typename Port::Request& r) { r.deadline; }) {
+            return std::is_same_v<
+              std::remove_cvref_t<decltype(std::declval<typename Port::Request&>().deadline)>,
+              TimePoint>;
+        } else {
+            return false;
+        }
+    }();
+
     // The register goes out as the request's prefix and the payload straight from where it
     // lives (the group buffer, the running step): nothing is copied to put the two together.
     static_assert(
@@ -1097,7 +1111,7 @@ struct Engine {
             break;
         case PresenceTurn::talk: break;
         }
-        if constexpr(Features.inFlightNet) {
+        if constexpr(Features.inFlightNet && !BusDeadline) {
             if(e.inFlight_ && !e.withinInFlightNet(now, *e.dev_)) {
                 logNoBusAnswer(name_(ops, e), e.dev_->address, ms(e.dev_->inFlightTimeoutMs));
                 e.inFlight_ = false;
@@ -1378,6 +1392,9 @@ struct Engine {
         // Stamped before the submit: a one-byte write can complete in the interrupt before
         // submit() returns, and the net must not measure from after that.
         e.stampSubmit();
+        if constexpr(BusDeadline) {
+            req.deadline = Clock::now() + std::chrono::milliseconds{e.dev_->inFlightTimeoutMs};
+        }
         return e.dev_->submit(req);
     }
 

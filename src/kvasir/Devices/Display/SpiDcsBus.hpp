@@ -174,8 +174,8 @@ namespace Kvasir { namespace Display {
         static bool run_(typename Master::Request r) {
             cmdDone_   = false;
             cmdOk_     = false;
-            r.callback = [](SPI::TransferResult res) {
-                cmdOk_   = res == SPI::TransferResult::succeeded;
+            r.callback = [](auto res) {
+                cmdOk_   = res == decltype(res)::succeeded;
                 cmdDone_ = true;
             };
             if(!Master::submit(r)) { return false; }
@@ -194,8 +194,8 @@ namespace Kvasir { namespace Display {
         inline static bool volatile cmdOk_{};
 
         /// Interrupt context on the RP: nothing here logs or waits.
-        static void onChunk_(SPI::TransferResult res) {
-            if(res != SPI::TransferResult::succeeded) {
+        static void onChunk_(bool succeeded) {
+            if(!succeeded) {
                 ok_   = false;
                 done_ = true;
                 return;
@@ -210,7 +210,7 @@ namespace Kvasir { namespace Display {
 
         static void next_() {
             typename Master::Request r{.setup = WriteSetup};
-            r.callback = &onChunk_;
+            r.callback = [](auto res) { onChunk_(res == decltype(res)::succeeded); };
             if(!started_) {
                 command_[0] = std::byte{Dcs::Cmd::Ramwr};
                 r.lines     = lines_;

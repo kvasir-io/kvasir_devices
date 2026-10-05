@@ -17,7 +17,9 @@ foreach(
     engine_spi_test
     ad7124_test
     stream_test
-    oracle_test)
+    oracle_test
+    ltc2400_test
+    ltc2641_test)
     kvasir_devices_test(spi_${test} SOURCE ${test}.cpp)
 endforeach()
 
