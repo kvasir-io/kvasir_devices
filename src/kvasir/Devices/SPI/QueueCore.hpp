@@ -213,6 +213,13 @@ namespace Kvasir { namespace SPI {
             std::uint32_t lateUs{};        ///< longest a completion came after its wire time
         };
 
+        // The same two as the queue keeps them while it runs: in the clock's own ticks, 32 bits,
+        // saturated. Microseconds would be a 64-bit division per transfer; takeLatency() converts.
+        struct LatencyTicks {
+            std::uint32_t queueWait{};
+            std::uint32_t late{};
+        };
+
         // -- the bus's own API ---------------------------------------------------------------
 
         static constexpr bool SupportsWide = [] {
@@ -491,10 +498,10 @@ namespace Kvasir { namespace SPI {
             requires(Features.latency)
         {
             lock_();
-            Latency const l = latency_;
-            latency_        = {};
+            LatencyTicks const l = latency_;
+            latency_             = {};
             unlock_();
-            return l;
+            return Latency{.queueWaitUs = usOfTicks_(l.queueWait), .lateUs = usOfTicks_(l.late)};
         }
 
         /// The policy's RX completion; `gen` from start(), a stale one is dropped.
@@ -508,11 +515,10 @@ namespace Kvasir { namespace SPI {
             }
             auto const now = Clock::now();
             if constexpr(Features.latency) {
-                auto const late = std::chrono::duration_cast<std::chrono::microseconds>(
-                                    now - startedAt_ - expected_)
-                                    .count();
-                if(late > 0 && static_cast<std::uint32_t>(late) > latency_.lateUs) {
-                    latency_.lateUs = static_cast<std::uint32_t>(late);
+                auto const late = now - startedAt_
+                                - std::chrono::duration_cast<typename Clock::duration>(expected_);
+                if(late.count() > 0 && ticks32_(late) > latency_.late) {
+                    latency_.late = ticks32_(late);
                 }
             }
             if(overrun) {
@@ -590,11 +596,11 @@ namespace Kvasir { namespace SPI {
             [[no_unique_address]] Counter<std::uint32_t> transfers{};
             [[no_unique_address]] Counter<std::uint32_t> refused{};
             [[no_unique_address]] std::
-              conditional_t<Features.latency, Latency, I2C::detail::NoStamp> latency{};
+              conditional_t<Features.latency, LatencyTicks, I2C::detail::NoStamp> latency{};
             [[no_unique_address]] std::conditional_t<Features.timeoutSnapshot,
                                                      TimeoutSnapshot,
-                                                     I2C::detail::NoStamp>   lastTimeout{};
-            [[no_unique_address]] Kvasir::LogRateLimiter<Clock>              faultLog{};
+                                                     I2C::detail::NoStamp>        lastTimeout{};
+            [[no_unique_address]] Kvasir::LogRateLimiter<Clock>                   faultLog{};
         };
 
         inline static Extras x_{};
@@ -626,6 +632,17 @@ namespace Kvasir { namespace SPI {
 
         static void unlock_() {
             if(--lockDepth_ == 0) { Hw::unmask(); }
+        }
+
+        static constexpr std::uint32_t ticks32_(typename Clock::duration d) {
+            auto const n = static_cast<std::uint64_t>(d.count());
+            return n > 0xFFFF'FFFFU ? 0xFFFF'FFFFU : static_cast<std::uint32_t>(n);
+        }
+
+        static constexpr std::uint32_t usOfTicks_(std::uint32_t ticks) {
+            return static_cast<std::uint32_t>(
+              std::chrono::duration_cast<std::chrono::microseconds>(typename Clock::duration{ticks})
+                .count());
         }
 
         /// Microseconds since the transfer on the wire started.
@@ -744,11 +761,9 @@ namespace Kvasir { namespace SPI {
             auto const now = Clock::now();
 
             if constexpr(Features.latency) {
-                auto const waited
-                  = std::chrono::duration_cast<std::chrono::microseconds>(now - current_.queuedAt)
-                      .count();
-                if(waited > 0 && static_cast<std::uint32_t>(waited) > latency_.queueWaitUs) {
-                    latency_.queueWaitUs = static_cast<std::uint32_t>(waited);
+                auto const waited = now - current_.queuedAt;
+                if(waited.count() > 0 && ticks32_(waited) > latency_.queueWait) {
+                    latency_.queueWait = ticks32_(waited);
                 }
             }
 

@@ -22,11 +22,16 @@ using Kvasir::Test::Spi::Pins;
 namespace {
 
 /// The part (datasheet table 1): in auto mode with VBIAS a conversion every 20 ms, D0 set at or
-/// past a threshold, DRDY low until 0x01/0x02 is read; an over/undervoltage fault halts conversions.
+/// past a threshold, DRDY low until 0x01/0x02 is read; an over/undervoltage fault halts conversions
+/// and sets D2 again right after a clear (:430, :534). `release` is not the data sheet's: a part whose
+/// fault holds itself until one bit of the configuration is worked, for the driver's levers.
 struct Part {
+    enum class Release : std::uint8_t { outside, vbiasOff, faultCycle };
+
     std::array<std::uint8_t, 8> reg{};
     std::uint16_t               code{16384};   // R = R0: 0 degC
     bool                        overVoltage{};
+    Release                     release{Release::outside};
     FakeClock::time_point       nextConversion{};
 
     void powerOn() {
@@ -84,7 +89,10 @@ struct Part {
     void write(std::size_t  at,
                std::uint8_t v) {
         if(at == 0) {
-            if((v & 0x02U) != 0) { reg[7] = 0; }             // fault status clear
+            if(release == Release::vbiasOff && (v & 0x80U) == 0) { overVoltage = false; }
+            if(release == Release::faultCycle && (v & 0xACU) == 0x84U) { overVoltage = false; }
+            // fault status clear; D2 is back at once while the fault is there
+            if((v & 0x02U) != 0) { reg[7] = overVoltage ? 0x04 : 0x00; }
             reg[0] = static_cast<std::uint8_t>(v & 0xD1U);   // the command bits self-clear
         } else if(at >= 3 && at <= 6) {
             reg[at] = v;
@@ -102,15 +110,29 @@ struct OldBehaviour : Kvasir::SPI::Max31865Defaults {
 
 struct Tag {};
 
-using Bus    = QueuedSpi::Bus<Tag>;
-using Rtd    = Kvasir::SPI::Max31865<Bus, FakeClock, Spi::Cs, Spi::Drdy>;
-using OldRtd = Kvasir::SPI::Max31865<Bus,
-                                     FakeClock,
-                                     Spi::Cs,
-                                     Spi::Drdy,
-                                     Kvasir::Units::ohm(500),
-                                     Kvasir::Units::ohm(1000),
-                                     OldBehaviour>;
+/// The driver before 2026-10-06: bring-ups only.
+struct NoLevers : Kvasir::SPI::Max31865Defaults {
+    static constexpr std::uint8_t PlainBringUps = 0;
+};
+
+using Lever = Kvasir::SPI::Max31865Lever;
+
+using Bus      = QueuedSpi::Bus<Tag>;
+using Rtd      = Kvasir::SPI::Max31865<Bus, FakeClock, Spi::Cs, Spi::Drdy>;
+using PlainRtd = Kvasir::SPI::Max31865<Bus,
+                                       FakeClock,
+                                       Spi::Cs,
+                                       Spi::Drdy,
+                                       Kvasir::Units::ohm(500),
+                                       Kvasir::Units::ohm(1000),
+                                       NoLevers>;
+using OldRtd   = Kvasir::SPI::Max31865<Bus,
+                                       FakeClock,
+                                       Spi::Cs,
+                                       Spi::Drdy,
+                                       Kvasir::Units::ohm(500),
+                                       Kvasir::Units::ohm(1000),
+                                       OldBehaviour>;
 
 /// Declared right after a case's device: resets the bus while the device still lives.
 struct BusScope {
@@ -270,11 +292,62 @@ void overVoltage() {
     part.overVoltage = true;
     run(rtd, 30s);
     check(!rtd.temperature(), "no reading while the part halts");
+    checkEq(rtd.standingFault(), 0x04, "the bring-up finds D2 set again after its clear");
+    check(rtd.barren() > 10, "brought up again and again");
+    check(rtd.pulled(Lever::vbias) > 3 && rtd.pulled(Lever::faultCycle) > 3,
+          "with each lever in turn");
     part.overVoltage = false;
     auto const took  = untilReading(rtd, 5s);
     check(rtd.temperature().has_value(), "the reading is back");
     check(took < 2s, "within a conversion timeout and a bring-up");
+    checkEq(rtd.standingFault(), 0x00, "and that bring-up found no fault standing");
+    checkEq(rtd.barren(), 0, "the count starts over");
+    checkEq(part.reg[0], 0xC1, "converting as configured");
     wire();
+}
+
+/// A fault that holds itself in the part until `by` is worked: what water_mix showed as F04 until
+/// its supply was cycled, if a bit of the configuration register can do what the supply did.
+void heldUntil(Part::Release by,
+               Lever         lever) {
+    fresh();
+    Rtd      rtd{};
+    BusScope scope{};
+    untilReading(rtd, 2s);
+    part.release     = by;
+    part.overVoltage = true;
+    run(rtd, 1s);
+    check(!rtd.temperature(), "no reading once the conversion timeout has passed");
+    auto const took = untilReading(rtd, 30s);
+    check(rtd.temperature().has_value(), "the reading is back");
+    check(took < 5s, "after the plain bring-ups and the levers before this one");
+    checkEq(rtd.recovered(lever), 1, "credited to the lever that did it");
+    checkEq(rtd.recovered(Lever::none), 0, "not to a bring-up alone");
+    checkEq(rtd.pulled(Lever::none), 2, "which was tried twice first");
+    checkEq(part.reg[0], 0xC1, "converting as configured");
+    auto const samples = rtd.samples();
+    run(rtd, 1s);
+    check(rtd.samples() - samples >= 45, "and it stays: a conversion every 20 ms");
+    wire();
+}
+
+void levers() {
+    testCase("MAX31865: a fault that holds until VBIAS was off ends with the VBIAS lever");
+    heldUntil(Part::Release::vbiasOff, Lever::vbias);
+    testCase("MAX31865: one that holds until a fault-detection cycle ends with that lever");
+    heldUntil(Part::Release::faultCycle, Lever::faultCycle);
+
+    testCase("MAX31865: ... and bring-ups alone (the driver before 2026-10-06) never end it");
+    fresh();
+    PlainRtd plain{};
+    BusScope scope{};
+    untilReading(plain, 2s);
+    part.release     = Part::Release::vbiasOff;
+    part.overVoltage = true;
+    run(plain, 60s);
+    check(!plain.temperature(), "a minute later still no reading");
+    check(plain.barren() > 30, "for all its bring-ups");
+    checkEq(plain.pulled(Lever::vbias) + plain.pulled(Lever::faultCycle), 0, "no lever used");
 }
 
 void absentOnlyAfterAFailedBringUp() {
@@ -359,6 +432,7 @@ int main() {
     configurationChanged();
     powerLost();
     overVoltage();
+    levers();
     absentOnlyAfterAFailedBringUp();
     noPart();
     return finish();

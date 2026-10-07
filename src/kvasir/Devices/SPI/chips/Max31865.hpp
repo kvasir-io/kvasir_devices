@@ -56,7 +56,24 @@ namespace Kvasir { namespace SPI {
         inline constexpr std::uint8_t RegFaultStatus   = 0x07;
 
         inline constexpr std::array<std::uint8_t, 4> ThresholdsPor{0xFF, 0xFF, 0x00, 0x00};
+
+        /// Configuration with everything off, VBIAS too: its POR state (table 1).
+        inline constexpr std::uint8_t AllOff = 0x00;
+        /// 100X010Xb, the fault-detection cycle with automatic delay (table 3); X are the 3-wire
+        /// and the filter bit, kept as configured.
+        inline constexpr std::uint8_t FaultCycleKeep = 0x11;
+        inline constexpr std::uint8_t FaultCycleRun  = 0x84;
     }   // namespace Max31865Detail
+
+    /// What the driver does to a part that answers and gives no reading, before it brings it up
+    /// again. Nothing in the data sheet says either of the two helps: they are the bits of the
+    /// configuration register a bring-up does not touch, tried in turn, and recovered() says
+    /// which one a reading came back after.
+    enum class Max31865Lever : std::uint8_t {
+        none,   ///< the bring-up alone: conversions stopped, fault status cleared, registers written
+        vbias,        ///< VBIAS off for the startup delay, then the bring-up
+        faultCycle,   ///< a fault-detection cycle with automatic delay, which works the FORCE- switch
+    };
 
     /// Derive and redeclare what you change; the engine's knobs (I2C/Device.hpp EngineDefaults) too.
     struct Max31865Defaults {
@@ -70,6 +87,9 @@ namespace Kvasir { namespace SPI {
         static constexpr std::uint16_t RejectedRestart   = 50;
         static constexpr auto          RegisterCheck     = std::chrono::seconds{10};
         static constexpr auto          UnidentifiedRetry = std::chrono::seconds{1};
+        /// Bring-ups in a row that brought no reading before the levers (Max31865Lever) are
+        /// tried, one per bring-up, in turn with a plain one. 0: never.
+        static constexpr std::uint8_t PlainBringUps = 2;
     };
 
     namespace Chips {
@@ -94,11 +114,19 @@ namespace Kvasir { namespace SPI {
             static constexpr std::uint8_t Stopped
               = static_cast<std::uint8_t>(Configuration & ~Max31865Detail::AutoConversion);
 
-            /// Auto conversion stopped first: the notch may not change while it runs (D0). Then the
-            /// configuration with the fault status cleared, the POR thresholds (:659), and 00h..06h read
-            /// back for setup(): no identity register, and a missing part floats SDO to all ones or zeros.
+            /// Auto conversion stopped first: the notch may not change while it runs (D0); VBIAS may
+            /// just have come on with it, and the ADC is to wait five time constants of the input
+            /// filter and 1 ms after that (:716; 5 ms is a filter of up to 800 us). The fault status
+            /// as the part has it latched, then the configuration with it cleared, the POR thresholds
+            /// (:659), and 00h..07h read back for setup(): no identity register, and a missing part
+            /// floats SDO to all ones or zeros. 07h in that read is what the part set again at once
+            /// ("if an over/undervoltage fault persists", :534).
             static constexpr std::array Init{
-              Step::write({.reg = Max31865Detail::RegConfiguration, .payload = {Stopped}}
+              Step::write({.reg     = Max31865Detail::RegConfiguration,
+                           .payload = {Stopped},
+                           .delay   = std::chrono::milliseconds{5}}
+              ),
+              Step::read({.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 8}
               ),
               Step::write({.reg     = Max31865Detail::RegConfiguration,
                            .payload = {static_cast<std::uint8_t>(Configuration
@@ -110,11 +138,17 @@ namespace Kvasir { namespace SPI {
                                        Max31865Detail::ThresholdsPor[2],
                                        Max31865Detail::ThresholdsPor[3]}}
               ),
-              Step::read({.reg = Max31865Detail::RegConfiguration, .count = 7, .offset = 0}
+              Step::read({.reg = Max31865Detail::RegConfiguration, .count = 8, .offset = 0}
               ),
             };
 
-            struct State {};
+            /// The fault status around the last bring-up's clear.
+            struct State {
+                std::uint8_t
+                  latched{};   ///< before it: what was left of the stand-still, or of a fault cycle
+                std::uint8_t
+                  standing{};   ///< after it: what the part sets again while the cause is there
+            };
 
             [[nodiscard]] static constexpr bool registersRight(Bytes data) {
                 if((data.u8(0) & Max31865Detail::SettingBits)
@@ -132,8 +166,10 @@ namespace Kvasir { namespace SPI {
                 return true;
             }
 
-            [[nodiscard]] static constexpr bool setup(Bytes data,
-                                                      State&) {
+            [[nodiscard]] static constexpr bool setup(Bytes  data,
+                                                      State& state) {
+                state.latched  = data.u8(8);
+                state.standing = data.u8(Max31865Detail::RegFaultStatus);
                 return registersRight(data);
             }
 
@@ -182,9 +218,25 @@ namespace Kvasir { namespace SPI {
                 }
             };
 
+            /// One write of the configuration register outside a bring-up: a lever (Max31865Lever).
+            /// A command, not a state: the bring-up that follows writes the register again.
+            struct Kick {
+                using Value                            = std::uint8_t;
+                static constexpr std::size_t Bytes     = 1;
+                static constexpr bool        Transient = true;
+
+                [[nodiscard]] static constexpr Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
+                    buffer[0] = static_cast<std::byte>(value);
+                    return Step::writeBuffer(
+                      {.reg = Max31865Detail::RegConfiguration, .offset = 0, .count = 1});
+                }
+            };
+
             using Primary = Conversion;
             using Reads   = std::
               conditional_t<RegisterCheckMs != 0, List<Conversion, Registers>, List<Conversion>>;
+            using Writes = List<Kick>;
         };
     }   // namespace Chips
 
@@ -194,7 +246,12 @@ namespace Kvasir { namespace SPI {
     /// Callendar-Van Dusen for T >= 0 degC (IEC 60751) solved for T and used over the whole range;
     /// the C term left out is ~0.2 degC at -100 degC. A and B scaled by 1e10.
     ///
-    /// No fault-detection cycle: the flag reports over/under-voltage and the thresholds only.
+    /// No fault-detection cycle while it converts: the flag reports over/under-voltage and the
+    /// thresholds only.
+    ///
+    /// A part that answers and gives no reading is brought up again for as long as it takes;
+    /// from the third bring-up in a row on (`PlainBringUps`) with a lever before it, see
+    /// Max31865Lever. The part has no reset: its supply is the only thing beyond these.
     template<typename Master,
              typename Clock,
              typename Cs,
@@ -239,6 +296,16 @@ namespace Kvasir { namespace SPI {
                 return Max31865Defaults::Configuration;
             }
         }();
+        static constexpr std::uint8_t PlainBringUps = [] {
+            if constexpr(requires { Config::PlainBringUps; }) {
+                return static_cast<std::uint8_t>(Config::PlainBringUps);
+            } else {
+                return Max31865Defaults::PlainBringUps;
+            }
+        }();
+
+        using Lever                         = Max31865Lever;
+        static constexpr std::size_t Levers = 3;
 
         struct EngineConfig : Config {
             static constexpr auto UnidentifiedRetry = [] {
@@ -278,6 +345,17 @@ namespace Kvasir { namespace SPI {
         void handler(Turn&& turn) {
             auto const now = Clock::now();
             turn(device_);
+            if(kicking_) {
+                // the lever's write first, then the bring-up; a part that stopped answering
+                // meanwhile is the engine's, and the write is not to land after its bring-up
+                if(device_.answering() && device_.template pending<typename Chip::Kick>()) {
+                    return;
+                }
+                static_cast<void>(device_.template withdraw<typename Chip::Kick>());
+                kicking_ = false;
+                device_.restart();
+                return;
+            }
             if(!device_.answering()) {
                 valid_ = false;
                 conversionDue_.restart(ConversionTimeout, now);
@@ -289,6 +367,15 @@ namespace Kvasir { namespace SPI {
                 fault_    = 0;
                 rejected_ = 0;
                 conversionDue_.restart(ConversionTimeout, now);
+                if(barren_ != 0) {
+                    UC_LOG_I(
+                      "max31865: up again after {} ({} in a row without a reading): fault status "
+                      "{:#04x} before the clear, {:#04x} after it",
+                      lever_,
+                      barren_,
+                      device_.state().latched,
+                      device_.state().standing);
+                }
                 if constexpr(RegisterCheck.count() != 0) {
                     seenRegisters_ = device_.template rejected<typename Chip::Registers>();
                 }
@@ -355,6 +442,31 @@ namespace Kvasir { namespace SPI {
 
         /// As read with the last flagged conversion; 0 since the last bring-up otherwise.
         [[nodiscard]] std::uint8_t fault() const { return fault_; }
+
+        /// The fault status the last bring-up read right after clearing it: what the part sets
+        /// again while the cause is there (D2, over/undervoltage, with which it stops converting
+        /// and flags nothing). The thresholds' bits come with a conversion: fault(). 0 with a
+        /// reading: a fault that ended since needed no bring-up.
+        [[nodiscard]] std::uint8_t standingFault() const {
+            return valid() ? std::uint8_t{} : device_.state().standing;
+        }
+
+        /// The fault status the last bring-up found latched, before clearing it.
+        [[nodiscard]] std::uint8_t latchedFault() const { return device_.state().latched; }
+
+        /// Bring-ups in a row since the last reading that the driver started for want of one.
+        [[nodiscard]] std::uint16_t barren() const { return barren_; }
+
+        /// How often a lever was used, and how often a reading came back after it rather than
+        /// after another (`none`: after a bring-up alone). A cause that ends by itself credits
+        /// whichever was last.
+        [[nodiscard]] std::uint16_t pulled(Lever lever) const {
+            return pulled_[static_cast<std::size_t>(lever)];
+        }
+
+        [[nodiscard]] std::uint16_t recovered(Lever lever) const {
+            return recovered_[static_cast<std::size_t>(lever)];
+        }
 
         [[nodiscard]] std::uint32_t faults() const { return faults_; }
 
@@ -438,27 +550,69 @@ namespace Kvasir { namespace SPI {
             valid_    = true;
             rejected_ = 0;
             ++samples_;
+            if(barren_ != 0) {
+                UC_LOG_W("max31865: reading back after {} bring-ups, the last after {}",
+                         barren_,
+                         lever_);
+                count_(recovered_[static_cast<std::size_t>(lever_)]);
+                barren_ = 0;
+                lever_  = Lever::none;
+            }
+        }
+
+        static constexpr void count_(std::uint16_t& n) {
+            if(n != 0xFFFF) { ++n; }
+        }
+
+        /// Plain for the first PlainBringUps, then vbias, faultCycle, plain, and round again.
+        [[nodiscard]] static constexpr Lever leverFor_(std::uint16_t barren) {
+            if(PlainBringUps == 0 || barren <= PlainBringUps) { return Lever::none; }
+            switch((barren - PlainBringUps - 1U) % Levers) {
+            case 0:  return Lever::vbias;
+            case 1:  return Lever::faultCycle;
+            default: return Lever::none;
+            }
+        }
+
+        [[nodiscard]] static constexpr std::uint8_t kick_(Lever lever) {
+            if(lever == Lever::vbias) { return Max31865Detail::AllOff; }
+            return static_cast<std::uint8_t>((Configuration & Max31865Detail::FaultCycleKeep)
+                                             | Max31865Detail::FaultCycleRun);
         }
 
         void restart_() {
             valid_ = false;
             asked_ = false;
             wasUp_ = false;
-            device_.restart();
+            count_(barren_);
+            lever_ = leverFor_(barren_);
+            count_(pulled_[static_cast<std::size_t>(lever_)]);
+            if(lever_ == Lever::none) {
+                device_.restart();
+                return;
+            }
+            // written while the part still answers; the bring-up follows it in handler()
+            device_.template rewrite<typename Chip::Kick>(kick_(lever_));
+            kicking_ = true;
         }
 
-        DeviceT                 device_{};
-        Sample                  sample_{};
-        bool                    valid_{};
-        bool                    wasUp_{};
-        bool                    asked_{};
-        I2C::Ticket             ticket_{};
-        Kvasir::Deadline<Clock> conversionDue_{};   ///< armed from the first turn on
-        std::uint8_t            fault_{};
-        std::uint32_t           faults_{};
-        std::uint32_t           samples_{};
-        std::uint32_t           seenConversion_{};
-        std::uint32_t           seenRegisters_{};
+        DeviceT       device_{};
+        Sample        sample_{};
+        bool          valid_{};
+        bool          wasUp_{};
+        bool          asked_{};
+        bool          kicking_{};            ///< a lever's write is on its way, the bring-up waits
+        Lever         lever_{Lever::none};   ///< before the last bring-up restart_() started
+        std::uint16_t barren_{};
+        std::array<std::uint16_t, Levers> pulled_{};
+        std::array<std::uint16_t, Levers> recovered_{};
+        I2C::Ticket                       ticket_{};
+        Kvasir::Deadline<Clock>           conversionDue_{};   ///< armed from the first turn on
+        std::uint8_t                      fault_{};
+        std::uint32_t                     faults_{};
+        std::uint32_t                     samples_{};
+        std::uint32_t                     seenConversion_{};
+        std::uint32_t                     seenRegisters_{};
         std::uint32_t unidentifiedWhenUp_{};   ///< unidentified() when the part last answered
         std::uint16_t rejected_{};
     };
