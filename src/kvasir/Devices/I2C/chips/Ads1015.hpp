@@ -39,7 +39,7 @@ struct Ads1015 {
     /// TI ADS1115 and ADS1015. The config register (01h) while the description sweeps the four
     /// inputs with single-shot conversions (ADS1115.md:1031..1058): MUX bit 14 set -- an input against
     /// GND, whichever of the four the sweep is at --, PGA 11:9 = 010b, +-2.048 V, which is what the
-    /// bench's gain and the description's volts per count assume (:669..673), MODE, bit 8, single-shot,
+    /// test's gain and the description's volts per count assume (:669..673), MODE, bit 8, single-shot,
     /// and COMP_QUE 1:0 = 11b, the comparator off. The parts have no identity register. The ADS1219 is
     /// not read this way: its RDATA command and the read after it are two transactions, and a register
     /// read between them would be taken for the conversion result.

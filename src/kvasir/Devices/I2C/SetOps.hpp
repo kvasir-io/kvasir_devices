@@ -65,7 +65,7 @@ namespace setops {
     struct Unique<L, T, Ts...> : Unique<typename Append<L, T>::type, Ts...> {};
 }   // namespace setops
 
-/// A device set's hooks, known at compile time (kvasir_work plans/engine_minimal/HOOKS.md): the
+/// A device set's hooks, known at compile time: the
 /// same names as a chip's run-time table (Ops), each a static function over the set's distinct
 /// chips. One chip: a direct call of its `static constexpr` entry. Several: an array of the
 /// chips' entries indexed by the device's place (EngineState::setIndex_). A hook no chip of the
@@ -73,8 +73,8 @@ namespace setops {
 ///
 /// The engine takes it where it took the table (`ops`): Engine<Port, Clock> is one copy for
 /// the table and one per device set, never one per chip. Every hook is out of line: inlined,
-/// each engine call site got the whole switch with every chip's code in it (i2c_testing
-/// +17 KB, 2026-09-30) - out of line it is one switch per hook, each chip's code once.
+/// each engine call site got the whole switch with every chip's code in it
+/// (+17 KB) - out of line it is one switch per hook, each chip's code once.
 template<typename Port, typename Clock, SetFlags F, typename... Chips>
 struct SetOps {
     static constexpr bool     IsSetOps = true;
@@ -89,7 +89,7 @@ struct SetOps {
 
     /// The set's distinct chips (DeviceCores), in order of first appearance: keyed by the chips
     /// and not by the devices, so two Buses with the same chips are one set and one engine
-    /// (rgb_rotary's three KTD2061 buses).
+    /// (three buses of KTD2061s).
     using Cores = List<Chips...>;
 
     template<typename L>
@@ -136,7 +136,7 @@ struct SetOps {
 /// One chip type: a direct call to its entry (inlined where the compiler likes). Several: a
 /// constexpr array of the chips' entries, indexed by the device's place - as compact as the
 /// tables were (4 bytes a chip), and measured: a switch over ~50 chips took 9.2 KB more
-/// (i2c_testing, 2026-09-30), a compare, branch and call per chip per hook.
+/// - a compare, branch and call per chip per hook.
 #define KVASIR_SET_HOOK(name, Result)                                                           \
     static constexpr auto name##Table                                                           \
       = []<typename... Cs>(List<Cs...>) { return std::array{Cs::EngineOps.name...}; }(Cores{}); \

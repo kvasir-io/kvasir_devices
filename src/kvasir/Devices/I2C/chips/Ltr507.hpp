@@ -160,7 +160,7 @@ struct Ltr507 {
         /// ALS_PS_STATUS bit 2 clear is "old data (data has been read)" (6.10): no conversion has
         /// finished since the last readout. Nothing is wrong with the part or the frame, so it is
         /// `unchanged`, not a rejection -- a read that lands just before a conversion ends does
-        /// that now and then (i2c_testing hardware test, 2026-09-18: one in a minute).
+        /// that now and then (a hardware test: one in a minute).
         [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
                                                               State const& state) {
             auto const status = data.u8(0);

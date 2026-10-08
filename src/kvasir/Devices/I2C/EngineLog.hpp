@@ -3,8 +3,8 @@
 /// The engine's log lines, once each instead of once per device.
 ///
 /// `Device<>` is instantiated per device, so every `UC_LOG_*` in it used to be printed into
-/// the image that often: the "up" line alone was 76 bytes x 55 devices on i2c_testing's bench
-/// (2026-09-20). None of these lines says anything that is not a value -- the chip's name and
+/// the image that often: the "up" line alone was 76 bytes x 55 devices in one firmware.
+/// None of these lines says anything that is not a value -- the chip's name and
 /// address are arguments like the rest -- so one copy serves every device, and a call site is
 /// then the arguments and a call.
 ///

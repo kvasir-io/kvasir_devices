@@ -2,7 +2,7 @@
 
 /// What the device engine does beyond talking to the part, switched per bus (per engine port,
 /// Engine.hpp BusPort): a feature that is off costs no RAM in any device's state and no code in
-/// the engine (kvasir_work plans/engine_minimal/PLAN.md, phase 4).
+/// the engine.
 ///
 /// A bus says what it wants with a `static constexpr EngineFeatures Features` member; a bus that
 /// has none gets the defaults. A driver from a chip package is given one with WithFeatures:
@@ -19,7 +19,7 @@ namespace Kvasir::I2C {
 
 struct EngineFeatures {
     /// Bridges (Bridge.hpp) and Config::enabled(): link() can say `offline`. Off by default -
-    /// no firmware used it when the switch came (2026-09-30).
+    /// no firmware used it when the switch came.
     bool switchable = false;
     /// Parking a part that NAKs, probing for it with a backing-off interval, and link()
     /// saying `absent` (Presence.hpp). Off, a NAKing part is retried as any failure is.

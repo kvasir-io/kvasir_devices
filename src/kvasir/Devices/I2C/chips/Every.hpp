@@ -6,7 +6,7 @@
 /// Every chip description there is, as one type list: what a test walks that has something to say
 /// about all of them -- the identity stage against each description's own `Identity`
 /// (test/i2c/oracle_test.cpp), a foreign part at each address (identify_test.cpp), and
-/// i2c_testing's hardware test compiled for every one (src/hwtest/all.cpp there). A new
+/// a hardware test compiled for every one. A new
 /// description gets a line here, and those tests pick it up.
 ///
 /// With their default parameters. A part whose address is only ever the board's has no default

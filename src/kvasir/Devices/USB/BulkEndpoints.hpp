@@ -464,7 +464,7 @@ struct BulkOutEndpoint {
 
     // Short on purpose: taking a transfer back too early costs nothing but a few packets armed
     // one by one, while every message of whole packets waits this long for its last ones.
-    // Measured on the SAM D21 (usb_playground, 2026-09-20, MiB/s host to device / echo of 1 KiB
+    // Measured on the SAM D21 (MiB/s host to device / echo of 1 KiB
     // messages): 2 ms 0.847 / 0.218, 700 us 0.845 / 0.318, 300 us 0.774 / 0.348; packet by
     // packet it was 0.486 / 0.341.
     static constexpr auto         StalledAfter            = std::chrono::microseconds{700};
@@ -570,7 +570,7 @@ struct BulkOutEndpoint {
     }
 
     // Nothing stays armed through a halt: the SAM D21 answers STALL and still writes the packet
-    // into a transfer that is open, and counts it (seen on the bench, 2026-09-20, against its
+    // into a transfer that is open, and counts it (seen on the part, against its
     // data sheet) - bytes the host was told were refused. What came before the halt is kept.
     static void halt() {
         halted = true;

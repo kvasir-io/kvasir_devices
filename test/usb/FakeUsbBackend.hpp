@@ -181,7 +181,7 @@ struct FakeUsb {
         auto& e = state(ep, false);
         if(e.stalled) {
             // What the SAM D21 does, against its data sheet ("the incoming data is discarded",
-            // 32.6.2.7; seen on the bench 2026-09-20): a transfer that is still open takes the
+            // 32.6.2.7; seen on the part): a transfer that is still open takes the
             // packet and counts it, and the host gets its STALL all the same. A device that
             // leaves one armed while halted ends up with bytes nobody acknowledged.
             if(e.outInPlace != nullptr && e.armedOut

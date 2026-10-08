@@ -197,7 +197,7 @@ struct UbloxM8 {
     /// `Timing::MessageRatePerPort = true` sends the six-port form of UBX-CFG-MSG (32.10.18.2:
     /// the value for DDC, 0 for the other ports) instead of the three-byte one. Why anybody
     /// would: the short frame for NAV-PVT every solution ends in the checksum 0x13 0x51, and
-    /// 0x51 is "0x28, read". Measured 2026-09-19 on a SAM-M8Q sharing a TCA9548A channel at
+    /// 0x51 is "0x28, read". Measured on a SAM-M8Q sharing a TCA9548A channel at
     /// 400 kHz: a TSL2591 (0x29, and 0x28 beside it), an APDS-9960 and an LTR-507ALS each took
     /// a byte that is their address with the read bit, anywhere in a WRITE to the receiver, for
     /// their own address -- and held SDA low behind the frame until a bus recovery clocked them

@@ -10,8 +10,7 @@
 namespace Kvasir::I2C {
 
 /// Every part of one port, driven as ONE device set (SetOps.hpp): one copy of the engine and
-/// of each chip's code for all of them, however they are held (kvasir_work
-/// plans/engine_minimal/HOOKS.md). A member is
+/// of each chip's code for all of them, however they are held. A member is
 /// - a Bus (its switches, gates and bridges stay its own; built unbound and bound here),
 /// - a driver that holds its device inside (TouchController, Max31865, Ad7124, Max7219: it runs
 ///   its device's turn through `handler(turn)`), or

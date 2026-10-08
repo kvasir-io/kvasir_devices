@@ -373,7 +373,7 @@ private:
     /// compiler generates depends on it any more, so the driver of a part on channel 2 and the
     /// driver of the same part on channel 3 are identical code and the linker folds them into
     /// one (`--icf=all` is in the SDK's link flags). Two SHT4x, two LCDs and four OLED panels
-    /// cost 4 566 bytes of second copies on the i2c_testing bench before this (2026-09-21).
+    /// cost 4 566 bytes of second copies before this.
     std::uint8_t channel_{Channel};
 };
 
@@ -384,7 +384,7 @@ private:
 /// A part in front of a switch is otherwise on the wire of whatever channel is open, which
 /// every well-behaved part tolerates -- it is not addressed, it does not answer. This gate is for
 /// the pair that does not get along: found with a u-blox SAM-M8Q in front and a TLV493D-A1B6
-/// behind channel 6 (i2c_testing, 2026-09-19, seen with the RP2350's second core as a logic
+/// behind channel 6 (seen with the RP2350's second core as a logic
 /// analyser). The receiver stretches the clock after its address, and when it lets go it puts
 /// its first data bit on SDA in the same 40 ns as it releases SCL (0.7 us before it on a quiet
 /// bus): with a 0 bit, SDA falls as SCL rises, which is a START to a listener whose SCL input

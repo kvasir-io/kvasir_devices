@@ -204,8 +204,8 @@ void bringUp() {
             && equal(got.value.frame, 1);
     }());
 
-    // The same frame with PD clear, which is what the A1B6 on the i2c_testing bench reads in every
-    // master-controlled readout (doc/hwtest-findings.md there, 2026-09-18): a frame all the same.
+    // The same frame with PD clear, which is what a real A1B6 reads in every
+    // master-controlled readout: a frame all the same.
     static_assert([] {
         auto const f   = frame(0xF0, 0x7F, 0x80, 0x14, 0xFF, 0x20, 0x54);
         auto const got = Field::decode(Bytes{f}, Field::Sample{});
@@ -284,7 +284,7 @@ void frames() {
         auto const r    = Field::decode(Bytes{busy}, Field::Sample{});
         auto const rPd  = Field::decode(Bytes{noPd}, Field::Sample{});
         auto const got  = Field::decode(Bytes{done}, Field::Sample{});
-        // PD clear is not a reason to read again: the bench's A1B6 never sets it in this mode.
+        // PD clear is not a reason to read again: a real A1B6 never sets it in this mode.
         return isRetry(r) && r.retryAfter == 1ms && isOk(rPd)
             && isReject(Field::decode(Bytes{test}, Field::Sample{})) && isOk(got)
             && equal(got.value.z, Units::nanoTesla(9'800'000));

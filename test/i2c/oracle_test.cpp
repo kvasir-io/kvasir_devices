@@ -7,7 +7,7 @@
 // bits inverted must not, must never count as identified or answering, and must not be written
 // to. A second accepted value (`also`: the other half of a family) is a part of its own.
 //
-// The same arrays are read off real parts by i2c_testing's hardware test. A value that is wrong
+// The same arrays are read off real parts by a hardware test. A value that is wrong
 // there is a data sheet, or a transcription of it, that disagrees with the silicon.
 #include "Harness.hpp"
 

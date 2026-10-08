@@ -222,7 +222,7 @@ struct Tlv493d {
         /// never equal a real frame, because no count decodes to exactly 0 m degC.
         ///
         /// PD is **not** asked for, against the user manual's "must be 1 at readout" (7.2.1.1).
-        /// On the bench's A1B6 (i2c_testing doc/hwtest-findings.md, 2026-09-18) PD read 0 in every
+        /// On a real A1B6 PD read 0 in every
         /// readout in master-controlled mode -- with CH 00, FF set and a sane field and
         /// temperature -- and 1 only after a general reset, where the manual gives its reset value
         /// as 0: in this mode a readout starts the next conversion, and PD at byte 5 already

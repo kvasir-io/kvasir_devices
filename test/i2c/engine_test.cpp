@@ -349,8 +349,8 @@ namespace FeaturesTest {
                   "the table has no fields for the features that are off");
     /// Without a run-time period: no period<G>(ms) and no check of a stored one per reschedule.
     /// ReadSlotBase alone does not shrink (the 8-byte time point's padding takes the 5 bytes),
-    /// but a device's slot does: its own members move into the base's freed tail - the
-    /// i2c_testing matrix measured -32 B of Bus RAM for 8 devices (2026-09-30).
+    /// but a device's slot does: its own members move into the base's freed tail - a
+    /// feature matrix measured -32 B of Bus RAM for 8 devices.
     using FixedBus = WithFeatures<FakeBus,
                                   EngineFeatures{.switchable    = true,
                                                  .presence      = true,
@@ -1498,7 +1498,7 @@ namespace NetTest {
 
 }   // namespace NetTest
 
-/// Found by i2c_testing's feature matrix, not by these tests: a verified write group decided
+/// Found by a feature matrix on hardware, not by these tests: a verified write group decided
 /// by its `writes` counter, which the statistics feature had taken away.
 void statsOffVerify() {
     testCase("features: without statistics a verified write is written once, read back, and kept");

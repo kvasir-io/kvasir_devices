@@ -76,8 +76,8 @@ namespace Aled7709Detail {
 /// The output current is RISET's: ICH_SET = 1022 V / RISET, 25 mA (40.7 k) to 200 mA (5.11 k)
 /// (Table 5). `Riset` is the board's resistor, and only scales `gainFor()`.
 ///
-/// Not written from a part: no ALED7709 has been on the bench yet (2026-09-18). The i2c_testing
-/// hardware test holds the description against its `Identity` and `AfterBringUp` the day one is.
+/// Not written from a part: no ALED7709 has been tested yet. A hardware
+/// test holds the description against its `Identity` and `AfterBringUp` the day one is.
 template<Aled7709Detail::Variant      V           = Aled7709Detail::Variant::a,
          Ohm                          Riset       = Units::ohm(10'000),
          Aled7709Detail::Dimming      Dim         = Aled7709Detail::Dimming::local,

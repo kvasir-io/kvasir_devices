@@ -24,9 +24,9 @@ namespace Kvasir { namespace I2C {
     //   initStepPinConfig    gives the two pins back to the I2C block
     //   softAbortRequest     asks the block to let go of a transfer (applied by begin())
     //
-    // Until 2026-09-20 this was chip_rp2350's rp_common/I2CBusRecovery.hpp, which is now an
+    // This was once chip_rp2350's rp_common/I2CBusRecovery.hpp, which is now an
     // alias of it; chip_atsam_common's Sercom_I2CQueued.hpp is its second user. It sat in
-    // Kvasir_SDK (kvasir/Io/I2CLineRecovery.hpp) until 2026-09-21: I2C lives here.
+    // Kvasir_SDK (kvasir/Io/I2CLineRecovery.hpp) before: I2C lives here.
     template<typename Base, typename Clock>
     struct LineRecovery {
         using base = Base;
@@ -40,7 +40,7 @@ namespace Kvasir { namespace I2C {
         // With one exception, and only when that has failed: a slave that still holds SDA
         // after the nine clocks is not in the middle of a byte, it is waiting for a STOP -- and
         // a STOP is SDA rising while SCL is high, which an open-drain master cannot make against
-        // a line that is held. Seen twice on one bench (i2c_testing, 2026-09-19): SDA held for
+        // a line that is held. Seen twice: SDA held for
         // 700 s through 356 of these sequences, and a NAU7802 that takes SDA one clock after a
         // read of its address, lets go for one clock and takes it again. Both times the line
         // was free the moment SDA was pushed high for 20 us with SCL high (ForceStop below):
@@ -152,7 +152,7 @@ namespace Kvasir { namespace I2C {
         /// its NAK and STOP still to go, SDA low for the STOP's setup), so on a busy bus an
         /// idle look lands in such a tail, the next transfers start from the ISR, and the
         /// next look that lands in a tail 20 ms later "found SDA held for kStuckThreshold".
-        /// Seen on the interconnector (2026-09-30): ~1.4 recoveries a second on a working bus,
+        /// Seen: ~1.4 recoveries a second on a working bus,
         /// each ending "SDA high, 8 of 9 clocks unused"; a wire tap showed traffic up to the
         /// recovery and SDA never low for more than one byte.
         static void noteBusFree() { busFree_.store(true, std::memory_order_relaxed); }

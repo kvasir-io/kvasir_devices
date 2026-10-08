@@ -689,7 +689,7 @@ public:
     }
 
     /// One device's turn alone, with the set's engine: for a phase in which only some parts may
-    /// run (i2c_testing's boot scan runs the switch alone). `bus.get<D>().handler()` would do the
+    /// run (a boot scan that runs the switch alone). `bus.get<D>().handler()` would do the
     /// same through the chip's table - a second copy of the engine in the image.
     template<typename D,
              typename S = SetOpsT>

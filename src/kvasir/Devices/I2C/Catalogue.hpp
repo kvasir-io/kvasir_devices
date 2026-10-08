@@ -65,8 +65,8 @@ struct SizedCatalogue {
 
     /// The hints as the compiler puts them together, a fixed-width Entry an address. Only ever
     /// read in constant expressions (Packed below is what goes into the image): 120 entries of
-    /// Width + 5 bytes, mostly zeros, were 20 KB of flash in every firmware with a bus scan until
-    /// 2026-09-20.
+    /// Width + 5 bytes, mostly zeros, were 20 KB of flash in every firmware with a bus scan before
+    /// Packed.
     static constexpr std::array<Entry, AddressCount> Table = [] {
         std::array<Entry, AddressCount> t{};
         for(std::size_t a = 0; a < t.size(); ++a) {

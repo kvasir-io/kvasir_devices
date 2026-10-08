@@ -241,7 +241,7 @@ namespace Kvasir { namespace SPI {
     }   // namespace Chips
 
     /// `Nominal` is R0, `Reference` the board's reference resistor (optimum 4 x R0, "Application
-    /// Circuits"); the defaults are water_mix's PT500 against 1 kOhm.
+    /// Circuits"); the defaults are a PT500 against 1 kOhm.
     ///
     /// Callendar-Van Dusen for T >= 0 degC (IEC 60751) solved for T and used over the whole range;
     /// the C term left out is ~0.2 degC at -100 degC. A and B scaled by 1e10.

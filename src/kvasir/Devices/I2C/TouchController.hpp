@@ -28,7 +28,7 @@
 /// `UC_LOG_I` / `UC_LOG_W` come from ../Log.hpp: uc_log on the target, the definitions a host
 /// test provides.
 ///
-/// In Kvasir::I2C since 2026-09-21, so its log lines are under the "i2c" module
+/// In Kvasir::I2C, so its log lines are under the "i2c" module
 /// ("i2c.touch.controller", derived from the scope).
 namespace Kvasir::I2C::Touch {
 

@@ -110,7 +110,7 @@ struct OldBehaviour : Kvasir::SPI::Max31865Defaults {
 
 struct Tag {};
 
-/// The driver before 2026-10-06: bring-ups only.
+/// The older driver: bring-ups only.
 struct NoLevers : Kvasir::SPI::Max31865Defaults {
     static constexpr std::uint8_t PlainBringUps = 0;
 };
@@ -243,8 +243,7 @@ void thresholdChanged() {
     checkEq(rtd.bringUps(), 2, "a second bring-up");
     wire();
 
-    testCase(
-      "MAX31865: ... and with the knobs of the driver before 2026-09-25 it stays without one");
+    testCase("MAX31865: ... and with the knobs of the first driver it stays without one");
     fresh();
     OldRtd   old{};
     BusScope oldScope{};
@@ -252,7 +251,7 @@ void thresholdChanged() {
     part.reg[3] = 0x00;
     part.reg[4] = 0xFF;
     run(old, 60s);
-    check(!old.temperature(), "a minute later still no reading: what water_mix showed as ---");
+    check(!old.temperature(), "a minute later still no reading: what a firmware showed as ---");
 }
 
 void configurationChanged() {
@@ -306,8 +305,8 @@ void overVoltage() {
     wire();
 }
 
-/// A fault that holds itself in the part until `by` is worked: what water_mix showed as F04 until
-/// its supply was cycled, if a bit of the configuration register can do what the supply did.
+/// A fault that holds itself in the part until `by` is worked: what a firmware showed as a
+/// latched fault until its supply was cycled, if a bit of the configuration register can do what the supply did.
 void heldUntil(Part::Release by,
                Lever         lever) {
     fresh();
@@ -337,7 +336,7 @@ void levers() {
     testCase("MAX31865: one that holds until a fault-detection cycle ends with that lever");
     heldUntil(Part::Release::faultCycle, Lever::faultCycle);
 
-    testCase("MAX31865: ... and bring-ups alone (the driver before 2026-10-06) never end it");
+    testCase("MAX31865: ... and bring-ups alone (the older driver) never end it");
     fresh();
     PlainRtd plain{};
     BusScope scope{};
@@ -391,7 +390,7 @@ void noPart() {
         Pins::level[Spi::Drdy::id] = false;
         run(rtd, 10s, false);
         check(!rtd.answering(), "not answering");
-        check(rtd.absent(), "absent: the registers did not read back (water_mix's Er1)");
+        check(rtd.absent(), "absent: the registers did not read back (a firmware's Er1)");
         check(!rtd.temperature(), "no reading");
         checkEq(rtd.bringUps(), 0U, "never brought up");
         bool conversions = false;

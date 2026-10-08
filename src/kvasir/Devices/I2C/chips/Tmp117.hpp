@@ -245,8 +245,8 @@ struct Tmp117 {
 struct Tmp119 : Tmp117 {
     static constexpr std::string_view Name = "TMP119";
     /// TI TMP119. TMP119.md:1551, "Device ID Register (address = 0Fh) [reset = 2117h]". The register
-    /// map on :1196 says 0117h for the same register -- the TMP117's value, carried over: the part on
-    /// the bench reads 2117h (2026-09-18).
+    /// map on :1196 says 0117h for the same register -- the TMP117's value, carried over: the real part
+    /// reads 2117h.
     static constexpr std::array Identity{
       RegisterCheck{"id", 0x0F, 2, true, 0xFFFF, 0x2117},
     };

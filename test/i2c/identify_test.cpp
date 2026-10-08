@@ -79,7 +79,8 @@ struct ForEach<List<Cs...>> {
 void all() {
     testCase("identify: a foreign part at the address is turned down before anything is written");
     ForEach<Chips::Every>::run();
-    check(held >= 45, "the descriptions that decide before writing: at least the 45 of 2026-09-18");
+    check(held >= 45,
+          "the descriptions that decide before writing: at least the 45 it started with");
 }
 
 }   // namespace

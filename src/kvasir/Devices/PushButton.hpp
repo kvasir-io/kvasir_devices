@@ -8,8 +8,8 @@
 namespace Kvasir {
 /// Events from a push button. Without `debouncePress` / `debounceRelease` in the config every
 /// edge the interrupt sees is an event at once - right for a contact that is debounced in
-/// hardware, wrong for a bare one: a tactile switch measured on the water_mix board
-/// (2026-09-19) lost contact for 0.1 to 8 ms in the middle of a press, several times per press,
+/// hardware, wrong for a bare one: a tactile switch measured on a board
+/// lost contact for 0.1 to 8 ms in the middle of a press, several times per press,
 /// and each time was a release and a new hit.
 ///
 /// With both in the config, handler() polls the pin instead (call it every turn of the main

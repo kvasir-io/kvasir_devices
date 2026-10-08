@@ -20,7 +20,7 @@ namespace Kvasir::I2C {
 /// `Identity` is what tells the part from any other: the engine reads and compares it first in
 /// every bring-up, and the device is not identified, not answering and not written to until it
 /// matches (Device.hpp). `AfterBringUp`, a second array of the same kind, is what a finished
-/// bring-up leaves in the part; the engine does not read it, the hardware test of i2c_testing
+/// bring-up leaves in the part; the engine does not read it, a hardware test
 /// does -- off the real part, past the driver.
 struct RegisterCheck {
     static constexpr std::uint32_t None = 0xFFFF'FFFFU;

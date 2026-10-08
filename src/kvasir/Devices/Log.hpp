@@ -34,7 +34,7 @@
 
 /// A log line several call sites share, so the line's code exists once and a site is its
 /// arguments and a call (I2C/EngineLog.hpp: `Device<>` is instantiated per device, and the
-/// "up" line alone was 76 bytes x 55 of them on i2c_testing's bench, 2026-09-20).
+/// "up" line alone was 76 bytes x 55 of them in one firmware).
 ///
 /// `noinline` only while logging is compiled in: without USE_UC_LOG the bodies are empty and
 /// the attribute would leave a call to an empty function at every site instead of nothing.

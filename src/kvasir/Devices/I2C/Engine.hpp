@@ -5,7 +5,7 @@
 /// `Device<I2c, Clock, Chip, Config, Reset, Gate>` is instantiated once per device, so every
 /// line of the engine used to be printed into the image that often: 96 KB of `Device<>` members
 /// plus 40 KB of `Bus::handler()` with each device's `handler()` inlined, in a 312 KB firmware
-/// with 57 devices (i2c_testing, 2026-09-20). `--icf=all` is already in the SDK's link flags
+/// with 57 devices. `--icf=all` is already in the SDK's link flags
 /// and folds none of it -- the copies differ by constants and types -- so the only way down is
 /// to share by design.
 ///
@@ -417,7 +417,7 @@ struct Ops {
 
     // The small fields last, together. Between the pointers each cost three bytes of padding,
     // and the six durations above were 8-byte `std::chrono::milliseconds` that aligned the
-    // whole table to 8: 224 bytes x 57 devices was 12.8 KB of the i2c_testing bench (2026-09-21).
+    // whole table to 8: 224 bytes x 57 devices was 12.8 KB of one firmware.
     std::string_view name{};
     /// 0, 1 or 2: how a register is addressed on this chip.
     std::uint8_t registerBytes{};
@@ -1241,8 +1241,8 @@ struct Engine {
             // A bus fault: says nothing about the device. After a write the part is known not
             // to acknowledge it is no news either: a part that resets in the middle of the
             // byte lets go of the bus wherever it happens to be, and the controller sees that
-            // as often as a lost arbitration as a NAK (LTR390 software reset on the
-            // i2c_testing bench, 2026-09-18: thirty of thirty). The script goes on as after
+            // as often as a lost arbitration as a NAK (LTR390 software reset:
+            // thirty of thirty). The script goes on as after
             // the NAK; a bus that is really at fault fails the step after it.
             e.inFlight_ = false;
             if(e.current_.mayNak) {
