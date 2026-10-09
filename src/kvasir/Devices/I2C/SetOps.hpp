@@ -192,10 +192,6 @@ struct SetOps {
                        std::chrono::milliseconds,
                        NeedsDynamicPeriod,
                        std::chrono::milliseconds{})
-    KVASIR_SET_HOOK_IF(finishVerify,
-                       void,
-                       NeedsVerify,
-                       void())
 #undef KVASIR_SET_HOOK_IF
 
     KVASIR_SET_HOOK(script,
@@ -232,40 +228,26 @@ struct SetOps {
                     void)
     KVASIR_SET_HOOK(afterWrite,
                     void)
+    // The engine's read-back and bring-up paths (Engine::startVerifyGroup, finishVerify,
+    // scheduleWrites): called only for a group that verifies or has an Initial, which a chip's
+    // WriteGroupInfo says; the null entries of a chip without one are in its WriteOpsTable_,
+    // behind that check.
+    KVASIR_SET_HOOK(verifySlot,
+                    VerifiedWriteSlotBase<Clock>&)
+    KVASIR_SET_HOOK(encodeForVerify,
+                    VerifyRead)
+    KVASIR_SET_HOOK(verifyMatches,
+                    bool)
+    KVASIR_SET_HOOK(applyInitial,
+                    void)
 #undef KVASIR_SET_HOOK
 
-    /// The two hooks that call back into the engine, with this set's ops (so the engine is
-    /// never instantiated for the table too), and the read-back deadline: per chip a thunk.
+    /// The hook that calls back into the engine, with this set's ops (so the engine is never
+    /// instantiated for the table too): per chip a thunk.
     template<typename C>
     static void finishInitOf(State&    e,
                              TimePoint now) {
         C::self_(e).finishInit_(SetOps{}, now);
-    }
-
-    template<typename C>
-    static bool startVerifyOf(State&       e,
-                              std::uint8_t w,
-                              TimePoint    now) {
-        if constexpr(C::NeedsVerify) {
-            return C::self_(e).startVerify_(SetOps{}, w, now);
-        } else {
-            static_cast<void>(e);
-            static_cast<void>(w);
-            static_cast<void>(now);
-            return false;
-        }
-    }
-
-    template<typename C>
-    static TimePoint verifyDueOf(State& e) {
-        // NeedsVerify, not `EngineOps.verifyDue != nullptr`: the hook is set exactly when it is
-        // true, and gcc does not fold a function pointer compared with null to a constant under
-        // -fsanitize=undefined.
-        if constexpr(C::NeedsVerify) {
-            return C::EngineOps.verifyDue(e);
-        } else {
-            return TimePoint::max();
-        }
     }
 
 #define KVASIR_SET_THUNK(name, of, Result, ...)                                      \
@@ -283,26 +265,14 @@ struct SetOps {
     KVASIR_SET_THUNK(finishInit,
                      finishInitOf,
                      void)
-    KVASIR_SET_THUNK(startVerifyGroup,
-                     startVerifyOf,
-                     bool)
-    KVASIR_SET_THUNK(verifyDueAny,
-                     verifyDueOf,
-                     TimePoint)
 
-    /// No chip of the set reads back: never due, and nothing started - constants the engine's
-    /// verify paths fold on.
+    /// No chip of the set reads back: never due, and nothing started - a constant the engine's
+    /// verify paths fold on (Engine::verifyDue_).
     static constexpr bool VerifyNeeded
       = []<typename... Cs>(List<Cs...>) { return (Cs::NeedsVerify || ...); }(Cores{});
-
-    static TimePoint verifyDue(State& e) {
-        if constexpr(VerifyNeeded) {
-            return verifyDueAny(e);
-        } else {
-            static_cast<void>(e);
-            return TimePoint::max();
-        }
-    }
+    /// No chip of the set has an Initial: scheduleWrites never applies one.
+    static constexpr bool InitialNeeded
+      = []<typename... Cs>(List<Cs...>) { return (Cs::NeedsInitial || ...); }(Cores{});
 
 #undef KVASIR_SET_THUNK
 

@@ -166,7 +166,7 @@ struct EngineState {
     [[nodiscard]] bool withinInFlightNet(TimePoint  now,
                                          Ops const& d) const {
         if constexpr(Port::Features.inFlightNet) {
-            return now - submittedAt_ <= std::chrono::milliseconds{d.inFlightTimeoutMs};
+            return now - submittedAt_ <= std::chrono::milliseconds{d.knobs.inFlightTimeoutMs};
         } else {
             return true;
         }
@@ -271,9 +271,28 @@ struct WriteSlotBase {
     /// Items whose value is what the chip holds or is owed, so that set() with that value
     /// again has nothing to send.
     std::uint32_t known{};
-    /// Not a statistic only: a verify that has not been written yet waits (Device startVerify_).
+    /// Not a statistic only: a verify that has not been written yet waits (Engine::startVerifyGroup).
     std::uint32_t writes{};
     TimePoint     due{};
+};
+
+/// Per write group, only when it verifies: what is owed a read-back and when.
+template<bool Enable, typename TP>
+struct VerifySlot {};
+
+template<typename TP>
+struct VerifySlot<true, TP> {
+    std::atomic<std::uint32_t> unverified{0};   ///< items written and not yet read back
+    TP                         due{};
+    std::uint32_t              mismatches{};
+    std::uint8_t               tries{};   ///< consecutive rewrites of the same item
+};
+
+/// A write group's slot when it reads back: the engine's read-back flow works on this,
+/// whichever chip and group it is.
+template<typename Clock>
+struct VerifiedWriteSlotBase : WriteSlotBase<Clock> {
+    VerifySlot<true, typename Clock::time_point> verify{};
 };
 
 /// What the engine needs of one write group, beside its slot.
@@ -282,8 +301,23 @@ struct WriteGroupInfo {
     std::uint32_t allItems{};
     /// The description's Period in milliseconds; 0 when the group is not written cyclically.
     std::uint32_t periodMs{};
+    /// The read-back: how long after a write to look (VerifyDelay), how often to look again
+    /// (VerifyInterval); 0 for none.
+    std::uint32_t verifyDelayMs{};
+    std::uint32_t verifyIntervalMs{};
     /// The group asks for its registers to be read back after they are written.
     bool verifies{};
+    /// It has an Initial: set at every bring-up unless the application set it.
+    bool initial{};
+    /// It is a one-shot command (Transient): never replayed after a bring-up.
+    bool transient{};
+};
+
+/// What a read-back reads: the register the item was written to and how many bytes.
+struct VerifyRead {
+    std::uint16_t reg{};
+    std::uint8_t  count{};   ///< 0: nothing to read back (a bare pointer set)
+    bool          hasRegister{};
 };
 
 /// What a read group's decode() made of the bytes, as the engine needs it: the sample itself
@@ -405,15 +439,20 @@ struct Ops {
                        std::uint8_t,
                        std::uint8_t,
                        TimePoint){};
-    /// A read-back that is due, if any: true when one went on the wire.
-    bool (*startVerifyGroup)(State&,
-                             std::uint8_t,
-                             TimePoint){};
-    /// What came back compared with what was written.
-    void (*finishVerify)(State&,
-                         TimePoint){};
-    /// The earliest read-back due (max() if none); null when the chip verifies nothing.
-    TimePoint (*verifyDue)(State&){};
+    /// Write group w's slot as a verifying one (called only for a group that verifies).
+    VerifiedWriteSlotBase<Clock>& (*verifySlot)(State&,
+                                                std::uint8_t){};
+    /// Item `item` of group w encoded again into the chip's read-back buffer: what to read.
+    VerifyRead (*encodeForVerify)(State&,
+                                  std::uint8_t,
+                                  std::uint32_t){};
+    /// What came back is what was written (the group's verify(), else equal bytes).
+    bool (*verifyMatches)(State&,
+                          std::uint8_t){};
+    /// Group w's items that are not in `known` set to its Initial (a group that has one).
+    void (*applyInitial)(State&,
+                         std::uint8_t,
+                         std::uint32_t){};
 
     // The small fields last, together. Between the pointers each cost three bytes of padding,
     // and the six durations above were 8-byte `std::chrono::milliseconds` that aligned the
@@ -426,30 +465,24 @@ struct Ops {
     bool initEmpty{};
 };
 
-/// What the engine needs of one device beside its chip, so that Ops and the chip's code are
-/// shared by every device of that chip. A null hook is "none".
+/// What the engine needs of one device beside its chip and its bus, so that Ops and the chip's
+/// code are shared by every device of that chip. A null hook is "none". Many devices have the
+/// same values -- the same Config defaults, no gate, no reset line, the application's one shared
+/// enable -- so a device refers to its knobs (DeviceOps::knobs) rather than holding a copy, and
+/// equal knobs are one object (deviceKnobs): a firmware keeps one per distinct set, not one per
+/// device.
 template<typename Port, typename Clock>
-struct DeviceOps {
+struct DeviceKnobs {
     using State = EngineState<Port, Clock>;
 
-    /// The bus the part is on.
-    bool (*submit)(typename Port::Request const&){};
     /// The gate in front of the part (a switch channel): false means "not yet, try next turn".
     bool (*claimGate)(State&){};
     void (*releaseGate)(State&){};
     // A field of a feature the port leaves out (EngineFeatures) is Absent: no bytes.
     static constexpr bool Switchable = Port::Features.switchable;
 
-    /// Config::enabled(), called with `enabledArg` (one function can serve many devices).
-    [[no_unique_address]] IfFeature<Switchable, bool (*)(void const*), 1> enabled{};
-    [[no_unique_address]] IfFeature<Switchable, void const*, 2>           enabledArg{};
-    /// Optional: a counter the application steps whenever what `enabled` answers may have
-    /// changed - AFTER the change, from an interrupt on this core too. While it has not moved,
-    /// the engine takes the last answer (`bridge_.disabled`) instead of calling `enabled` -
-    /// which it otherwise does every loop turn, resting or not.
-    [[no_unique_address]] IfFeature<Switchable, std::uint32_t const*, 3> enabledGeneration{};
-    /// Behind a bridge (Bridge.hpp): off now, and its generation (steps on every activation).
-    [[no_unique_address]] IfFeature<Switchable, bool (*)(State const&), 4> gateOffline{};
+    /// Behind a bridge (Bridge.hpp): its generation (steps on every activation); whether it is
+    /// off now is DeviceOps::gateOffline, read every turn.
     [[no_unique_address]] IfFeature<Switchable, std::uint32_t (*)(State const&), 5>
       gateGeneration{};
     /// A chip with a reset line of its own.
@@ -464,7 +497,6 @@ struct DeviceOps {
     [[no_unique_address]] IfFeature<Port::Features.inFlightNet, std::uint32_t, 7>
                   inFlightTimeoutMs{};
     std::uint32_t unidentifiedRetryMs{};
-    std::uint8_t  address{};
     /// Failures in a row past the bring-up that configure the chip again from the start.
     std::uint8_t faultsBeforeReinit{};
     /// How often a decode or a check step may ask for a retry before the sample is rejected,
@@ -473,6 +505,36 @@ struct DeviceOps {
     /// WhileOff::unpowered: brought up from the start after an offline spell.
     [[no_unique_address]] IfFeature<Switchable, bool, 8> bridgeUnpowered{};
     [[no_unique_address]] IfFeature<Switchable, bool, 9> disabledUnpowered{};
+};
+
+/// The one object for knobs @p K: devices with equal knobs refer to the same one.
+template<typename Port, typename Clock, DeviceKnobs<Port, Clock> K>
+inline constexpr DeviceKnobs<Port, Clock> deviceKnobs = K;
+
+/// What only this device has -- its bus, its address, its enable's argument -- and what every
+/// turn reads (the enable and the bridge), kept here rather than one load further in its knobs:
+/// in the knobs they cost the interconnector's loop ~3 % (48 devices, every turn).
+template<typename Port, typename Clock>
+struct DeviceOps {
+    using State                      = EngineState<Port, Clock>;
+    static constexpr bool Switchable = Port::Features.switchable;
+
+    /// The bus the part is on.
+    bool (*submit)(typename Port::Request const&){};
+    DeviceKnobs<Port, Clock> const& knobs;
+    /// Config::enabled(), called with `enabledArg` (one function can serve many devices): a value
+    /// the application gives its function to tell the devices apart -- an index, a key packed
+    /// into a word. A value, never a pointer.
+    [[no_unique_address]] IfFeature<Switchable, bool (*)(std::uint32_t), 1> enabled{};
+    [[no_unique_address]] IfFeature<Switchable, std::uint32_t, 2>           enabledArg{};
+    /// Optional: a counter the application steps whenever what `enabled` answers may have
+    /// changed - AFTER the change, from an interrupt on this core too. While it has not moved,
+    /// the engine takes the last answer (`bridge_.disabled`) instead of calling `enabled` -
+    /// which it otherwise does every loop turn, resting or not.
+    [[no_unique_address]] IfFeature<Switchable, std::uint32_t const*, 3> enabledGeneration{};
+    /// Behind a bridge (Bridge.hpp): off now.
+    [[no_unique_address]] IfFeature<Switchable, bool (*)(State const&), 4> gateOffline{};
+    std::uint8_t                                                           address{};
 
     [[nodiscard]] constexpr bool switchable() const {
         if constexpr(Switchable) {
@@ -554,16 +616,47 @@ struct Engine {
                            std::uint32_t)
 #undef KVASIR_ENGINE_CONSTANT
 
-    /// When the chip's next read-back is due; never for a chip without one (a null hook in the
-    /// table, or a set's case that has none).
+    /// A device set none of whose chips reads back (SetOps::VerifyNeeded) or has an Initial
+    /// (InitialNeeded): those paths fold away, hooks and all, as they did when each chip had
+    /// them itself. The table and SelfOps say nothing and keep the run-time check.
+    template<typename O>
+    static constexpr bool NoVerify_ = [] {
+        if constexpr(requires { O::VerifyNeeded; }) {
+            return !O::VerifyNeeded;
+        } else {
+            return false;
+        }
+    }();
+
+    template<typename O>
+    static constexpr bool NoInitial_ = [] {
+        if constexpr(requires { O::InitialNeeded; }) {
+            return !O::InitialNeeded;
+        } else {
+            return false;
+        }
+    }();
+
+    /// When the chip's next read-back is due, from its WriteGroupInfo; never for a chip without
+    /// one (a set without one folds it to a constant: SetOps::VerifyNeeded).
     template<typename O>
     [[nodiscard]] static TimePoint verifyDue_(O const& ops,
                                               State&   e) {
-        if constexpr(IsSetOps<O>) {
-            return O::verifyDue(e);
-        } else {
-            return ops.verifyDue != nullptr ? ops.verifyDue(e) : TimePoint::max();
+        if constexpr(NoVerify_<O>) {
+            static_cast<void>(ops);
+            static_cast<void>(e);
+            return TimePoint::max();
         }
+        TimePoint due = TimePoint::max();
+        for(std::uint8_t w = 0; w < static_cast<std::uint8_t>(writes_(ops, e).size()); ++w) {
+            auto const& gi = writes_(ops, e)[w];
+            if(!gi.verifies) { continue; }
+            auto const& s    = ops.verifySlot(e, w);
+            bool const  owed = s.verify.unverified.load(std::memory_order_acquire) != 0
+                            || gi.verifyIntervalMs != 0;
+            if(owed && s.verify.due < due) { due = s.verify.due; }
+        }
+        return due;
     }
 
     using ReadSlotBaseT = ReadSlotBase<Clock, Port::Features>;
@@ -639,12 +732,12 @@ struct Engine {
 
     /// The gate in front of the part, if any.
     [[nodiscard]] static bool claimGate(State& e) {
-        auto const claim = e.dev_->claimGate;
+        auto const claim = e.dev_->knobs.claimGate;
         return claim == nullptr || claim(e);
     }
 
     static void releaseGate(State& e) {
-        if(auto const release = e.dev_->releaseGate) { release(e); }
+        if(auto const release = e.dev_->knobs.releaseGate) { release(e); }
     }
 
     [[nodiscard]] static TimePoint atLeast(TimePoint                 now,
@@ -779,7 +872,7 @@ struct Engine {
                       TimePoint                 now,
                       std::chrono::milliseconds retryAfter) {
         auto& s = ops.readSlot(e, e.group_);
-        if(s.retries < e.dev_->maxRetries) {
+        if(s.retries < e.dev_->knobs.maxRetries) {
             ++s.retries;
             e.step_ = 0;
             wait(e, ops, now, retryAfter, false);
@@ -836,7 +929,7 @@ struct Engine {
         case Running::init:   finishInit(e, ops, now); break;
         case Running::read:   finishRead(e, ops, now); break;
         case Running::write:  finishWrite(e, ops, now); break;
-        case Running::verify: ops.finishVerify(e, now); break;
+        case Running::verify: finishVerify(e, ops, now); break;
         case Running::none:   break;
         }
     }
@@ -879,7 +972,131 @@ struct Engine {
                             TimePoint now) {
         ++ops.writeSlot(e, e.group_).writes;
         ops.afterWrite(e, e.group_, e.item_, now);
+        if constexpr(NoVerify_<O>) {
+            endRun(e, ops);
+            return;
+        }
+        if(auto const& gi = writes_(ops, e)[e.group_]; gi.verifies) {
+            // owed a read-back; the delay is the chip's settling time
+            auto& s = ops.verifySlot(e, e.group_);
+            s.verify.unverified.fetch_or(1U << e.item_, std::memory_order_relaxed);
+            s.verify.due = now + ms(gi.verifyDelayMs != 0 ? gi.verifyDelayMs : gi.verifyIntervalMs);
+        }
         endRun(e, ops);
+    }
+
+    /// Every write group's first deadline after a bring-up, and what the chip is owed again.
+    template<typename O>
+    static void scheduleWrites(State&    e,
+                               O const&  ops,
+                               TimePoint now) {
+        for(std::uint8_t w = 0; w < static_cast<std::uint8_t>(writes_(ops, e).size()); ++w) {
+            auto&       s  = ops.writeSlot(e, w);
+            auto const& gi = writes_(ops, e)[w];
+            s.due          = now;
+            if(!NoInitial_<O> && gi.initial) {
+                // A value the chip must hold from the start (and again after every reset)
+                // unless the application has set one already -- set, not written: the
+                // application's value stands even when the bring-up it was made before is
+                // the one finishing here.
+                ops.applyInitial(e, w, s.known);
+                s.known = gi.allItems;
+                s.dirty.store(gi.allItems, std::memory_order_release);
+            } else if(!gi.transient) {
+                // The chip is back at its defaults, so whatever the application has set
+                // since is owed again -- without this the value is lost silently while
+                // value<W>() still reports it. Only the items it did set (`known`): an item
+                // it never touched holds a default-constructed Value the chip was never
+                // told, and must not be told now. A Transient group is a one-shot command
+                // and not a state: replaying it would burn an EEPROM write cycle or
+                // re-apply a stale wall-clock time.
+                if(s.owned) { s.dirty.store(s.known, std::memory_order_release); }
+            }
+        }
+    }
+
+    /// The read-back came in: compare it against what was written. A mismatch re-dirties
+    /// the item, bounded by MaxRetries so a bit that cannot hold its value is not rewritten
+    /// for ever.
+    template<typename O>
+    static void finishVerify(State&    e,
+                             O const&  ops,
+                             TimePoint now) {
+        if constexpr(NoVerify_<O>) {
+            // never started (startVerify): a set without a read-back has no verify run
+            static_cast<void>(ops);
+            static_cast<void>(now);
+            endRun(e);
+            return;
+        }
+        auto const  w  = e.group_;
+        auto const& gi = writes_(ops, e)[w];
+        if(gi.verifies) {
+            auto& s = ops.verifySlot(e, w);
+            if(ops.verifyMatches(e, w)) {
+                s.verify.unverified.fetch_and(~(1U << e.item_), std::memory_order_relaxed);
+                s.verify.tries = 0;
+            } else {
+                ++s.verify.mismatches;
+                if(s.verify.tries < e.dev_->knobs.maxRetries) {
+                    ++s.verify.tries;
+                    s.dirty.fetch_or(1U << e.item_, std::memory_order_relaxed);
+                } else {
+                    logVerifyStuck(name_(ops, e),
+                                   e.dev_->address,
+                                   e.current_.reg,
+                                   static_cast<std::uint32_t>(s.verify.mismatches));
+                    s.verify.unverified.fetch_and(~(1U << e.item_), std::memory_order_relaxed);
+                    s.verify.tries = 0;
+                }
+            }
+            s.verify.due
+              = now + ms(gi.verifyIntervalMs != 0 ? gi.verifyIntervalMs : gi.verifyDelayMs);
+        }
+        endRun(e);
+    }
+
+    /// Group w's read-back, if one is due: true when it went on the wire.
+    template<typename O>
+    static bool startVerifyGroup(State&       e,
+                                 O const&     ops,
+                                 std::uint8_t w,
+                                 TimePoint    now) {
+        auto&       s  = ops.verifySlot(e, w);
+        auto const& gi = writes_(ops, e)[w];
+        if(now < s.verify.due) { return false; }
+        auto u = s.verify.unverified.load(std::memory_order_acquire);
+        if(u == 0) {
+            if(gi.verifyIntervalMs == 0) {
+                return false;   // checked once after each write, and it matched
+            }
+            // The periodic look, at the items the chip was told: one never set holds a Value
+            // it was never sent and would read as a mismatch.
+            u = s.known;
+            if(s.writes == 0 || u == 0) {
+                s.verify.due = now + ms(gi.verifyIntervalMs);   // nothing written to check yet
+                return false;
+            }
+            s.verify.unverified.store(u, std::memory_order_release);
+        }
+        auto const item = static_cast<std::uint32_t>(std::countr_zero(u));
+        // Re-encode to recover the register and the bytes that were sent.
+        auto const r = ops.encodeForVerify(e, w, item);
+        if(r.count == 0) {
+            // a bare pointer set: there is nothing to read back
+            s.verify.unverified.fetch_and(~(1U << item), std::memory_order_relaxed);
+            return false;
+        }
+        e.running_ = Running::verify;
+        e.group_   = w;
+        e.item_    = static_cast<std::uint8_t>(item);
+        e.step_    = 0;
+        // Behind a register when the write went to one; a bare read of the same count on a
+        // chip without registers (an I2C switch returns its control byte, 7.5.4 of the TCA9548A).
+        e.current_  = r.hasRegister ? Step::read({.reg = r.reg, .count = r.count, .offset = 0})
+                                    : Step::receive({.count = r.count, .offset = 0});
+        e.inFlight_ = submit(e, ops, ops.buffer(e));
+        return true;
     }
 
     /// The first dirty item of the first dirty write group, encoded and on the wire.
@@ -921,9 +1138,15 @@ struct Engine {
     static bool startVerify(State&    e,
                             O const&  ops,
                             TimePoint now) {
+        if constexpr(NoVerify_<O>) {
+            static_cast<void>(e);
+            static_cast<void>(ops);
+            static_cast<void>(now);
+            return false;
+        }
         for(std::uint8_t w = 0; w < static_cast<std::uint8_t>(writes_(ops, e).size()); ++w) {
             if(!writes_(ops, e)[w].verifies) { continue; }
-            if(ops.startVerifyGroup(e, w, now)) { return true; }
+            if(startVerifyGroup(e, ops, w, now)) { return true; }
         }
         return false;
     }
@@ -942,7 +1165,7 @@ struct Engine {
         bool const  gateOff  = bridged && d.gateOffline(e);
         auto const  seen     = e.enabledGenerationNow();
         bool const  disabled = e.disabledNow(seen);
-        bool const  bounced  = bridged && e.bridge_.generation != d.gateGeneration(e);
+        bool const  bounced  = bridged && e.bridge_.generation != d.knobs.gateGeneration(e);
         if((gateOff || disabled) && e.inFlight_) {
             if(e.pending_.take() == PendingT::Outcome::running && e.withinInFlightNet(now, d)) {
                 return false;   // not a word to the part until it is answered
@@ -961,13 +1184,13 @@ struct Engine {
                 logBridge(name_(ops, e), d.address, false);
                 logBridge(name_(ops, e), d.address, true);
             }
-            powerCut             = (gateOff || bounced) && d.bridgeUnpowered;
-            e.bridge_.generation = d.gateGeneration(e);
+            powerCut             = (gateOff || bounced) && d.knobs.bridgeUnpowered;
+            e.bridge_.generation = d.knobs.gateGeneration(e);
         }
         if(disabled != e.bridge_.disabled) {
             e.bridge_.disabled = disabled;
             logEnabled(name_(ops, e), d.address, !disabled);
-            powerCut = powerCut || (disabled && d.disabledUnpowered);
+            powerCut = powerCut || (disabled && d.knobs.disabledUnpowered);
         }
         e.noteEnabledSeen(seen);   // only here: the early return above leaves bridge_ as it was
 
@@ -1025,7 +1248,7 @@ struct Engine {
         e.noteEnabledSeen(seen);
         if(d.gateOffline != nullptr) {
             return d.gateOffline(e) == e.bridge_.gateOff
-                && d.gateGeneration(e) == e.bridge_.generation;
+                && d.knobs.gateGeneration(e) == e.bridge_.generation;
         }
         return true;
     }
@@ -1048,7 +1271,7 @@ struct Engine {
             }
         }
         TimePoint probe{};
-        switch(e.presence_.rest(e.dev_->presence, probe)) {
+        switch(e.presence_.rest(e.dev_->knobs.presence, probe)) {
         case Presence<Clock>::Rest::busy:   return;
         case Presence<Clock>::Rest::parked: quiet(probe); return;
         case Presence<Clock>::Rest::talk:   break;
@@ -1101,7 +1324,7 @@ struct Engine {
         if constexpr(Features.switchable) {
             if(e.dev_->switchable() && !bridgeTurn(e, ops, now)) { return; }
         }
-        switch(e.presence_.turn(now, e.dev_->address, e.dev_->presence)) {
+        switch(e.presence_.turn(now, e.dev_->address, e.dev_->knobs.presence)) {
         case PresenceTurn::wait:   return;   // parked, no probe due: nothing runs
         case PresenceTurn::park:             // just parked: start over, then wait
             reset(e, ops);
@@ -1113,7 +1336,7 @@ struct Engine {
         }
         if constexpr(Features.inFlightNet && !BusDeadline) {
             if(e.inFlight_ && !e.withinInFlightNet(now, *e.dev_)) {
-                logNoBusAnswer(name_(ops, e), e.dev_->address, ms(e.dev_->inFlightTimeoutMs));
+                logNoBusAnswer(name_(ops, e), e.dev_->address, ms(e.dev_->knobs.inFlightTimeoutMs));
                 e.inFlight_ = false;
                 e.pending_.clear();
                 ++e.errors_;
@@ -1136,10 +1359,10 @@ struct Engine {
                 // with no startupDelay on a faulting bus would otherwise be asked every turn.
                 auto backoff = std::chrono::milliseconds{0};
                 if constexpr(Features.faultBackoff) {
-                    if(e.initFailed_) { backoff = ms(e.dev_->faultBackoffMs); }
+                    if(e.initFailed_) { backoff = ms(e.dev_->knobs.faultBackoffMs); }
                     e.initFailed_ = false;
                 }
-                if(auto const hold = AnyReset<O> ? e.dev_->resetHold : nullptr) {
+                if(auto const hold = AnyReset<O> ? e.dev_->knobs.resetHold : nullptr) {
                     hold();
                     e.waitUntil_ = now + ms(resetLowMs_(ops, e)) + backoff;
                     e.phase_     = Phase::resetHeld;
@@ -1151,7 +1374,7 @@ struct Engine {
             break;
         case Phase::resetHeld:
             if(now > e.waitUntil_) {
-                if constexpr(AnyReset<O>) { e.dev_->resetRelease(); }
+                if constexpr(AnyReset<O>) { e.dev_->knobs.resetRelease(); }
                 e.waitUntil_ = now + ms(resetSettleMs_(ops, e)) + ms(startupDelayMs_(ops, e));
                 e.phase_     = Phase::settle;
             }
@@ -1267,17 +1490,21 @@ struct Engine {
         // The data sheet's identity has the last word: a part that failed it is not the chip,
         // whatever setup() makes of a buffer the script never got to fill.
         if(e.oracleFailed_) { e.identified_ = false; }
-        if(!e.identified_ && ms(e.dev_->unidentifiedRetryMs) > std::chrono::milliseconds::zero()) {
+        if(!e.identified_
+           && ms(e.dev_->knobs.unidentifiedRetryMs) > std::chrono::milliseconds::zero())
+        {
             // Not the chip this description is for: nothing else goes to it. The bring-up
             // runs again after unidentifiedRetry -- a part that was still booting, or that
             // gets its id right after a reset, comes through then. link() stays `starting`.
             if(!e.unidentifiedLogged_) {
                 e.unidentifiedLogged_ = true;
-                logUnidentified(name_(ops, e), e.dev_->address, ms(e.dev_->unidentifiedRetryMs));
+                logUnidentified(name_(ops, e),
+                                e.dev_->address,
+                                ms(e.dev_->knobs.unidentifiedRetryMs));
             }
             ++e.unidentified_;
             e.waiting_   = false;
-            e.waitUntil_ = now + ms(e.dev_->unidentifiedRetryMs);
+            e.waitUntil_ = now + ms(e.dev_->knobs.unidentifiedRetryMs);
             e.phase_     = Phase::settle;
             return;
         }
@@ -1285,12 +1512,15 @@ struct Engine {
         ++e.bringUps_;
         if(e.acked_) { logUp(name_(ops, e), e.dev_->address, e.identified_); }
         ops.startupSchedule(e, now);
+        scheduleWrites(e, ops, now);
     }
 
     /// Nothing but the running script for `faultBackoff` (EngineFeatures::faultBackoff).
     static void backOff(State&    e,
                         TimePoint now) {
-        if constexpr(Features.faultBackoff) { e.holdUntil_ = now + ms(e.dev_->faultBackoffMs); }
+        if constexpr(Features.faultBackoff) {
+            e.holdUntil_ = now + ms(e.dev_->knobs.faultBackoffMs);
+        }
     }
 
     /// A transaction failed: what that means for the run it was part of, and for the device.
@@ -1334,7 +1564,7 @@ struct Engine {
         // Past the bring-up and still failing: the chip is configured again from the
         // start. After the per-phase handling above, so a write is owed before the
         // bring-up that would otherwise not replay a Transient one.
-        if(e.phase_ == Phase::run && e.consecutiveFailures_ >= e.dev_->faultsBeforeReinit) {
+        if(e.phase_ == Phase::run && e.consecutiveFailures_ >= e.dev_->knobs.faultsBeforeReinit) {
             e.consecutiveFailures_ = 0;
             e.waiting_             = false;
             e.up_                  = false;
@@ -1393,7 +1623,8 @@ struct Engine {
         // submit() returns, and the net must not measure from after that.
         e.stampSubmit();
         if constexpr(BusDeadline) {
-            req.deadline = Clock::now() + std::chrono::milliseconds{e.dev_->inFlightTimeoutMs};
+            req.deadline
+              = Clock::now() + std::chrono::milliseconds{e.dev_->knobs.inFlightTimeoutMs};
         }
         return e.dev_->submit(req);
     }

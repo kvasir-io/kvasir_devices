@@ -25,16 +25,17 @@ namespace Kvasir::I2C::Chips {
 /// write is read back 100 ms later and again every second. `BankControl` keeps the reserved
 /// bits at 1 whatever it is given and leaves them out of the comparison.
 ///
-/// The I2C address is set by strapping, so it is a template parameter with no default:
-/// `Lmk1d1208i<0x68>`. `Timing::StartupDelay` is the wait after power before the first transaction:
-/// the datasheet gives no figure and 500 ms is a conservative default.
-template<Address7 Addr, typename Timing = DefaultTiming>
+/// The I2C address is strapped by IDX1:IDX0 to 0x68-0x6B (SNAS828A 9.5.1); the device's Config
+/// says which, as for any multi-address part -- not the chip type, so two buffers on one board are
+/// one chip and share its code. `Timing::StartupDelay` is the wait after power before the first
+/// transaction: the datasheet gives no figure and 500 ms is a conservative default.
+template<typename Timing = DefaultTiming>
 struct Lmk1d1208i {
     static constexpr std::string_view Name          = "LMK1D1208I";
-    static constexpr Address7         Address       = Addr;
+    static constexpr Address7         Address       = 0x68;   // IDX1 = IDX0 = low
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 1> Addresses{Addr};
+    static constexpr std::array<Address7, 4> Addresses{0x68, 0x69, 0x6A, 0x6B};
 
     static constexpr std::chrono::milliseconds StartupDelay = [] {
         if constexpr(requires { Timing::StartupDelay; }) {

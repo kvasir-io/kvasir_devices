@@ -449,20 +449,18 @@ struct formatter<Kvasir::USB::SetupPacket> {
     template<typename Printer>
     constexpr auto format(Kvasir::USB::SetupPacket const& pkt,
                           Printer&                        printer) const {
-        return format_to(
-          printer,
-          SC_LIFT("direction:{} type:{} recipient:{}  descriptorType:{}  request:{} "
-                  "bmRequestType:{:#x} bRequest:{:#x} wValue:{:#x} wIndex:{:#x} wLength:{:#x}"),
-          pkt.direction(),
-          pkt.type(),
-          pkt.recipient(),
-          pkt.descriptorType(),
-          pkt.bRequest,
-          pkt.bmRequestType,
-          std::to_underlying(pkt.bRequest),
-          pkt.wValue,
-          pkt.wIndex,
-          pkt.wLength);
+        // The request by name and the raw fields. Direction, type and recipient are
+        // bmRequestType's bits and the descriptor type is wValue's high byte: decoded here
+        // each was an enum switch per call site (~650 B for one STALL warning).
+        return format_to(printer,
+                         SC_LIFT("request:{} bmRequestType:{:#x} bRequest:{:#x} wValue:{:#x} "
+                                 "wIndex:{:#x} wLength:{:#x}"),
+                         pkt.bRequest,
+                         pkt.bmRequestType,
+                         std::to_underlying(pkt.bRequest),
+                         pkt.wValue,
+                         pkt.wIndex,
+                         pkt.wLength);
     }
 };
 }   // namespace remote_fmt

@@ -24,7 +24,7 @@ struct EngineFeatures {
     /// Parking a part that NAKs, probing for it with a backing-off interval, and link()
     /// saying `absent` (Presence.hpp). Off, a NAKing part is retried as any failure is.
     bool presence = true;
-    /// The engine's own timeout on a request the bus has not answered (DeviceOps
+    /// The engine's own timeout on a request the bus has not answered (DeviceKnobs
     /// inFlightTimeoutMs). Off for a bus whose driver has a timeout of its own.
     bool inFlightNet = true;
     /// The bus completion time of every sample, read in the interrupt: stamp<G>() and
@@ -44,6 +44,13 @@ struct EngineFeatures {
     /// Resting turns (Engine::rest): a device with nothing due skips its turn until it is. Off,
     /// every turn runs in full - more work per loop turn, no resting state in RAM.
     bool rest = true;
+    /// A device driven on its own (Device::handler(), not a Bus or a DeviceSet) calls its
+    /// chip's hooks directly, as a device set of one (SetOps.hpp), instead of through its
+    /// table (Device::EngineOps). Direct calls stamp the whole engine once per chip type;
+    /// through the table it is one engine per port, whatever the chips. Off by default: a
+    /// firmware with a dozen chip types paid ~30 KB for the copies. On only pays for a bus
+    /// with one or two chip types, where the table's loads and indirect calls are all it saves.
+    bool directOps = false;
 
     constexpr bool operator==(EngineFeatures const&) const = default;
 };
@@ -56,7 +63,8 @@ inline constexpr EngineFeatures AllEngineFeatures{.switchable    = true,
                                                   .stats         = true,
                                                   .runtimePeriod = true,
                                                   .faultBackoff  = true,
-                                                  .rest          = true};
+                                                  .rest          = true,
+                                                  .directOps     = false};
 
 /// A bus driver with the engine features @p F: everything of `Bus`, one member more.
 template<typename Bus, EngineFeatures F>
@@ -77,7 +85,7 @@ namespace detail {
     template<bool On, typename T = std::uint32_t>
     using StatCount = std::conditional_t<On, T, NoCount>;
 
-    /// A table field for a feature that is off (DeviceOps): no bytes, and it takes whatever
+    /// A table field for a feature that is off (DeviceKnobs, DeviceOps): no bytes, and it takes whatever
     /// the initializer gives, so a device's table is written the same with and without. Each
     /// field has its own Tag - two empty members of one type may not share an address, and
     /// would take a byte each.

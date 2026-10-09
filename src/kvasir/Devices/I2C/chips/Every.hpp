@@ -126,7 +126,7 @@ using Every = List<Chips::Ad5665,
                    Chips::Veml7700<>,
                    Chips::Vl53l1x,
                    Chips::Ad7291<0x2F>,
-                   Chips::Lmk1d1208i<0x68>,
+                   Chips::Lmk1d1208i<>,
                    Chips::Pca9956b<0x3F, Units::ohm(2200)>>;
 
 }   // namespace Kvasir::I2C::Chips

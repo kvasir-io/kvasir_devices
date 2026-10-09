@@ -466,18 +466,6 @@ namespace detail {
         }
     }
 
-    /// Per write group, only when it verifies: what is owed a read-back and when.
-    template<bool Enable, typename TP>
-    struct VerifySlot {};
-
-    template<typename TP>
-    struct VerifySlot<true, TP> {
-        std::atomic<std::uint32_t> unverified{0};   ///< items written and not yet read back
-        TP                         due{};
-        std::uint32_t              mismatches{};
-        std::uint8_t               tries{};   ///< consecutive rewrites of the same item
-    };
-
     /// On the Device, only when some write group verifies: one scratch pair, because a
     /// verify is never on the wire at the same time as anything else.
     template<bool Enable, std::size_t N>
@@ -856,6 +844,15 @@ namespace detail {
         return any;
     }
 
+    template<typename L>
+    constexpr bool anyInitial() {
+        bool any = false;
+        forEach<L>([&](auto i) {
+            any = any || HasInitial<typename Nth<L>::template type<decltype(i)::value>>;
+        });
+        return any;
+    }
+
     using Kvasir::detail::ResetClaims;
 
     /// An SPI part's transport (SPI/Transport.hpp) rather than an I2C master: no I2C address.
@@ -1096,7 +1093,10 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
     };
 
     template<typename G>
-    struct WriteSlot : detail::WriteSlotBase<Clock> {
+    struct WriteSlot
+      : std::conditional_t<detail::Verifies<G>,
+                           detail::VerifiedWriteSlotBase<Clock>,
+                           detail::WriteSlotBase<Clock>> {
         static constexpr std::size_t Items = detail::itemsOf<G>();
         using Value                        = typename G::Value;
 
@@ -1104,9 +1104,8 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
         static constexpr std::uint32_t AllItems
           = static_cast<std::uint32_t>((1ULL << Items) - 1ULL);
 
-        std::array<std::byte, static_cast<std::size_t>(G::Bytes)>                buf{};
-        std::array<Value, Items>                                                 values{};
-        [[no_unique_address]] detail::VerifySlot<detail::Verifies<G>, TimePoint> verify{};
+        std::array<std::byte, static_cast<std::size_t>(G::Bytes)> buf{};
+        std::array<Value, Items>                                  values{};
     };
 
     /// One entry per cyclic read group, so the engine can walk them without their types.
@@ -1127,11 +1126,106 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
         detail::forEach<Writes>([&](auto i) {
             using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
             infos[decltype(i)::value] = detail::WriteGroupInfo{
-              .allItems = WriteSlot<W>::AllItems,
-              .periodMs = static_cast<std::uint32_t>(detail::periodOf<W>().count()),
-              .verifies = detail::Verifies<W>};
+              .allItems         = WriteSlot<W>::AllItems,
+              .periodMs         = static_cast<std::uint32_t>(detail::periodOf<W>().count()),
+              .verifyDelayMs    = static_cast<std::uint32_t>(detail::verifyDelayOf<W>().count()),
+              .verifyIntervalMs = static_cast<std::uint32_t>(detail::verifyIntervalOf<W>().count()),
+              .verifies         = detail::Verifies<W>,
+              .initial          = detail::HasInitial<W>,
+              .transient        = detail::HasTransient<W>};
         });
         return infos;
+    }();
+
+    static constexpr std::size_t WriteTableSize_ = Writes::size == 0 ? 1 : Writes::size;
+
+    /// What the engine's write paths need of each write group that depends on its type: a
+    /// constexpr table of small functions, one entry per group, reached through EngineOps; the
+    /// paths themselves are the engine's, one copy for every chip. A null entry is "the group
+    /// has none".
+    struct WriteOps_ {
+        /// Every item not in `known` to Initial (HasInitial).
+        void (*applyInitial)(DeviceCore&,
+                             std::uint32_t known){};
+        /// What the chip State makes of `item` now that the part holds it (W::applied).
+        void (*applied)(DeviceCore&,
+                        std::uint8_t item){};
+        /// `item` re-encoded into verify_ (want, wrote, len): what to read back (count 0 for
+        /// nothing, a bare pointer set).
+        detail::VerifyRead (*encodeForVerify)(DeviceCore&,
+                                              std::uint32_t item){};
+        /// The read-back says what was written (W::verify, else the bytes are equal).
+        bool (*matches)(std::span<std::byte const> want,
+                        std::span<std::byte const> got){};
+    };
+
+    static constexpr std::array<WriteOps_, WriteTableSize_> WriteOpsTable_ = [] {
+        std::array<WriteOps_, WriteTableSize_> ops{};
+        detail::forEach<Writes>([&](auto i) {
+            static constexpr std::size_t I = decltype(i)::value;
+            using W                        = typename detail::Nth<Writes>::template type<I>;
+            if constexpr(detail::HasInitial<W>) {
+                ops[I].applyInitial = [](DeviceCore& d, std::uint32_t known) {
+                    // Per item: an application that set item 3 of a group of 16 still owes the
+                    // other 15 their Initial, not a default-constructed Value.
+                    auto& s = std::get<I>(d.writes_);
+                    for(std::size_t item = 0; item < WriteSlot<W>::Items; ++item) {
+                        if(((known >> item) & 1U) == 0) { s.values[item] = W::Initial; }
+                    }
+                };
+            }
+            if constexpr(requires(typename W::Value const& v, State& st) { W::applied(v, st); }) {
+                ops[I].applied = [](DeviceCore& d, std::uint8_t item) {
+                    W::applied(std::get<I>(d.writes_).values[item], d.state_);
+                };
+            }
+            if constexpr(detail::Verifies<W>) {
+                // A read-back compares one register against one encoded payload; a
+                // multi-transaction item has no single register to read back from. groupOk()
+                // rejects the combination -- this says why here, at the place that relies on it.
+                static_assert(
+                  detail::writeStepsOf<W>() == 1,
+                  "a write group that asks to be verified must encode to a single Step");
+                // `auto&`: d.verify_ is checked only where this branch is taken -- a chip that
+                // verifies nothing has a VerifyBufs without members.
+                ops[I].encodeForVerify = [](auto& d, std::uint32_t item) -> detail::VerifyRead {
+                    auto& s = std::get<I>(d.writes_);
+                    Step  wrote{};
+                    if constexpr(detail::HasItems<W>) {
+                        wrote = W::encode(s.values[item],
+                                          static_cast<std::size_t>(item),
+                                          std::span<std::byte>{s.buf});
+                    } else {
+                        wrote = W::encode(s.values[0], std::span<std::byte>{s.buf});
+                    }
+                    if(wrote.count == 0) { return {}; }
+                    constexpr std::size_t MaxBytes = detail::maxVerifyBytesOf<Writes>();
+                    auto const            n = static_cast<std::size_t>(wrote.count) > MaxBytes
+                                              ? MaxBytes
+                                              : static_cast<std::size_t>(wrote.count);
+                    for(std::size_t j = 0; j < n; ++j) {
+                        d.verify_.want[j] = wrote.fromBuffer
+                                            ? s.buf[wrote.offset + j]
+                                            : static_cast<std::byte>(wrote.bytes[j]);
+                    }
+                    d.verify_.wrote = wrote;
+                    d.verify_.len   = static_cast<std::uint8_t>(n);
+                    d.verify_.got   = {};
+                    return {.reg         = wrote.reg,
+                            .count       = static_cast<std::uint8_t>(n),
+                            .hasRegister = wrote.hasRegister};
+                };
+                ops[I].matches
+                  = [](std::span<std::byte const> want, std::span<std::byte const> got) {
+                        if constexpr(detail::HasVerifyFn<W>) {
+                            return static_cast<bool>(W::verify(Bytes{want}, Bytes{got}));
+                        } else {
+                            return std::ranges::equal(want, got);
+                        }
+                    };
+            }
+        });
+        return ops;
     }();
 
     using ReadSlots  = typename detail::Slots<ReadSlot, Reads>::type;
@@ -1170,6 +1264,7 @@ struct DeviceCore : detail::EngineState<Port, Clock> {
       = anyRead_([]<typename G>() { return detail::HasDynamicPeriod<G>; });
     static constexpr bool        NeedsOracle    = HasIdentity;
     static constexpr bool        NeedsVerify    = AnyVerify;
+    static constexpr bool        NeedsInitial   = detail::anyInitial<Writes>();
     static constexpr std::size_t MaxVerifyBytes = detail::maxVerifyBytesOf<Writes>();
 
     // A read-back is addressed by the register the write went to; on a chip without registers
@@ -1355,45 +1450,38 @@ private:
               std::make_index_sequence<Writes::size>{});
         },
       .afterWrite =
-        [](EngineStateT& e, std::uint8_t w, std::uint8_t item, TimePoint now) {
+        [](EngineStateT& e, std::uint8_t w, std::uint8_t item, TimePoint) {
             auto& d            = self_(e);
             d.withdrawnOnWire_ = false;
-            detail::withIndex(
-              w,
-              [&](auto i) {
-                  using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
-                  auto& s = std::get<decltype(i)::value>(d.writes_);
-                  // The part now holds the value, so what the chip State says about it
-                  // follows: a full scale that changes what decode() multiplies by.
-                  if constexpr(requires(typename W::Value const& v, State& st) {
-                                   W::applied(v, st);
-                               }) {
-                      W::applied(s.values[item], d.state_);
-                  }
-                  if constexpr(detail::Verifies<W>) {
-                      // owed a read-back; the delay is the chip's settling time
-                      s.verify.unverified.fetch_or(1U << item, std::memory_order_relaxed);
-                      constexpr auto delay    = detail::verifyDelayOf<W>();
-                      constexpr auto interval = detail::verifyIntervalOf<W>();
-                      s.verify.due
-                        = now + (delay != std::chrono::milliseconds::zero() ? delay : interval);
-                  }
-              },
-              std::make_index_sequence<Writes::size>{});
+            // The part now holds the value, so what the chip State says about it follows: a
+            // full scale that changes what decode() multiplies by. (The read-back it owes is
+            // the engine's: finishWrite.)
+            if(auto const applied = WriteOpsTable_[w].applied) { applied(d, item); }
         },
-      .startVerifyGroup = [](EngineStateT& e,
-                             std::uint8_t  w,
-                             TimePoint now) { return self_(e).startVerify_(EngineOps, w, now); },
-      .finishVerify     = [](EngineStateT& e, TimePoint now) { self_(e).finishVerify_(now); },
-      .verifyDue =
-        [] {
-            using Fn = TimePoint (*)(EngineStateT&);
-            if constexpr(AnyVerify) {
-                return Fn{[](EngineStateT& e) { return self_(e).verifyDue_(); }};
-            } else {
-                return Fn{};
-            }
-        }(),
+      .verifySlot = [](EngineStateT& e, std::uint8_t w) -> detail::VerifiedWriteSlotBase<Clock>& {
+          return self_(e).verifySlot_(w);
+      },
+      .encodeForVerify
+      = [](EngineStateT& e, std::uint8_t w, std::uint32_t item) -> detail::VerifyRead {
+          return WriteOpsTable_[w].encodeForVerify(self_(e), item);
+      },
+      // `auto&`: verify_ is looked into only by a chip that verifies (VerifyBufs has no
+      // members otherwise), and the hook is called only for a group that does.
+      .verifyMatches = [](auto& e, std::uint8_t w) -> bool {
+          if constexpr(AnyVerify) {
+              auto&      d = self_(e);
+              auto const n = static_cast<std::size_t>(d.verify_.len);
+              return WriteOpsTable_[w].matches(std::span<std::byte const>{d.verify_.want}.first(n),
+                                               std::span<std::byte const>{d.verify_.got}.first(n));
+          } else {
+              static_cast<void>(e);
+              static_cast<void>(w);
+              return true;
+          }
+      },
+      .applyInitial  = [](EngineStateT& e,
+                          std::uint8_t  w,
+                          std::uint32_t known) { WriteOpsTable_[w].applyInitial(self_(e), known); },
       .name          = Chip::Name,
       .registerBytes = static_cast<std::uint8_t>(RegisterBytes),
       .initEmpty     = InitSteps.empty()};
@@ -1406,13 +1494,18 @@ public:
 
     /// The same with the clock read by the caller (Bus::handler).
     ///
-    /// A device on its own is a device set of one (SetOps.hpp): its hooks are direct calls, no
-    /// table is read - and the engine is one copy for this chip. Several parts on one port
-    /// share the engine when a Bus or a DeviceSet drives them.
+    /// A device on its own is driven through its chip's table (EngineOps), so every chip on
+    /// the port shares one engine. With EngineFeatures::directOps it is a device set of one
+    /// (SetOps.hpp) instead: direct calls, no table read -- and an engine per chip type.
+    /// A Bus or a DeviceSet drives its parts through the set's dispatch either way.
     void handler(TimePoint now) {
-        detail::Engine<Port, Clock>::handler(*this,
-                                             detail::SetOpsFor<Port, Clock, DeviceCore>{},
-                                             now);
+        if constexpr(Port::Features.directOps) {
+            detail::Engine<Port, Clock>::handler(*this,
+                                                 detail::SetOpsFor<Port, Clock, DeviceCore>{},
+                                                 now);
+        } else {
+            detail::Engine<Port, Clock>::handler(*this, EngineOps, now);
+        }
     }
 
     /// Start over from the reset, as after power-on: for a caller that did to the part what the
@@ -1421,6 +1514,8 @@ public:
     /// present and is brought up from the start (StartupDelay, the identity, Init), and
     /// everything the application had written is re-sent after it, as after any bring-up.
     void restart() {
+        // SelfOps whatever the dispatch: a device a Bus or a DeviceSet drives would otherwise
+        // pull this chip's whole table, and with it a table engine, into an image that has none.
         detail::Engine<Port, Clock>::reset(*this, SelfOps{});
         presence_.restart();
         ring_();
@@ -2081,13 +2176,32 @@ private:
             withdrawnOnWire_ = false;   // withdraw<W>() said it is no longer wanted
             return;
         }
-        detail::withIndex(
-          group_,
-          [&](auto i) {
-              auto& s = std::get<decltype(i)::value>(writes_);
-              s.dirty.fetch_or(1U << item_, std::memory_order_relaxed);
-          },
-          std::make_index_sequence<Writes::size>{});
+        writeSlotBase_(this->group_).dirty.fetch_or(1U << this->item_, std::memory_order_relaxed);
+    }
+
+    /// Write group @p w's slot, as the part every group has: a compare per group, no body per
+    /// group (the paths that use it are one body for all of them).
+    template<std::size_t I = 0>
+    detail::WriteSlotBase<Clock>& writeSlotBase_(std::size_t w) {
+        if constexpr(I >= Writes::size) {
+            std::unreachable();   // w is always one of the groups
+        } else {
+            if(w == I) { return std::get<I>(writes_); }
+            return writeSlotBase_<I + 1>(w);
+        }
+    }
+
+    /// The same for a group that reads back; never called for one that does not.
+    template<std::size_t I = 0>
+    detail::VerifiedWriteSlotBase<Clock>& verifySlot_(std::size_t w) {
+        if constexpr(I >= Writes::size) {
+            std::unreachable();
+        } else {
+            if constexpr(detail::Verifies<typename detail::Nth<Writes>::template type<I>>) {
+                if(w == I) { return std::get<I>(writes_); }
+            }
+            return verifySlot_<I + 1>(w);
+        }
     }
 
     void beginInit_(TimePoint now) {
@@ -2280,7 +2394,7 @@ private:
         detail::Engine<Port, Clock>::finishInit(*this, ops, now);
     }
 
-    /// Every group's first deadline after a bring-up, and what the chip is owed again.
+    /// Every read group's first deadline after a bring-up.
     void startupSchedule_(TimePoint now) {
         detail::forEach<Reads>([&](auto i) {
             using G   = typename detail::Nth<Reads>::template type<decltype(i)::value>;
@@ -2296,32 +2410,7 @@ private:
                 s.due = now;
             }
         });
-        detail::forEach<Writes>([&](auto i) {
-            using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
-            auto& s = std::get<decltype(i)::value>(writes_);
-            s.due   = now;
-            if constexpr(detail::HasInitial<W>) {
-                // A value the chip must hold from the start (and again after every reset)
-                // unless the application has set one already -- set, not written: the
-                // application's value stands even when the bring-up it was made before is
-                // the one finishing here. Per item: an application that set item 3 of a group
-                // of 16 still owes the other 15 their Initial, not a default-constructed Value.
-                for(std::size_t item = 0; item < WriteSlot<W>::Items; ++item) {
-                    if(((s.known >> item) & 1U) == 0) { s.values[item] = W::Initial; }
-                }
-                s.known = WriteSlot<W>::AllItems;
-                s.dirty.store(WriteSlot<W>::AllItems, std::memory_order_release);
-            } else if constexpr(!detail::HasTransient<W>) {
-                // The chip is back at its defaults, so whatever the application has set
-                // since is owed again -- without this the value is lost silently while
-                // value<W>() still reports it. Only the items it did set (`known`): an item
-                // it never touched holds a default-constructed Value the chip was never
-                // told, and must not be told now. A Transient group is a one-shot command
-                // and not a state: replaying it would burn an EEPROM write cycle or
-                // re-apply a stale wall-clock time.
-                if(s.owned) { s.dirty.store(s.known, std::memory_order_release); }
-            }
-        });
+        // The write groups are the engine's (Engine::scheduleWrites), after this.
     }
 
     /// Whether G's bytes may be decoded (ConfirmChange). A candidate lives within one run, so
@@ -2423,173 +2512,9 @@ private:
     /// The next deadline one period on, or one period from now when the last one is already
     /// past: a group that fell behind resumes at its period rather than bursting to catch up.
 
-    /// The read-back came in: compare it against what was written. A mismatch re-dirties
-    /// the item, bounded by MaxRetries so a bit that cannot hold its value is not rewritten
-    /// for ever.
-    void finishVerify_(TimePoint now) {
-        if constexpr(AnyVerify) {
-            detail::withIndex(
-              group_,
-              [&](auto i) {
-                  using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
-                  if constexpr(detail::Verifies<W>) {
-                      auto&       s = std::get<decltype(i)::value>(writes_);
-                      auto const  n = static_cast<std::size_t>(verify_.len);
-                      Bytes const want{std::span<std::byte const>{verify_.want}.first(n)};
-                      Bytes const got{std::span<std::byte const>{verify_.got}.first(n)};
-                      bool const  ok = [&] {
-                          if constexpr(detail::HasVerifyFn<W>) {
-                              return W::verify(want, got);
-                          } else {
-                              return std::ranges::equal(std::span{verify_.want}.first(n),
-                                                        std::span{verify_.got}.first(n));
-                          }
-                      }();
-                      if(ok) {
-                          s.verify.unverified.fetch_and(~(1U << this->item_),
-                                                        std::memory_order_relaxed);
-                          s.verify.tries = 0;
-                      } else {
-                          ++s.verify.mismatches;
-                          if(s.verify.tries < this->dev_->maxRetries) {
-                              ++s.verify.tries;
-                              s.dirty.fetch_or(1U << this->item_, std::memory_order_relaxed);
-                          } else {
-                              detail::logVerifyStuck(
-                                Chip::Name,
-                                this->dev_->address,
-                                static_cast<std::uint16_t>(verify_.wrote.reg),
-                                static_cast<std::uint32_t>(s.verify.mismatches));
-                              s.verify.unverified.fetch_and(~(1U << this->item_),
-                                                            std::memory_order_relaxed);
-                              s.verify.tries = 0;
-                          }
-                      }
-                      constexpr auto iv = detail::verifyIntervalOf<W>();
-                      s.verify.due
-                        = now
-                        + (iv != std::chrono::milliseconds::zero() ? iv
-                                                                   : detail::verifyDelayOf<W>());
-                  }
-              },
-              std::make_index_sequence<Writes::size>{});
-        }
-        endRun_();
-    }
-
     void fail_(TimePoint now) { detail::Engine<Port, Clock>::fail(*this, EngineOps, now); }
 
     // -- choosing what runs next -----------------------------------------------------------
-
-    /// The earliest point startVerify_ can start a read-back.
-    [[nodiscard]] TimePoint verifyDue_() {
-        TimePoint due = TimePoint::max();
-        detail::forEach<Writes>([&](auto i) {
-            using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
-            if constexpr(detail::Verifies<W>) {
-                auto const& s = std::get<decltype(i)::value>(writes_);
-                bool const  owed
-                  = s.verify.unverified.load(std::memory_order_acquire) != 0
-                 || detail::verifyIntervalOf<W>() != std::chrono::milliseconds::zero();
-                if(owed && s.verify.due < due) { due = s.verify.due; }
-            }
-        });
-        return due;
-    }
-
-    /// Read one written register back. The write step `encode` produced carries both the
-    /// register and the bytes, so a chip needs to declare nothing but the two durations.
-    template<typename O>
-    bool startVerify_(O const&     ops,
-                      std::uint8_t w,
-                      TimePoint    now) {
-        if constexpr(!AnyVerify) {
-            static_cast<void>(ops);
-            static_cast<void>(w);
-            static_cast<void>(now);
-            return false;
-        } else {
-            bool started = false;
-            detail::withIndex(
-              w,
-              [&](auto i) {
-                  using W = typename detail::Nth<Writes>::template type<decltype(i)::value>;
-                  if constexpr(detail::Verifies<W>) {
-                      auto& s = std::get<decltype(i)::value>(writes_);
-                      if(now < s.verify.due) { return; }
-                      auto u = s.verify.unverified.load(std::memory_order_acquire);
-                      if(u == 0) {
-                          constexpr auto iv = detail::verifyIntervalOf<W>();
-                          if constexpr(iv == std::chrono::milliseconds::zero()) {
-                              return;   // checked once after each write, and it matched
-                          } else {
-                              // The periodic look, at the items the chip was told: one never set
-                              // holds a Value it was never sent and would read as a mismatch.
-                              u = s.known;
-                              if(s.writes == 0 || u == 0) {
-                                  s.verify.due = now + iv;   // nothing written to check yet
-                                  return;
-                              }
-                              s.verify.unverified.store(u, std::memory_order_release);
-                          }
-                      }
-                      auto const item = static_cast<std::uint32_t>(std::countr_zero(u));
-
-                      // A read-back compares one register against one encoded payload; a
-                      // multi-transaction item has no single register to read back from.
-                      // groupOk() rejects the combination -- this says why here, at the place
-                      // that relies on it.
-                      static_assert(detail::writeStepsOf<W>() == 1,
-                                    "a write group that asks to be verified must encode to a "
-                                    "single Step");
-
-                      // Re-encode to recover the register and the bytes that were sent.
-                      Step wrote{};
-                      if constexpr(detail::HasItems<W>) {
-                          wrote = W::encode(s.values[item],
-                                            static_cast<std::size_t>(item),
-                                            std::span<std::byte>{s.buf});
-                      } else {
-                          wrote = W::encode(s.values[0], std::span<std::byte>{s.buf});
-                      }
-                      if(wrote.count == 0) {
-                          // a bare pointer set: there is nothing to read back
-                          s.verify.unverified.fetch_and(~(1U << item), std::memory_order_relaxed);
-                          return;
-                      }
-                      auto const n = static_cast<std::size_t>(wrote.count) > MaxVerifyBytes
-                                     ? MaxVerifyBytes
-                                     : static_cast<std::size_t>(wrote.count);
-                      for(std::size_t j = 0; j < n; ++j) {
-                          verify_.want[j] = wrote.fromBuffer
-                                            ? s.buf[wrote.offset + j]
-                                            : static_cast<std::byte>(wrote.bytes[j]);
-                      }
-                      verify_.wrote = wrote;
-                      verify_.len   = static_cast<std::uint8_t>(n);
-                      verify_.got   = {};
-
-                      this->running_ = Running::verify;
-                      this->group_   = static_cast<std::uint8_t>(decltype(i)::value);
-                      this->item_    = static_cast<std::uint8_t>(item);
-                      this->step_    = 0;
-                      // Behind a register when the write went to one; a bare read of the same
-                      // count on a chip without registers (an I2C switch returns its control
-                      // byte, 7.5.4 of the TCA9548A).
-                      this->current_
-                        = wrote.hasRegister
-                          ? Step::read({.reg    = wrote.reg,
-                                        .count  = static_cast<std::uint8_t>(n),
-                                        .offset = 0})
-                          : Step::receive({.count = static_cast<std::uint8_t>(n), .offset = 0});
-                      this->inFlight_ = submit_(ops, buffer_());
-                      started         = true;
-                  }
-              },
-              std::make_index_sequence<Writes::size>{});
-            return started;
-        }
-    }
 
     /// One item of a write group encoded into the script the engine then walks. Four
     /// shapes, two questions: does the group have Items (does encode() take the index), and
@@ -2718,11 +2643,12 @@ struct Device
         { Config::enabled() } -> std::convertible_to<bool>;
     };
 
-    /// Or one function shared by many devices, with this device's data as its argument:
+    /// Or one function shared by many devices, with a value that says which one it is asked
+    /// for (an index, a key packed into a word):
     ///     struct Config {
-    ///         static constexpr bool (*enabledBy)(void const*) = &slotFitted;
-    ///         static constexpr void const* enabledArg = &mySlot;
-    ///         static bool enabled() { return slotFitted(&mySlot); }   // for the application
+    ///         static constexpr bool (*enabledBy)(std::uint32_t) = &slotFitted;
+    ///         static constexpr std::uint32_t enabledArg = 2;   // the slot
+    ///         static bool enabled() { return slotFitted(2); }   // for the application
     ///     };
     static constexpr bool SharedEnable = requires {
         { Config::enabledBy(Config::enabledArg) } -> std::convertible_to<bool>;
@@ -2925,25 +2851,13 @@ private:
         return static_cast<Device const&>(e);
     }
 
-    using DeviceOpsT = detail::DeviceOps<detail::PortOf<I2c>, Clock>;
+    using PortT      = detail::PortOf<I2c>;
+    using DeviceOpsT = detail::DeviceOps<PortT, Clock>;
+    using KnobsT     = detail::DeviceKnobs<PortT, Clock>;
 
-    /// What only this device has, for the engine; a hook it does not need is null.
-    static constexpr DeviceOpsT Hooks{
-      .submit =
-        [] {
-            using Fn = bool (*)(typename I2c::Request const&);
-            if constexpr(PerDeviceClock) {
-                // The engine's code is shared by every device on the port: the timing is this
-                // device's own, so it goes in here, on the way out.
-                return Fn{[](typename I2c::Request const& r) -> bool {
-                    auto timed   = r;
-                    timed.timing = BusTiming;
-                    return I2c::submit(timed);
-                }};
-            } else {
-                return Fn{[](typename I2c::Request const& r) -> bool { return I2c::submit(r); }};
-            }
-        }(),
+    /// What this device shares with others that have the same: its knobs, one object per
+    /// distinct set (detail::deviceKnobs); a hook it does not need is null.
+    static constexpr KnobsT Knobs{
       .claimGate =
         [] {
             using Fn = bool (*)(EngineStateT&);
@@ -2958,42 +2872,6 @@ private:
             using Fn = void (*)(EngineStateT&);
             if constexpr(Gate::Gated) {
                 return Fn{[](EngineStateT& e) { self_(e).gate_.release(); }};
-            } else {
-                return Fn{};
-            }
-        }(),
-      .enabled =
-        [] {
-            using Fn = bool (*)(void const*);
-            if constexpr(SharedEnable) {
-                return Fn{Config::enabledBy};
-            } else if constexpr(Enableable) {
-                return Fn{[](void const*) -> bool { return static_cast<bool>(Config::enabled()); }};
-            } else {
-                return Fn{};
-            }
-        }(),
-      .enabledArg =
-        [] {
-            if constexpr(SharedEnable) {
-                return static_cast<void const*>(Config::enabledArg);
-            } else {
-                return static_cast<void const*>(nullptr);
-            }
-        }(),
-      .enabledGeneration =
-        [] {
-            if constexpr(requires { Config::enabledGeneration; }) {
-                return static_cast<std::uint32_t const*>(Config::enabledGeneration);
-            } else {
-                return static_cast<std::uint32_t const*>(nullptr);
-            }
-        }(),
-      .gateOffline =
-        [] {
-            using Fn = bool (*)(EngineStateT const&);
-            if constexpr(Bridged) {
-                return Fn{[](EngineStateT const& e) -> bool { return self_(e).gate_.offline(); }};
             } else {
                 return Fn{};
             }
@@ -3031,7 +2909,6 @@ private:
       .faultBackoffMs      = static_cast<std::uint32_t>(FaultBackoff.count()),
       .inFlightTimeoutMs   = static_cast<std::uint32_t>(InFlightTimeout.count()),
       .unidentifiedRetryMs = static_cast<std::uint32_t>(UnidentifiedRetry.count()),
-      .address             = Address,
       .faultsBeforeReinit  = FaultsBeforeReinit,
       .maxRetries          = MaxRetries,
       .bridgeUnpowered =
@@ -3043,6 +2920,69 @@ private:
             }
         }(),
       .disabledUnpowered = WhileDisabled == WhileOff::unpowered};
+
+    /// What only this device has, for the engine.
+    static constexpr DeviceOpsT Hooks{
+      .submit =
+        [] {
+            using Fn = bool (*)(typename I2c::Request const&);
+            if constexpr(PerDeviceClock) {
+                // The engine's code is shared by every device on the port: the timing is this
+                // device's own, so it goes in here, on the way out.
+                return Fn{[](typename I2c::Request const& r) -> bool {
+                    auto timed   = r;
+                    timed.timing = BusTiming;
+                    return I2c::submit(timed);
+                }};
+            } else {
+                return Fn{[](typename I2c::Request const& r) -> bool { return I2c::submit(r); }};
+            }
+        }(),
+      .knobs = detail::deviceKnobs<PortT, Clock, Knobs>,
+      .enabled =
+        [] {
+            using Fn = bool (*)(std::uint32_t);
+            if constexpr(SharedEnable) {
+                static_assert(
+                  std::is_convertible_v<decltype(Config::enabledBy), Fn>,
+                  "Config::enabledBy is a bool(*)(std::uint32_t) (it took a void const* before): "
+                  "the value it is given is Config::enabledArg, a std::uint32_t");
+                return Fn{Config::enabledBy};
+            } else if constexpr(Enableable) {
+                return Fn{
+                  [](std::uint32_t) -> bool { return static_cast<bool>(Config::enabled()); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .enabledArg =
+        [] {
+            if constexpr(SharedEnable) {
+                // braces: a pointer or a wider value (the old `void const*` argument) does not
+                // narrow into the word silently
+                return std::uint32_t{Config::enabledArg};
+            } else {
+                return std::uint32_t{};
+            }
+        }(),
+      .enabledGeneration =
+        [] {
+            if constexpr(requires { Config::enabledGeneration; }) {
+                return static_cast<std::uint32_t const*>(Config::enabledGeneration);
+            } else {
+                return static_cast<std::uint32_t const*>(nullptr);
+            }
+        }(),
+      .gateOffline =
+        [] {
+            using Fn = bool (*)(EngineStateT const&);
+            if constexpr(Bridged) {
+                return Fn{[](EngineStateT const& e) -> bool { return self_(e).gate_.offline(); }};
+            } else {
+                return Fn{};
+            }
+        }(),
+      .address = Address};
 
     [[no_unique_address]] Gate gate_{};
 };

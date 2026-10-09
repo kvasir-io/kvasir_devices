@@ -954,7 +954,7 @@ void ad5665() {
 void lmk1d1208i() {
     testCase("LMK1D1208I (read-back verify on a real description)");
     fresh();
-    RegisterModel<1> lk{0x65};
+    RegisterModel<1> lk{0x68};
     lk.set(0x85, {0x20});   // R5: REV_ID 2, DEV_ID 0 (Table 9-15)
     lk.readOnly = {0x85};
     bool lkDrop = false;
@@ -965,26 +965,52 @@ void lmk1d1208i() {
         }
     };
     FakeBus::respond = std::ref(lk);
-    Dev<Chips::Lmk1d1208i<0x65>> ll{};
+    Dev<Chips::Lmk1d1208i<>> ll{};
     check(runUntil(ll, [&] { return ll.valid(); }, 1500ms), "up");
     check(ll.identified(), "DEV_ID 0 accepted");
     checkEq(ll.latest().revision, 2U, "the model's R5 reached the decode");
     // R5 0x20: REV_ID 2 in 7:4, DEV_ID 0 in 3:0
     static_assert([] {
         auto const f   = frame(0x20);
-        auto const got = Chips::Lmk1d1208i<0x65>::Identity::decode(Bytes{f});
+        auto const got = Chips::Lmk1d1208i<>::Identity::decode(Bytes{f});
         return got.deviceId == 0 && got.revision == 2;
     }());
     check(lk.word(0x80) == 0x00 && lk.word(0x82) == 0xF1,
           "the reset configuration is written at bring-up");
     lkDrop = true;
-    ll.set<Chips::Lmk1d1208i<0x65>::OutputEnable>(0x0F);
+    ll.set<Chips::Lmk1d1208i<>::OutputEnable>(0x0F);
     check(runUntil(
             ll,
-            [&] { return ll.mismatches<Chips::Lmk1d1208i<0x65>::OutputEnable>() == 1; },
+            [&] { return ll.mismatches<Chips::Lmk1d1208i<>::OutputEnable>() == 1; },
             500ms),
           "the read-back caught the dropped write");
     check(runUntil(ll, [&] { return lk.word(0x80) == 0x0F; }, 500ms), "and it was written again");
+    if(failures != 0) { dump(); }
+}
+
+/// The address is the Config's, not the type's: a second buffer strapped to 0x69 is the same
+/// chip type, and its traffic goes to 0x69.
+struct LmkAt69 : Kvasir::I2C::DefaultConfig {
+    static constexpr Kvasir::I2C::Address7 Address = 0x69;
+};
+
+void lmk1d1208iSecondAddress() {
+    testCase("LMK1D1208I at 0x69 (IDX0 high): the same chip type, its own address");
+    fresh();
+    RegisterModel<1> lk{0x69};
+    lk.set(0x85, {0x20});
+    lk.readOnly      = {0x85};
+    FakeBus::respond = std::ref(lk);
+    Dev<Chips::Lmk1d1208i<>, LmkAt69> ll{};
+    check(runUntil(ll, [&] { return ll.valid(); }, 1500ms), "up at 0x69");
+    check(lk.word(0x82) == 0xF1, "its reset configuration written at 0x69");
+    ll.set<Chips::Lmk1d1208i<>::OutputEnable>(0x03);
+    check(runUntil(ll, [&] { return lk.word(0x80) == 0x03; }, 500ms), "a write reaches 0x69");
+    bool onlyThere = true;
+    for(auto const& t : FakeBus::log) { onlyThere = onlyThere && t.address == 0x69; }
+    check(onlyThere, "nothing went to 0x68");
+    static_assert(
+      std::is_same_v<Dev<Chips::Lmk1d1208i<>, LmkAt69>::Chip, Dev<Chips::Lmk1d1208i<>>::Chip>);
     if(failures != 0) { dump(); }
 }
 
@@ -1557,6 +1583,7 @@ int main() {
     ina238();
     ad5665();
     lmk1d1208i();
+    lmk1d1208iSecondAddress();
     pca9557();
     tca9555();
     power();

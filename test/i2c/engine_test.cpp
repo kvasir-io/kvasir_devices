@@ -338,15 +338,21 @@ namespace FeaturesTest {
     };
     using CountedProbe   = Kvasir::I2C::Device<FakeBus, FakeClock, PresenceTest::Probe>;
     using UncountedProbe = Kvasir::I2C::Device<NoStatsBus, FakeClock, PresenceTest::Probe>;
-    // The per-device table (flash, one a device) loses what the features that are off need:
-    // five hooks and pointers, the presence knobs and the in-flight timeout.
+    // The tables (flash) lose what the features that are off need: the shared knobs the bridge's
+    // generation hook, the presence knobs and the in-flight timeout; the per-device part the
+    // enable, its argument and generation, and the bridge's offline hook.
+    static_assert(sizeof(D::DeviceKnobs<D::PortOf<MinBus>,
+                                        FakeClock>)
+                      + sizeof(void*) + sizeof(Kvasir::I2C::PresenceKnobs) + sizeof(std::uint32_t)
+                    <= sizeof(D::DeviceKnobs<D::PortOf<FakeBus>,
+                                             FakeClock>),
+                  "the knobs have no fields for the features that are off");
     static_assert(sizeof(D::DeviceOps<D::PortOf<MinBus>,
                                       FakeClock>)
-                      + 5 * sizeof(void*) + sizeof(Kvasir::I2C::PresenceKnobs)
-                      + sizeof(std::uint32_t)
+                      + 3 * sizeof(void*) + sizeof(std::uint32_t)
                     <= sizeof(D::DeviceOps<D::PortOf<FakeBus>,
                                            FakeClock>),
-                  "the table has no fields for the features that are off");
+                  "the per-device table has no switch fields when nothing is switchable");
     /// Without a run-time period: no period<G>(ms) and no check of a stored one per reschedule.
     /// ReadSlotBase alone does not shrink (the 8-byte time point's padding takes the 5 bytes),
     /// but a device's slot does: its own members move into the base's freed tail - a
@@ -2575,11 +2581,11 @@ namespace RestTest {
     /// The shared form: one function for every device, and this one's flag as its argument.
     inline bool flags[2] = {true, true};
 
-    inline bool flagSet(void const* flag) { return *static_cast<bool const*>(flag); }
+    inline bool flagSet(std::uint32_t i) { return flags[i]; }
 
     struct SharedSwitched {
-        static constexpr bool (*enabledBy)(void const*) = &flagSet;
-        static constexpr void const* enabledArg         = &flags[1];
+        static constexpr bool (*enabledBy)(std::uint32_t) = &flagSet;
+        static constexpr std::uint32_t enabledArg         = 1;
     };
 
     /// With a generation: enabled() is asked only after the counter moved. `stepWhileAsked`
@@ -2771,6 +2777,110 @@ void resting() {
 
 }   // namespace
 
+namespace {
+
+// -- a device on its own: through its table, or as a device set of one ---------------------------
+
+namespace OpsKindsTest {
+    /// A bus whose devices call their hooks directly (EngineFeatures::directOps); the untagged
+    /// FakeBus drives them through their table, the default.
+    struct DirectTag {};
+
+    using DirectBus = WithFeatures<FakeBusFor<DirectTag>, [] {
+        auto f      = AllEngineFeatures;
+        f.directOps = true;
+        return f;
+    }()>;
+
+    /// Limits read back 100 ms after a write and every second: the verify path on both kinds.
+    struct VerifiedLimits {
+        static constexpr std::chrono::seconds LimitsVerifyInterval{1};
+    };
+
+    using Tmp = Chips::Tmp1075<VerifiedLimits>;
+
+    struct Run {
+        std::vector<Transaction> log;
+        std::size_t              restartAt{};
+        std::uint32_t            samples{};
+        std::uint32_t            writes{};
+        std::uint32_t            mismatches{};
+    };
+
+    /// Bring-up, a sample, two limits and a config change written, a restart, and everything
+    /// again after it: what one device does with its part, recorded.
+    template<typename Tag,
+             typename Bus>
+    Run scenario() {
+        fresh<Tag>();
+        RegisterModel<1, 2> t75{0x48};
+        t75.set(0x0F, {0x75, 0x00});   // DIEID
+        t75.set(0x00, {0x19, 0x00});
+        t75.readOnly = {0x00, 0x0F};
+        // the first TLOW write does not stick: the read-back has to catch it, on either path
+        bool dropTlow = true;
+        t75.onWrite   = [&](std::uint32_t reg, auto const&) {
+            if(dropTlow && reg == 0x02) {
+                dropTlow = false;
+                t75.set(0x02, {0x00, 0x00});
+            }
+        };
+        FakeBusFor<Tag>::respond = std::ref(t75);
+
+        Kvasir::I2C::Device<Bus, FakeClock, Tmp> d{};
+        check(runUntil<Tag>(d, [&] { return d.samples() == 1; }, 500ms), "first sample");
+        d.template set<Tmp::Limits>(Tmp::Low, Units::centiDegC(7500));
+        d.template set<Tmp::Limits>(Tmp::High, Units::centiDegC(8000));
+        d.template modify<Tmp::Config>([](auto& c) { c.rate = Tmp::Rate::ms220; });
+        check(runUntil<Tag>(
+                d,
+                [&] { return d.template mismatches<Tmp::Limits>() == 1; },
+                2000ms),
+              "the read-back caught the dropped TLOW");
+        check(runUntil<Tag>(d, [&] { return t75.word(0x02) == 0x4B00U; }, 1000ms), "TLOW written");
+
+        Run r{};
+        r.restartAt = FakeBusFor<Tag>::log.size();
+        t75.set(0x02, {0x00, 0x00});   // the part lost it
+        d.restart();
+        runFor<Tag>(d, 600ms);
+        checkEq(t75.word(0x02), 0x4B00U, "TLOW written again after the restart");
+        r.log        = FakeBusFor<Tag>::log;
+        r.samples    = d.samples();
+        r.writes     = d.template writes<Tmp::Limits>();
+        r.mismatches = d.template mismatches<Tmp::Limits>();
+        return r;
+    }
+}   // namespace OpsKindsTest
+
+void opsKinds() {
+    using namespace OpsKindsTest;
+    testCase("ops: a device through its table does on the bus what a set of one does");
+    auto const table  = scenario<void, FakeBus>();
+    auto const direct = scenario<DirectTag, DirectBus>();
+    checkEq(table.log.size(), direct.log.size(), "as many transactions");
+    bool same = table.log.size() == direct.log.size();
+    for(std::size_t i = 0; same && i < table.log.size(); ++i) {
+        auto const& a = table.log[i];
+        auto const& b = direct.log[i];
+        same          = a.kind == b.kind && a.address == b.address && a.sent == b.sent
+                     && a.recvLen == b.recvLen && a.received == b.received && a.at == b.at;
+        if(!same) { std::printf("    first difference at transaction %zu\n", i); }
+    }
+    check(same, "the same transactions, bytes and times");
+    checkEq(table.restartAt, direct.restartAt, "the restart at the same point");
+    checkEq(table.samples, direct.samples, "as many samples");
+    checkEq(table.writes, direct.writes, "as many limit writes");
+    checkEq(table.mismatches, direct.mismatches, "the same read-back mismatches");
+    check(table.writes >= 4, "the limits re-sent after the restart");
+    if(failures != 0) {
+        dump();
+        dump<DirectTag>();
+    }
+}
+
+}   // namespace
+
 int main() {
     presence();
     features();
@@ -2786,5 +2896,6 @@ int main() {
     confirmChange();
     withdrawWrites();
     resting();
+    opsKinds();
     return finish();
 }

@@ -52,7 +52,7 @@ enum class PresenceRest : std::uint8_t {
     parked,   ///< parked: rest until the next probe
 };
 
-/// The knobs as values, so `Presence` is one type whatever a Config sets (DeviceOps::presence).
+/// The knobs as values, so `Presence` is one type whatever a Config sets (DeviceKnobs::presence).
 struct PresenceKnobs {
     std::uint32_t probeIntervalMs{};
     std::uint32_t probeIntervalMaxMs{};
@@ -243,7 +243,7 @@ struct NoPresence {
 
     static constexpr void restart() {}
 
-    // The knobs are any type: on such a port DeviceOps has none (detail::Absent).
+    // The knobs are any type: on such a port DeviceKnobs has none (detail::Absent).
     template<typename Knobs>
     static constexpr Turn turn(TimePoint,
                                std::uint8_t,
