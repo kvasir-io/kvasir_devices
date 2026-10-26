@@ -2,6 +2,7 @@
 
 #include "Descriptors.hpp"
 #include "Mixins.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,7 +40,7 @@ namespace MsOs20 {
         std::uint16_t  wLength{sizeof(SetHeader)};
         DescriptorType wDescriptorType{DescriptorType::setHeader};
         std::uint32_t  dwWindowsVersion{WindowsVersion};
-        std::uint16_t  wTotalLength;
+        std::uint16_t  wTotalLength{};
     };
 
     struct [[gnu::packed]] ConfigurationSubset {
@@ -47,22 +48,22 @@ namespace MsOs20 {
         DescriptorType wDescriptorType{DescriptorType::subsetHeaderConfiguration};
         std::uint8_t   bConfigurationValue{0};   // Windows reads this as the index, not the value
         std::uint8_t   bReserved{};
-        std::uint16_t  wTotalLength;
+        std::uint16_t  wTotalLength{};
     };
 
     struct [[gnu::packed]] FunctionSubset {
         std::uint16_t  wLength{sizeof(FunctionSubset)};
         DescriptorType wDescriptorType{DescriptorType::subsetHeaderFunction};
-        std::uint8_t   bFirstInterface;
+        std::uint8_t   bFirstInterface{};
         std::uint8_t   bReserved{};
-        std::uint16_t  wSubsetLength;
+        std::uint16_t  wSubsetLength{};
     };
 
     struct [[gnu::packed]] CompatibleId {
         std::uint16_t  wLength{sizeof(CompatibleId)};
         DescriptorType wDescriptorType{DescriptorType::featureCompatibleId};
-        char           CompatibleID[8]{"WINUSB"};
-        char           SubCompatibleID[8]{};
+        char           compatibleId[8]{"WINUSB"};
+        char           subCompatibleId[8]{};
     };
 
     // DeviceInterfaceGUIDs as REG_MULTI_SZ holding one GUID
@@ -72,10 +73,10 @@ namespace MsOs20 {
         std::uint16_t  wLength{sizeof(DeviceInterfaceGuids)};
         DescriptorType wDescriptorType{DescriptorType::featureRegProperty};
         RegistryType   wPropertyDataType{RegistryType::multiSz};
-        std::uint16_t  wPropertyNameLength{sizeof(PropertyName)};
-        char16_t       PropertyName[21]{u"DeviceInterfaceGUIDs"};
-        std::uint16_t  wPropertyDataLength{sizeof(PropertyData)};
-        char16_t       PropertyData[GuidLength + 2]{};   // GUID, NUL, list-terminating NUL
+        std::uint16_t  wPropertyNameLength{sizeof(propertyName)};
+        char16_t       propertyName[21]{u"DeviceInterfaceGUIDs"};
+        std::uint16_t  wPropertyDataLength{sizeof(propertyData)};
+        char16_t       propertyData[GuidLength + 2]{};   // GUID, NUL, list-terminating NUL
     };
 
     struct [[gnu::packed]] Features {
@@ -92,7 +93,7 @@ namespace MsOs20 {
       : USB::detail::DescriptorBase<PlatformCapability, USB::DescriptorType::deviceCapability> {
         std::uint8_t  bDevCapabilityType{0x05};   // PLATFORM
         std::uint8_t  bReserved{};
-        std::uint8_t  PlatformCapabilityUUID[16]{// {D8DD60DF-4589-4CC7-9CD2-659D9E648A9F}
+        std::uint8_t  platformCapabilityUuid[16]{// {D8DD60DF-4589-4CC7-9CD2-659D9E648A9F}
                                                  0xDF,
                                                  0x60,
                                                  0xDD,
@@ -111,7 +112,7 @@ namespace MsOs20 {
                                                  0x9F};
         std::uint32_t dwWindowsVersion{WindowsVersion};
         std::uint16_t wMSOSDescriptorSetTotalLength;
-        std::uint8_t  bMS_VendorCode;
+        std::uint8_t  bMsVendorCode;
         std::uint8_t  bAltEnumCode{};
     };
 
@@ -142,7 +143,7 @@ namespace MsOs20 {
         Features features{};
         // element by element: std::ranges::copy would take a pointer into the packed struct
         for(std::size_t i = 0; i < guid.size(); ++i) {
-            features.deviceInterfaceGuids.PropertyData[i] = static_cast<char16_t>(guid[i]);
+            features.deviceInterfaceGuids.propertyData[i] = static_cast<char16_t>(guid[i]);
         }
         return features;
     }
@@ -191,12 +192,12 @@ namespace MsOs20 {
             }
             std::uint16_t const configurationLength
               = sizeof(ConfigurationSubset) + functions.size();
-            return USB::Descriptors::detail::generateArray(
+            return USB::Descriptors::generateArray(
               SetHeader{.wTotalLength = sizeof(SetHeader) + configurationLength},
               ConfigurationSubset{.wTotalLength = configurationLength},
               functions);
         } else {
-            return USB::Descriptors::detail::generateArray(
+            return USB::Descriptors::generateArray(
               SetHeader{.wTotalLength = sizeof(SetHeader) + sizeof(Features)},
               features);
         }
@@ -204,12 +205,12 @@ namespace MsOs20 {
 
     consteval auto makeBosDescriptorArray(std::uint16_t descriptorSetLength,
                                           std::uint8_t  vendorCode) {
-        return USB::Descriptors::detail::generateArray(
+        return USB::Descriptors::generateArray(
           USB::Descriptors::Bos{.wTotalLength
                                 = sizeof(USB::Descriptors::Bos) + sizeof(PlatformCapability),
                                 .bNumDeviceCaps = 1},
           PlatformCapability{.wMSOSDescriptorSetTotalLength = descriptorSetLength,
-                             .bMS_VendorCode                = vendorCode});
+                             .bMsVendorCode                 = vendorCode});
     }
 }   // namespace MsOs20
 
@@ -218,8 +219,8 @@ namespace MsOs20 {
 // by the MI_xx part of the device path.
 //
 // Optional Config:
-//   WinUsbDeviceInterfaceGuid  "{...}", give each product its own
-//   MsOs20VendorCode           bRequest of the descriptor set request
+//   winUsbDeviceInterfaceGuid  "{...}", give each product its own
+//   msOs20VendorCode           bRequest of the descriptor set request
 template<typename Clock,
          typename Config,
          typename Derived,
@@ -228,7 +229,7 @@ template<typename Clock,
 struct Mixin {
 private:
     friend Derived;
-    friend struct Kvasir::USB::detail::MixinTraits;
+    friend struct Kvasir::USB::MixinTraits;
 
     static constexpr std::size_t   InterfaceCount = 0;
     static constexpr std::size_t   EndpointCount  = 0;
@@ -236,29 +237,22 @@ private:
 
     static constexpr std::array<std::byte, 0> InterfaceDescriptor{};
 
-    static constexpr std::string_view DeviceInterfaceGuid = [] {
-        if constexpr(requires { Config::WinUsbDeviceInterfaceGuid; }) {
-            return std::string_view{Config::WinUsbDeviceInterfaceGuid};
-        } else {
-            return std::string_view{"{2B8E7A3C-5B0D-4E61-9C7A-6E3F1D2A4B58}"};
-        }
-    }();
+    static constexpr std::string_view DeviceInterfaceGuid = std::string_view{
+      KVASIR_CONFIG_OR(Config,
+                       winUsbDeviceInterfaceGuid,
+                       std::string_view{"{2B8E7A3C-5B0D-4E61-9C7A-6E3F1D2A4B58}"})};
 
-    static constexpr std::uint8_t VendorCode = [] {
-        if constexpr(requires { Config::MsOs20VendorCode; }) {
-            return static_cast<std::uint8_t>(Config::MsOs20VendorCode);
-        } else {
-            return std::uint8_t{0x57};
-        }
-    }();
+    static constexpr std::uint8_t VendorCode
+      = static_cast<std::uint8_t>(KVASIR_CONFIG_OR(Config, msOs20VendorCode, std::uint8_t{0x57}));
 
     static_assert(
       MsOs20::isGuid(DeviceInterfaceGuid),
-      "WinUsbDeviceInterfaceGuid must look like {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}");
+      "winUsbDeviceInterfaceGuid must look like {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}");
 
     // Needs the whole configuration descriptor, so only instantiated from a callback body.
     struct Tables {
-        static constexpr std::span<std::byte const> ConfigDescriptor = Derived::configDescriptor();
+        static constexpr std::span<std::byte const> ConfigDescriptor
+          = Derived::configDescriptorBytes();
 
         static constexpr auto Found = MsOs20::findVendorInterfaces(ConfigDescriptor);
         static_assert(Found.count > 0,
@@ -284,7 +278,7 @@ private:
                                            VendorCode);
     };
 
-    static bool SetupPacketRequestCallback(SetupPacket const& pkt) {
+    static bool setupPacketRequestCallback(SetupPacket const& pkt) {
         if(pkt.recipient() != SetupPacket::Recipient::device
            || pkt.direction() != SetupPacket::Direction::deviceToHost)
         {

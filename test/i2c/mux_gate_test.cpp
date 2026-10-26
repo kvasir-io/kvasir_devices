@@ -40,14 +40,14 @@ namespace MuxTest {
     using Left  = Device<FakeBus,
                          FakeClock,
                          Chips::Sht3x,
-                         DefaultConfig,
-                         NoReset,
+                         Kvasir::Engine::DefaultConfig,
+                         Kvasir::NoReset,
                          Kvasir::I2C::MuxGate<MuxDev, 0>>;
     using Right = Device<FakeBus,
                          FakeClock,
                          Chips::Sht3x,
-                         DefaultConfig,
-                         NoReset,
+                         Kvasir::Engine::DefaultConfig,
+                         Kvasir::NoReset,
                          Kvasir::I2C::MuxGate<MuxDev, 3>>;
 
     /// A chip whose data-ready flag is polled by a check step. With the flag never set the
@@ -60,24 +60,27 @@ namespace MuxTest {
 
         struct Data {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0}),
-                                              Step::check(10ms),
-                                              Step::read({.reg = 0x01, .count = 1, .offset = 1})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
+              Kvasir::Engine::Step::check(10ms),
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr bool ready(Bytes data) { return (data.u8(0) & 1U) != 0; }
+            [[nodiscard]] static constexpr bool ready(Kvasir::Bytes data) {
+                return (data.u8(0) & 1U) != 0;
+            }
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(1); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(1); }
         };
 
-        using Reads = List<Data>;
+        using Reads = Kvasir::Engine::List<Data>;
     };
 
     using Flagged = Device<FakeBus,
                            FakeClock,
                            FlagChip,
-                           DefaultConfig,
-                           NoReset,
+                           Kvasir::Engine::DefaultConfig,
+                           Kvasir::NoReset,
                            Kvasir::I2C::MuxGate<MuxDev, 0>>;
 
     /// A part that is always due: a one-byte read every millisecond, on channel 0.
@@ -88,13 +91,14 @@ namespace MuxTest {
 
         struct Data {
             static constexpr auto       Period = std::chrono::milliseconds{1};
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Data>;
+        using Reads = Kvasir::Engine::List<Data>;
     };
 
     /// A part on a 10 ms period, on channel 3, handled after the busy one every turn.
@@ -105,26 +109,27 @@ namespace MuxTest {
 
         struct Data {
             static constexpr auto       Period = std::chrono::milliseconds{10};
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Data>;
+        using Reads = Kvasir::Engine::List<Data>;
     };
 
     using Busy  = Device<FakeBus,
                          FakeClock,
                          BusyChip,
-                         DefaultConfig,
-                         NoReset,
+                         Kvasir::Engine::DefaultConfig,
+                         Kvasir::NoReset,
                          Kvasir::I2C::MuxGate<MuxDev, 0>>;
     using TenMs = Device<FakeBus,
                          FakeClock,
                          TenMsChip,
-                         DefaultConfig,
-                         NoReset,
+                         Kvasir::Engine::DefaultConfig,
+                         Kvasir::NoReset,
                          Kvasir::I2C::MuxGate<MuxDev, 3>>;
 
     // The address check keys on (address, gate), so the same part on two channels is legal --
@@ -148,8 +153,8 @@ namespace MuxTest {
     using InFront = Device<FakeBus,
                            FakeClock,
                            TenMsChip,
-                           DefaultConfig,
-                           NoReset,
+                           Kvasir::Engine::DefaultConfig,
+                           Kvasir::NoReset,
                            Kvasir::I2C::MuxFrontGate<MuxDev>>;
 
     // It is a part of segment 0, like an ungated one, and the Bus binds its gate to the
@@ -190,8 +195,7 @@ void muxGate() {
     left.gate().bind(mux, arbiter);
     right.gate().bind(mux, arbiter);
 
-    testCase("Mux: a gated device waits for its channel, and the switch write comes first");
-    fresh();
+    I2cCase testcase{"Mux: a gated device waits for its channel, and the switch write comes first"};
     SwitchWire wire1{};
     FakeBus::respond = std::ref(wire1);
     for(int i = 0; i < 300; ++i) { turn(mux, left); }
@@ -199,7 +203,8 @@ void muxGate() {
     // Every transaction to 0x44 must be preceded by a write of 0x01 to the switch at 0x70,
     // with no other channel selection in between: that is the whole contract.
     std::uint8_t selected = 0xFF;
-    std::size_t  gatedOk = 0, gatedBad = 0;
+    std::size_t  gatedOk  = 0;
+    std::size_t  gatedBad = 0;
     for(auto const& t : FakeBus::log) {
         if(!t.isBus()) { continue; }
         if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
@@ -216,13 +221,14 @@ void muxGate() {
     checkEq(gatedBad, std::size_t{0}, "and never before its channel was selected");
     checkEq(selected, 0x01, "the switch is left on channel 0");
 
-    testCase("Mux: two channels take the switch in turn, never mid-script");
-    fresh();
+    testcase.next("Mux: two channels take the switch in turn, never mid-script");
     SwitchWire wire2{};
     FakeBus::respond = std::ref(wire2);
     for(int i = 0; i < 1500; ++i) { turn(mux, left, right); }
-    selected           = 0xFF;
-    std::size_t leftOk = 0, rightOk = 0, wrong = 0;
+    selected            = 0xFF;
+    std::size_t leftOk  = 0;
+    std::size_t rightOk = 0;
+    std::size_t wrong   = 0;
     for(auto const& t : FakeBus::log) {
         if(!t.isBus()) { continue; }
         if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
@@ -240,15 +246,17 @@ void muxGate() {
     check(leftOk > 0 && rightOk > 0, "both channels got their turn");
     checkEq(wrong, std::size_t{0}, "and no transaction went out on an unselected switch");
 
-    testCase("Mux: a part in front with a MuxFrontGate talks only while the switch is closed");
-    fresh();
+    testcase.next("Mux: a part in front with a MuxFrontGate talks only while the switch is closed");
     {
         FrontBus   bus{};
         SwitchWire wire{};
         FakeBus::respond = std::ref(wire);
         for(int i = 0; i < 1500; ++i) { turn(bus); }
-        selected            = 0xFF;
-        std::size_t frontOk = 0, frontHeard = 0, behindOk = 0, behindBad = 0;
+        selected               = 0xFF;
+        std::size_t frontOk    = 0;
+        std::size_t frontHeard = 0;
+        std::size_t behindOk   = 0;
+        std::size_t behindBad  = 0;
         for(auto const& t : FakeBus::log) {
             if(!t.isBus()) { continue; }
             if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
@@ -274,8 +282,7 @@ void muxGate() {
         check(bus.get<InFront>().samples() > 0, "and the part in front measured");
     }
 
-    testCase("Mux: a device waiting out a measurement lets the other channel have the switch");
-    fresh();
+    testcase.next("Mux: a device waiting out a measurement lets the other channel have the switch");
     // Words of 0x0000 with their Sensirion CRC (0x81), so both parts pass their bring-up
     // and get to measure: zeros alone fail the CRC and leave them repeating the bring-up.
     SwitchWire wireCrc{.behind = crcZeros};
@@ -314,8 +321,7 @@ void muxGate() {
         check(between > 0, "and the other channel talked while it waited for the result");
     }
 
-    testCase("Mux: a gate nobody bound puts nothing on the wire");
-    fresh();
+    testcase.next("Mux: a gate nobody bound puts nothing on the wire");
     SwitchWire wire3{};
     FakeBus::respond = std::ref(wire3);
     {
@@ -332,8 +338,7 @@ void muxGate() {
         checkEq(spoke, std::size_t{0}, "and nothing of its went out");
     }
 
-    testCase("Mux: a check step rejected after its retries lets the switch go");
-    fresh();
+    testcase.next("Mux: a check step rejected after its retries lets the switch go");
     SwitchWire wire4{};
     FakeBus::respond = std::ref(wire4);
     {
@@ -370,8 +375,7 @@ void muxGate() {
         check(rightGot > 0, "and the other channel got the switch after the rejection");
     }
 
-    testCase("Mux: a channel that always wants the switch does not starve the next one");
-    fresh();
+    testcase.next("Mux: a channel that always wants the switch does not starve the next one");
     SwitchWire wire5{};
     FakeBus::respond = std::ref(wire5);
     {
@@ -390,13 +394,12 @@ void muxGate() {
         check(busy.samples() > 0, "the busy part is read");
         check(tenMs.samples() >= 150,
               "and the 10 ms part gets at least three quarters of its reads");
-        if(failures != 0) {
+        if(testcase.failed()) {
             std::printf("    busy %u, 10 ms %u of 200\n", busy.samples(), tenMs.samples());
         }
     }
 
-    testCase("Mux: a part that never got the switch cannot free it for another");
-    fresh();
+    testcase.next("Mux: a part that never got the switch cannot free it for another");
     SwitchWire wire6{};
     FakeBus::respond = std::ref(wire6);
     {
@@ -420,8 +423,7 @@ void muxGate() {
         check(settle(other, mux4), "and channel 3 gets it");
     }
 
-    testCase("Mux: a wait is counted once, however many turns it lasts");
-    fresh();
+    testcase.next("Mux: a wait is counted once, however many turns it lasts");
     SwitchWire wire7{};
     FakeBus::respond = std::ref(wire7);
     {
@@ -446,9 +448,8 @@ void muxGate() {
         checkEq(arbiter8.waited[3][0], std::uint32_t{2}, "getting it counts no wait");
     }
 
-    testCase(
+    testcase.next(
       "Mux: ShareChannel lets a second part of the channel go, and the first release frees it");
-    fresh();
     SwitchWire wire8{};
     FakeBus::respond = std::ref(wire8);
     {
@@ -471,8 +472,7 @@ void muxGate() {
                 "the second part's hold ended with the first release");
     }
 
-    testCase("Mux: HoldChannel keeps the switch for a channel until its last part lets go");
-    fresh();
+    testcase.next("Mux: HoldChannel keeps the switch for a channel until its last part lets go");
     SwitchWire wire9{};
     FakeBus::respond = std::ref(wire9);
     {
@@ -500,8 +500,7 @@ void muxGate() {
         check(settle(other, mux6), "and channel 3 gets it");
     }
 
-    testCase("Mux: DrainChannel lets no part join while another channel waits");
-    fresh();
+    testcase.next("Mux: DrainChannel lets no part join while another channel waits");
     SwitchWire wire10{};
     FakeBus::respond = std::ref(wire10);
     {
@@ -522,8 +521,7 @@ void muxGate() {
         check(settle(other, mux7), "the last release hands the switch to channel 3");
     }
 
-    testCase("Mux: DrainChannel forgets a wait its client gave up");
-    fresh();
+    testcase.next("Mux: DrainChannel forgets a wait its client gave up");
     SwitchWire wire11{};
     FakeBus::respond = std::ref(wire11);
     {
@@ -541,7 +539,43 @@ void muxGate() {
         checkEq(arbiter8.waiting, std::uint8_t{0}, "the wait is gone from the arbiter");
         check(second.claim(), "so a second part of channel 0 joins again");
     }
-    if(failures != 0) { dump(); }
+
+    testcase.next(
+      "SwitchGate: a channel and the switch closed take turns through the one gate body");
+    {
+        using Channel0 = Kvasir::I2C::MuxGate<MuxDev, 0>;
+        using Front    = Kvasir::I2C::MuxFrontGate<MuxDev>;
+        using Port     = Kvasir::I2C::MuxPort<MuxDev, Kvasir::I2C::ShareChannel>;
+        static_assert(
+          std::is_same_v<Channel0,
+                         Kvasir::I2C::SwitchGate<MuxDev, Kvasir::I2C::ChannelPosition<0>>>);
+        static_assert(
+          std::is_same_v<Front, Kvasir::I2C::SwitchGate<MuxDev, Kvasir::I2C::FrontPosition>>);
+        static_assert(sizeof(Front) == sizeof(Port), "the closed position costs no byte");
+        static_assert(Channel0::Mask == 1U && !Channel0::Front && Front::Mask == 0U
+                      && Front::Front);
+    }
+    SwitchWire wire12{};
+    FakeBus::respond = std::ref(wire12);
+    {
+        Kvasir::I2C::MuxArbiter           arbiter9{};
+        MuxDev                            mux9{};
+        Kvasir::I2C::MuxGate<MuxDev, 0>   channel{};
+        Kvasir::I2C::MuxFrontGate<MuxDev> front{};
+        channel.bind(mux9, arbiter9);
+        front.bind(mux9, arbiter9);
+        check(settle(front, mux9), "the part in front gets the switch");
+        checkEq(arbiter9.holder, MuxPort<MuxDev, ShareChannel>::Closed, "and holds it closed");
+        check(!channel.claim(), "channel 0 waits while the switch is closed for it");
+        front.release();
+        checkEq(arbiter9.holder, MuxArbiter::NoHolder, "the front's release frees it");
+        check(settle(channel, mux9), "channel 0 gets it");
+        checkEq(arbiter9.holder, std::uint8_t{0}, "on channel 0");
+        check(!front.claim(), "now the front waits");
+        channel.release();
+        check(settle(front, mux9), "and gets it closed once channel 0 lets go");
+        front.release();
+    }
 }
 
 /// Transactions to `address` in the transcript from entry `from` on.
@@ -558,8 +592,7 @@ void muxFaults() {
     using namespace MuxTest;
     using Channels = Chips::Tca9548a::Channels;
 
-    testCase("Mux: a switch that browns out is set again within a verify interval");
-    fresh();
+    I2cCase    testcase{"Mux: a switch that browns out is set again within a verify interval"};
     SwitchWire wire{.behind = crcZeros};
     FakeBus::respond = std::ref(wire);
     Kvasir::I2C::MuxArbiter arbiter{};
@@ -584,14 +617,14 @@ void muxFaults() {
     check(mux.mismatches<Channels>() >= 1, "because the read-back caught it");
     check(hasWrite({0x01}, from), "with the channel byte the engine holds");
 
-    testCase("Mux: a switch that NAKs parks, its parts wait, and both come back after a probe");
-    fresh();
+    testcase.next(
+      "Mux: a switch that NAKs parks, its parts wait, and both come back after a probe");
     bool             muxThere = false;
     SwitchWire       wire2{.behind = crcZeros};
     ScopedHook const answeringAgain{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(a == MuxDev::Address && !muxThere) { return FakeBus::Result::notAcknowledged; }
+          if(a == MuxDev::Address && !muxThere) { return FakeBus::Result::nack; }
           return wire2(a, s, r);
       }};
     Kvasir::I2C::MuxArbiter arbiter2{};
@@ -606,7 +639,8 @@ void muxFaults() {
     checkEq(transactionsTo(Chips::Sht3x::Address),
             std::size_t{0},
             "the part behind it never got the switch, so it never talked");
-    check(left2.link() == Link::starting, "and is starting, not absent: nothing was asked of it");
+    check(left2.link() == Kvasir::Link::starting,
+          "and is starting, not absent: nothing was asked of it");
     runFor(all(mux2, left2), 500ms);
     checkEq(transactionsTo(Chips::Sht3x::Address),
             std::size_t{0},
@@ -634,8 +668,7 @@ void muxFaults() {
                 "and every transaction to the part came behind a switch write");
     }
 
-    testCase("Mux: a NAK in the middle of a script lets the switch go at once");
-    fresh();
+    testcase.next("Mux: a NAK in the middle of a script lets the switch go at once");
     bool             nakRead = false;
     SwitchWire       wire3{.behind = crcZeros};
     ScopedHook const answering{
@@ -643,7 +676,7 @@ void muxFaults() {
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(a == Chips::Sht3x::Address && nakRead && !r.empty()) {
               nakRead = false;
-              return FakeBus::Result::notAcknowledged;
+              return FakeBus::Result::nack;
           }
           return wire3(a, s, r);
       }};
@@ -659,7 +692,7 @@ void muxFaults() {
     nakRead = true;
     check(runUntil(all(mux3, left3), [&] { return !nakRead; }, 2s), "the result read was NAKed");
     checkEq(arbiter3.holder, std::uint8_t{0}, "channel 0 held the switch for that read");
-    left3.handler();   // takes the NAK
+    left3.turn();   // takes the NAK
     checkEq(arbiter3.holder,
             Kvasir::I2C::MuxArbiter::NoHolder,
             "the NAK ended the run, and the run let the switch go");
@@ -671,7 +704,6 @@ void muxFaults() {
             [&] { return left3.seq() > 0 && left3.answering(); },
             2s),
           "which carries on");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

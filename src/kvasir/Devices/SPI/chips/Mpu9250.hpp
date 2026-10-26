@@ -2,9 +2,10 @@
 // InvenSense MPU-9250 on SPI, a chip description for the engine; the ranges are write groups the
 // decode follows. Data sheet PS-MPU-9250A-01 (MPU9250.md), register map RM-MPU-9250A-00
 // (MPU9250_RegMap.md). The magnetometer behind the auxiliary I2C master is not brought up.
-#include "../../I2C/Groups.hpp"
+#include "../../Engine/Groups.hpp"
 #include "../../Quantities.hpp"
 #include "../Device.hpp"
+#include "kvasir/Hal/Spi.hpp"
 
 #include <array>
 #include <chrono>
@@ -26,7 +27,7 @@ namespace Kvasir { namespace SPI { namespace Chips {
           Units::microDegPerSec(30488),
           Units::microDegPerSec(60976)};
 
-        struct State : I2C::Groups::DeviceId {
+        struct State : Engine::Groups::DeviceId {
             std::uint8_t accelRange{};
             std::uint8_t gyroRange{};
         };
@@ -42,13 +43,13 @@ namespace Kvasir { namespace SPI { namespace Chips {
         static constexpr std::string_view Name = "MPU9250";
         /// 0x71 (RegMap:1665). 0x73 = MPU-9255, not checked against a data sheet.
         static constexpr std::array Identity{
-          I2C::RegisterCheck{"who-am-i", 0x75, 1, true, 0xFF, 0x71, 0x73},
+          Engine::RegisterCheck{"who-am-i", 0x75, 1, true, 0xFF, 0x71, 0x73},
         };
         /// 1 MHz for every register (MPU9250.md:124). Modes 0 and 3 both fit (7.5,
         /// MPU9250.md:1217-1219); 0 shares a bus with mode-0 parts without a polarity change.
-        static constexpr ClockMode    Mode          = ClockMode::_0;
-        static constexpr Units::Hertz MaxClock      = Units::hertz(1'000'000);
-        static constexpr std::size_t  RegisterBytes = 1;
+        static constexpr Hal::ClockMode Mode          = Hal::ClockMode::mode0;
+        static constexpr Units::Hertz   MaxClock      = Units::hertz(1'000'000);
+        static constexpr std::size_t    RegisterBytes = 1;
 
         static constexpr std::uint8_t GyroConfigByte
           = static_cast<std::uint8_t>(static_cast<unsigned>(Gyro) << 3U);
@@ -56,13 +57,15 @@ namespace Kvasir { namespace SPI { namespace Chips {
           = static_cast<std::uint8_t>(static_cast<unsigned>(Accel) << 3U);
 
         static constexpr std::array Init{
-          Step::write({.reg = 0x6B, .payload = {0x80}, .delay = std::chrono::milliseconds{100}}),
-          Step::write({.reg = 0x68, .payload = {0x07}, .delay = std::chrono::milliseconds{100}}),
-          Step::write({.reg = 0x6B, .payload = {0x01}}),
-          Step::write({.reg = 0x6A, .payload = {0x10}}),
-          Step::write({.reg = 0x19, .payload = {9}}),
-          Step::write({.reg = 0x1A, .payload = {3}}),
-          Step::write({.reg = 0x1D, .payload = {3}}),
+          Engine::Step::write(
+            {.reg = 0x6B, .payload = {0x80}, .delay = std::chrono::milliseconds{100}}),
+          Engine::Step::write(
+            {.reg = 0x68, .payload = {0x07}, .delay = std::chrono::milliseconds{100}}),
+          Engine::Step::write({.reg = 0x6B, .payload = {0x01}}),
+          Engine::Step::write({.reg = 0x6A, .payload = {0x10}}),
+          Engine::Step::write({.reg = 0x19, .payload = {9}}),
+          Engine::Step::write({.reg = 0x1A, .payload = {3}}),
+          Engine::Step::write({.reg = 0x1D, .payload = {3}}),
         };
 
         using State = Mpu9250Detail::State;
@@ -76,7 +79,7 @@ namespace Kvasir { namespace SPI { namespace Chips {
 
         struct Motion {
             static constexpr auto       Period = std::chrono::milliseconds{20};
-            static constexpr std::array Steps{Step::read({.reg = 0x3B, .count = 14})};
+            static constexpr std::array Steps{Engine::Step::read({.reg = 0x3B, .count = 14})};
 
             struct Sample {
                 std::array<Units::MicroG, 3>         accel{};
@@ -84,11 +87,11 @@ namespace Kvasir { namespace SPI { namespace Chips {
                 std::array<Units::MilliDegPerSec, 3> gyro{};
             };
 
-            [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                                  State const& state) {
+            [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                          State const& state) {
                 bool allOnes = true;
                 for(std::size_t i = 0; i < 14; ++i) { allOnes = allOnes && data.u8(i) == 0xFF; }
-                if(allOnes) { return Outcome<Sample>::reject(); }
+                if(allOnes) { return Engine::Outcome<Sample>::reject(); }
                 Sample     sample{};
                 auto const perRate
                   = Units::value(Mpu9250Detail::RatePerCount[state.gyroRange & 0x03U]);
@@ -103,7 +106,7 @@ namespace Kvasir { namespace SPI { namespace Chips {
                 // TEMP_degC = TEMP_OUT / 333.87 + 21 (RegMap:1210, MPU9250.md:421; offset 0 LSB at 21 degC)
                 sample.temperature = Units::centiDegC(static_cast<std::int32_t>(
                   static_cast<std::int64_t>(data.s16be(6)) * 10000 / 33387 + 2100));
-                return Outcome<Sample>::ok(sample);
+                return Engine::Outcome<Sample>::ok(sample);
             }
         };
 
@@ -113,10 +116,10 @@ namespace Kvasir { namespace SPI { namespace Chips {
             static constexpr std::size_t Bytes   = 1;
             static constexpr Value       Initial = AccelConfigByte;
 
-            [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                       std::span<std::byte> buffer) {
+            [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                               std::span<std::byte> buffer) {
                 buffer[0] = static_cast<std::byte>(value);
-                return Step::writeBuffer({.reg = 0x1C, .offset = 0, .count = 1});
+                return Engine::Step::writeBuffer({.reg = 0x1C, .offset = 0, .count = 1});
             }
 
             static constexpr void applied(Value const& value,
@@ -131,10 +134,10 @@ namespace Kvasir { namespace SPI { namespace Chips {
             static constexpr std::size_t Bytes   = 1;
             static constexpr Value       Initial = GyroConfigByte;
 
-            [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                       std::span<std::byte> buffer) {
+            [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                               std::span<std::byte> buffer) {
                 buffer[0] = static_cast<std::byte>(value);
-                return Step::writeBuffer({.reg = 0x1B, .offset = 0, .count = 1});
+                return Engine::Step::writeBuffer({.reg = 0x1B, .offset = 0, .count = 1});
             }
 
             static constexpr void applied(Value const& value,
@@ -143,8 +146,8 @@ namespace Kvasir { namespace SPI { namespace Chips {
             }
         };
 
-        using Reads  = List<Motion>;
-        using Writes = List<AccelConfig, GyroConfig>;
+        using Reads  = Engine::List<Motion>;
+        using Writes = Engine::List<AccelConfig, GyroConfig>;
     };
 
     using Mpu9250 = Mpu9250x<>;

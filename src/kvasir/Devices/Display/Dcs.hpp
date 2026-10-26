@@ -73,16 +73,6 @@ namespace Kvasir { namespace Display { namespace Dcs {
 
         [[nodiscard]] constexpr bool empty() const { return bytes_.empty(); }
 
-        [[nodiscard]] constexpr std::size_t steps() const {
-            std::size_t n   = 0;
-            std::size_t pos = 0;
-            while(pos < bytes_.size()) {
-                pos += 3U + std::size_t{bytes_[pos + 1]};
-                ++n;
-            }
-            return n;
-        }
-
         /// The step at byte offset `pos`, advancing `pos`; false at the end.
         [[nodiscard]] constexpr bool next(std::size_t& pos,
                                           Step&        out) const {
@@ -96,7 +86,7 @@ namespace Kvasir { namespace Display { namespace Dcs {
         }
 
     private:
-        std::span<std::uint8_t const> bytes_{};
+        std::span<std::uint8_t const> bytes_;
     };
 
 }}}   // namespace Kvasir::Display::Dcs

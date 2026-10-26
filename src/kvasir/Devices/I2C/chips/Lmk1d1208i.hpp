@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -27,29 +29,24 @@ namespace Kvasir::I2C::Chips {
 ///
 /// The I2C address is strapped by IDX1:IDX0 to 0x68-0x6B (SNAS828A 9.5.1); the device's Config
 /// says which, as for any multi-address part -- not the chip type, so two buffers on one board are
-/// one chip and share its code. `Timing::StartupDelay` is the wait after power before the first
+/// one chip and share its code. `Timing::startupDelay` is the wait after power before the first
 /// transaction: the datasheet gives no figure and 500 ms is a conservative default.
-template<typename Timing = DefaultTiming>
+template<typename Timing = Engine::DefaultTiming>
 struct Lmk1d1208i {
     static constexpr std::string_view Name          = "LMK1D1208I";
     static constexpr Address7         Address       = 0x68;   // IDX1 = IDX0 = low
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x68, 0x69, 0x6A, 0x6B};
+    static constexpr auto Addresses = addressRun<0x68, 4>();
 
-    static constexpr std::chrono::milliseconds StartupDelay = [] {
-        if constexpr(requires { Timing::StartupDelay; }) {
-            return Kvasir::asDuration(Timing::StartupDelay);
-        } else {
-            return std::chrono::milliseconds{500};
-        }
-    }();
+    static constexpr std::chrono::milliseconds StartupDelay
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
     /// R5 DEV_ID (bits 3:0): 0 on this part (Table 9-15).
     static constexpr std::uint8_t DeviceId = 0x0;
 
     /// The identification read is the presence probe.
-    static constexpr std::array Init{Step::read({.reg = 0x85, .count = 1, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x85, .count = 1, .offset = 0})};
 
     struct State {
         std::uint8_t deviceId{};   ///< R5 bits 3:0
@@ -66,7 +63,8 @@ struct Lmk1d1208i {
     /// R5, so the id is also visible after bring-up and the part is polled at all.
     struct Identity {
         static constexpr auto       Period = std::chrono::milliseconds{5000};
-        static constexpr std::array Steps{Step::read({.reg = 0x85, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x85, .count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t deviceId{};   ///< R5 bits 3:0
@@ -87,7 +85,7 @@ struct Lmk1d1208i {
 
     /// One configuration register, written back and checked.
     template<std::uint16_t Reg, std::uint8_t Init>
-    using Byte = Groups::VerifiedByte<Reg, Init, ByteTiming>;
+    using Byte = Engine::Groups::VerifiedByte<Reg, Init, ByteTiming>;
 
     using OutputEnable = Byte<0x80, 0x00>;   ///< one bit per output
     using Amplitude    = Byte<0x81, 0x00>;   ///< one bit per output, 1 = boosted
@@ -98,14 +96,14 @@ struct Lmk1d1208i {
     struct BankControl : Byte<0x82, 0xF1> {
         static constexpr std::uint8_t ReservedBits = 0xC0;
 
-        [[nodiscard]] static constexpr Step encode(std::uint8_t const&  value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(std::uint8_t const&  value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value | ReservedBits);
-            return Step::writeBuffer({.reg = 0x82, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x82, .offset = 0, .count = 1});
         }
 
-        [[nodiscard]] static constexpr bool verify(Kvasir::I2C::Bytes written,
-                                                   Kvasir::I2C::Bytes readBack) {
+        [[nodiscard]] static constexpr bool verify(Kvasir::Bytes written,
+                                                   Kvasir::Bytes readBack) {
             return (written.u8(0) & ~ReservedBits) == (readBack.u8(0) & ~ReservedBits);
         }
     };
@@ -115,8 +113,8 @@ struct Lmk1d1208i {
     static constexpr std::uint8_t BankMuteShift    = 2;   ///< bank 0, bank 1
     static constexpr std::uint8_t BankInSelShift   = 4;   ///< set = IN0, clear = IN1
 
-    using Reads  = List<Identity>;
-    using Writes = List<OutputEnable, Amplitude, BankControl>;
+    using Reads  = Engine::List<Identity>;
+    using Writes = Engine::List<OutputEnable, Amplitude, BankControl>;
 };
 
 }   // namespace Kvasir::I2C::Chips

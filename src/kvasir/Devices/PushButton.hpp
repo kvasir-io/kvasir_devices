@@ -1,7 +1,10 @@
 #pragma once
 
 #include "kvasir/Atomic/Queue.hpp"
+#include "kvasir/Util/Config.hpp"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -18,76 +21,32 @@ namespace Kvasir {
 /// separate because they guard against different things - debouncePress against a spike on
 /// the wire (a few ms are plenty, and the hit is late by as much), debounceRelease against
 /// the contact's drop-outs (longer than the longest one; a release is late by as much).
+///
+/// The events are one `Event::Type` (`hit`, `releaseShort`, `longPress`, `releaseLong`) whatever
+/// the config enables; a disabled one is never delivered.
 template<typename Clock, typename Pin, std::size_t EventQSize, typename UserConfig>
 struct PushButton {
     struct Config : UserConfig {
-        static constexpr auto debounce = [] {
-            if constexpr(requires {
-                             UserConfig::debouncePress;
-                             UserConfig::debounceRelease;
-                         })
-            {
-                return true;
-            } else {
-                return false;
-            }
-        }();
+        /// Both debounce times given: handler() polls the pin, the edge interrupt is not used.
+        static constexpr bool debounce = requires {
+            UserConfig::debouncePress;
+            UserConfig::debounceRelease;
+        };
 
-        static constexpr auto hasLongPressTime = [] {
-            if constexpr(requires { UserConfig::longPressTime; }) {
-                return true;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr bool hasLongPressTime = requires { UserConfig::longPressTime; };
 
-        static constexpr auto useLong = [] {
-            if constexpr(requires { UserConfig::useLong; }) {
-                return UserConfig::useLong;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto useLong = KVASIR_CONFIG_OR(UserConfig, useLong, false);
 
-        static constexpr auto useLongRelease = [] {
-            if constexpr(requires { UserConfig::useLongRelease; }) {
-                return UserConfig::useLongRelease;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto useLongRelease = KVASIR_CONFIG_OR(UserConfig, useLongRelease, false);
 
-        static constexpr auto useHit = [] {
-            if constexpr(requires { UserConfig::useHit; }) {
-                return UserConfig::useHit;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto useHit = KVASIR_CONFIG_OR(UserConfig, useHit, false);
 
-        static constexpr auto useShortRelease = [] {
-            if constexpr(requires { UserConfig::useShortRelease; }) {
-                return UserConfig::useShortRelease;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto useShortRelease
+          = KVASIR_CONFIG_OR(UserConfig, useShortRelease, false);
 
-        static constexpr auto useTime = [] {
-            if constexpr(requires { UserConfig::useTime; }) {
-                return UserConfig::useTime;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto useTime = KVASIR_CONFIG_OR(UserConfig, useTime, false);
 
-        static constexpr auto invert = [] {
-            if constexpr(requires { UserConfig::invert; }) {
-                return UserConfig::invert;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto invert = KVASIR_CONFIG_OR(UserConfig, invert, false);
     };
 
     using TimePoint = typename Clock::time_point;
@@ -108,8 +67,10 @@ struct PushButton {
         return true;
     }
 
-    static_assert(isConfigValid(),
-                  "Config Invalid");
+    static_assert(
+      isConfigValid(),
+      "a PushButton config enables at least one event (useHit, useShortRelease, useLong, "
+      "useLongRelease), and longPressTime exactly when it enables useLong or useLongRelease");
 
     struct EventBaseTime {
         TimePoint time{};
@@ -119,63 +80,11 @@ struct PushButton {
 
     using EventBase = std::conditional_t<Config::useTime, EventBaseTime, EventBaseNoTime>;
 
-    enum class EventTypeHslr : std::uint8_t { hit, releaseShort, longPress, releaseLong };
-
-    enum class EventTypeSlr : std::uint8_t { releaseShort, longPress, releaseLong };
-    enum class EventTypeHlr : std::uint8_t { hit, longPress, releaseLong };
-    enum class EventTypeHsr : std::uint8_t { hit, releaseShort, releaseLong };
-    enum class EventTypeHsl : std::uint8_t { hit, releaseShort, longPress };
-
-    enum class EventTypeLr : std::uint8_t { longPress, releaseLong };
-    enum class EventTypeSr : std::uint8_t { releaseShort, releaseLong };
-    enum class EventTypeSl : std::uint8_t { releaseShort, longPress };
-    enum class EventTypeHr : std::uint8_t { hit, releaseLong };
-    enum class EventTypeHl : std::uint8_t { hit, longPress };
-    enum class EventTypeHs : std::uint8_t { hit, releaseShort };
-
-    enum class EventTypeH : std::uint8_t { hit };
-    enum class EventTypeS : std::uint8_t { releaseShort };
-    enum class EventTypeL : std::uint8_t { longPress };
-    enum class EventTypeR : std::uint8_t { releaseLong };
-
-    static constexpr auto SelectedEventType = []() {
-        if constexpr(Config::useHit && Config::useShortRelease && Config::useLong
-                     && Config::useLongRelease)
-        {
-            return EventTypeHslr{};
-        } else if constexpr(Config::useShortRelease && Config::useLong && Config::useLongRelease) {
-            return EventTypeSlr{};
-        } else if constexpr(Config::useHit && Config::useLong && Config::useLongRelease) {
-            return EventTypeHlr{};
-        } else if constexpr(Config::useHit && Config::useShortRelease && Config::useLongRelease) {
-            return EventTypeHsr{};
-        } else if constexpr(Config::useHit && Config::useShortRelease && Config::useLong) {
-            return EventTypeHsl{};
-        } else if constexpr(Config::useLong && Config::useLongRelease) {
-            return EventTypeLr{};
-        } else if constexpr(Config::useShortRelease && Config::useLongRelease) {
-            return EventTypeSr{};
-        } else if constexpr(Config::useHit && Config::useLongRelease) {
-            return EventTypeHr{};
-        } else if constexpr(Config::useHit && Config::useLong) {
-            return EventTypeHl{};
-        } else if constexpr(Config::useHit && Config::useShortRelease) {
-            return EventTypeHs{};
-        } else if constexpr(Config::useShortRelease && Config::useLong) {
-            return EventTypeSl{};
-        } else if constexpr(Config::useHit) {
-            return EventTypeH{};
-        } else if constexpr(Config::useShortRelease) {
-            return EventTypeS{};
-        } else if constexpr(Config::useLong) {
-            return EventTypeL{};
-        } else if constexpr(Config::useLongRelease) {
-            return EventTypeR{};
-        }
-    }();
+    /// Every event a button has; a config's disabled ones are never delivered.
+    enum class Type : std::uint8_t { hit, releaseShort, longPress, releaseLong };
 
     struct Event : EventBase {
-        using Type = std::remove_cvref_t<decltype(SelectedEventType)>;
+        using Type = PushButton::Type;
         Type type{};
     };
 
@@ -257,13 +166,7 @@ struct PushButton {
 
     static void edgeCallback() {
         if constexpr(Config::debounce) { return; }
-        bool const pin = []() {
-            if constexpr(Config::invert) {
-                return !apply(read(Pin{}));
-            } else {
-                return apply(read(Pin{}));
-            }
-        }();
+        bool const pin = readPin();
         auto const now = []() {
             if constexpr(Config::useTime || Config::useLong || Config::useLongRelease) {
                 return Clock::now();
@@ -274,13 +177,13 @@ struct PushButton {
         auto const diff = [&]() {
             if constexpr(Config::useTime || Config::useLong || Config::useLongRelease) {
                 if constexpr(Config::useLong) {
-                    auto const diff_ = now - lastTime.load(std::memory_order_relaxed);
+                    auto const elapsed = now - lastTime.load(std::memory_order_relaxed);
                     lastTime.store(now, std::memory_order_relaxed);
-                    return diff_;
+                    return elapsed;
                 } else {
-                    auto const diff_ = now - lastTime;
-                    lastTime         = now;
-                    return diff_;
+                    auto const elapsed = now - lastTime;
+                    lastTime           = now;
+                    return elapsed;
                 }
 
             } else {
@@ -288,12 +191,12 @@ struct PushButton {
             }
         }();
 
-        auto pushTimed = [&](auto ee) {
+        auto const pushTimed = [&](auto ee) {
             if constexpr(Config::useTime) {
-                Event e{{now}, ee};
+                Event const e{{now}, ee};
                 queue.push(e);
             } else {
-                Event e{.type = ee};
+                Event const e{.type = ee};
                 queue.push(e);
             }
         };
@@ -322,7 +225,7 @@ struct PushButton {
             debouncedHandler(cb);
             return;
         }
-        if(Event e; queue.pop_into(e)) {
+        if(Event e; queue.popInto(e)) {
             if constexpr(Config::useTime) {
                 cb(e.type, e.time);
             } else {

@@ -62,7 +62,7 @@ struct InterruptInEndpoint {
 
     // Takes back whatever waits, and starts the data toggle over.
     static void restart() {
-        if constexpr(EP::AsyncCancel) {
+        if constexpr(EP::asyncCancel) {
             restarting = true;
             EP::cancel();
         } else {
@@ -74,7 +74,7 @@ struct InterruptInEndpoint {
     static void bufferDone() {}
 
     static void abortDone() {
-        if constexpr(EP::AsyncCancel) {
+        if constexpr(EP::asyncCancel) {
             static_cast<void>(EP::cancelComplete());
             EP::resetDataToggle();
             restarting = false;

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -34,7 +35,7 @@ struct Mma8451 {
     static constexpr std::string_view Name = "MMA8451";
     /// NXP MMA8451Q. MMA8451Q.md:742, :1048: WHO_AM_I (0x0D) is 0x1A.
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0D, 1, true, 0xFF, 0x1A},
+      Engine::RegisterCheck{"who-am-i", 0x0D, 1, true, 0xFF, 0x1A},
     };
     static constexpr Address7                Address = 0x1D;
     static constexpr std::array<Address7, 2> Addresses{0x1C, 0x1D};
@@ -43,15 +44,15 @@ struct Mma8451 {
     /// WHO_AM_I first, and checked before anything is written (Step::identify): 0x1C and 0x1D
     /// are shared with other parts, such as the ADXL345's alternate address.
     static constexpr std::array Init{
-      Step::write({.reg = 0x2B, .payload = {0x40}}),   // RST
-      Step::wait(std::chrono::milliseconds{10}),       // the reset; nothing answers during it
-      Step::write({.reg = 0x2A, .payload = {0x00}}),
-      Step::write({.reg = 0x0E, .payload = {0x00}}),
-      Step::write({.reg = 0x2B, .payload = {0x02}}),
-      Step::write({.reg = 0x2A, .payload = {0x19}}),
+      Engine::Step::write({.reg = 0x2B, .payload = {0x40}}),   // RST
+      Engine::Step::wait(std::chrono::milliseconds{10}),   // the reset; nothing answers during it
+      Engine::Step::write({.reg = 0x2A, .payload = {0x00}}),
+      Engine::Step::write({.reg = 0x0E, .payload = {0x00}}),
+      Engine::Step::write({.reg = 0x2B, .payload = {0x02}}),
+      Engine::Step::write({.reg = 0x2A, .payload = {0x19}}),
     };
 
-    using State = Groups::DeviceId;
+    using State = Engine::Groups::DeviceId;
 
     /// What the engine read of the Identity above, once it matched and before Init runs:
     /// `state().deviceId` is the part's own word, read once.
@@ -63,7 +64,7 @@ struct Mma8451 {
     struct Motion {
         static constexpr auto       Period = std::chrono::milliseconds{20};
         static constexpr std::array Steps{
-          Step::read({.reg = 0x00, .count = 7})};   // STATUS, OUT_X_MSB .. OUT_Z_LSB
+          Engine::Step::read({.reg = 0x00, .count = 7})};   // STATUS, OUT_X_MSB .. OUT_Z_LSB
 
         struct Sample {
             MicroG                      x{}, y{}, z{};
@@ -71,12 +72,14 @@ struct Mma8451 {
         };
 
         /// 4096 counts per g is 1'000'000 / 4096 = 15625 / 64 ug a count, exact.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data,
-                                                              Sample const&) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data,
+                                                                      Sample const&) {
             bool allOnes = true;
             for(std::size_t i = 0; i < 7; ++i) { allOnes = allOnes && data.u8(i) == 0xFF; }
-            if(allOnes) { return Outcome<Sample>::reject(); }
-            if((data.u8(0) & 0x08U) == 0) { return Outcome<Sample>::unchanged(); }   // ZYXDR
+            if(allOnes) { return Engine::Outcome<Sample>::reject(); }
+            if((data.u8(0) & 0x08U) == 0) {
+                return Engine::Outcome<Sample>::unchanged();
+            }   // ZYXDR
             Sample sample{};
             for(std::size_t i = 0; i < 3; ++i) {
                 sample.raw[i] = static_cast<std::int16_t>(data.s16be(1 + 2 * i) >> 2);
@@ -85,11 +88,11 @@ struct Mma8451 {
             sample.x     = g(0);
             sample.y     = g(1);
             sample.z     = g(2);
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
-    using Reads = List<Motion>;
+    using Reads = Engine::List<Motion>;
 };
 
 }   // namespace Kvasir::I2C::Chips

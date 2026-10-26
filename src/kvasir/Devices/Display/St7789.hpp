@@ -1,6 +1,6 @@
 #pragma once
 // The Sitronix ST7789V TFT controller as a DcsPanel chip policy, for SpiDcsBus.
-// Facts from ~/datasheeds/drivers/ST7789V/ST7789V.md (v1.3, 2014/03):
+// Facts from the ST7789V data sheet v1.3 (2014/03; :N = line of its conversion ST7789V.md):
 // - serial clock cycle >= 66 ns writing, >= 150 ns reading (TSCYCW / TSCYCR, :1618, :1621)
 // - RDID1 / RDDID's first byte 85h (:7333)
 // - SWRESET: wait 5 ms before the next command, 120 ms before SLPOUT if it was sent in sleep in (:5588)
@@ -11,6 +11,7 @@
 #include "DcsPanel.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -28,15 +29,15 @@ namespace Kvasir { namespace St7789 {
         static constexpr int          WindowAlign     = 1;
         static constexpr int          MaxAddress      = 320;
 
-        static constexpr unsigned long MaxWriteHz = 15'000'000;   // 1 / 66 ns
-        static constexpr unsigned long MaxReadHz  = 6'600'000;    // 1 / 150 ns
+        static constexpr Units::Hertz MaxWriteClock = Units::hertz(15'000'000);   // 1 / 66 ns
+        static constexpr Units::Hertz MaxReadClock  = Units::hertz(6'600'000);    // 1 / 150 ns
 
         static constexpr std::uint8_t Colmod565 = 0x55;
 
         /// TRW 10 us, TRT 5 ms (ST7789V.md:1763-1764), for a module with its own RESX.
-        static constexpr unsigned ResetPulseMs     = 1;     // tRW >= 10 us
-        static constexpr unsigned ResetToCommandMs = 120;   // after RESX in sleep out
-        static constexpr unsigned SleepOutMs       = 120;
+        static constexpr std::chrono::milliseconds ResetPulse{1};         // tRW >= 10 us
+        static constexpr std::chrono::milliseconds ResetToCommand{120};   // after RESX in sleep out
+        static constexpr std::chrono::milliseconds SleepOut{120};
 
         /// WRDISBV drives the CABC pin, not the module's backlight.
         static constexpr bool         Brightness  = false;

@@ -1,7 +1,10 @@
 #pragma once
 
 #include "../Duration.hpp"
+#include "../Features.hpp"
 #include "../Log.hpp"
+#include "kvasir/Util/Backoff.hpp"
+#include "kvasir/Util/Config.hpp"
 #include "kvasir/Util/Periodic.hpp"
 
 #include <chrono>
@@ -28,12 +31,12 @@
 ///     Sensors                                          bus{};
 ///     Kvasir::I2C::PowerRail<Clock, SensorSupply>      rail{};
 ///
-///     I2c::handler();      // the bus behavior's own handler: every turn, as ever
-///     rail.handler(bus);   // once per loop turn, INSTEAD of bus.handler()
+///     I2c::turn();         // the bus behavior's own turn: every loop turn, as ever
+///     rail.turn(bus);      // once per loop turn, INSTEAD of bus.turn()
 ///
 /// It starts with the rail off for `OffTime` (so a warm reset of the controller is a cold
 /// start of the parts), switches it on, waits `SettleTime`, and from then on runs
-/// `bus.handler()`. When a part has been absent (Device::absent(): parked after NAKs in a
+/// `bus.turn()`. When a part has been absent (Device::absent(): parked after NAKs in a
 /// row, Presence.hpp) for `AbsentBeforeCycle`, the rail is cycled and `bus.restart()` starts
 /// every device over, since every part lost what it was configured to.
 ///
@@ -42,8 +45,8 @@
 /// with each one that did not bring everything back, from `AbsentBeforeCycle` up to
 /// `CycleIntervalMax`; it is `AbsentBeforeCycle` again once every part answers.
 ///
-/// While the rail is off or settling nothing is put on the bus: bus.handler() is not run.
-/// The bus behavior's handler() has to keep running all the same -- it owns the timeout of
+/// While the rail is off or settling nothing is put on the bus: bus.turn() is not run.
+/// The bus behavior's turn() has to keep running all the same -- it owns the timeout of
 /// whatever was in flight when the rail went.
 ///
 /// What was in flight: restart() makes the devices forget it (a late callback is ignored,
@@ -72,66 +75,35 @@ namespace Kvasir::I2C {
 struct PowerRailDefaults {
     /// How long the rail stays off: long enough for the parts' decoupling to discharge
     /// through whatever load there is, which no data sheet of a part can say.
-    static constexpr auto OffTime = std::chrono::milliseconds{500};
+    static constexpr auto offTime = std::chrono::milliseconds{500};
     /// From switching the rail on to the first transaction. The parts' own StartupDelay
     /// comes on top, per device.
-    static constexpr auto SettleTime = std::chrono::milliseconds{100};
+    static constexpr auto settleTime = std::chrono::milliseconds{100};
     /// A part has to be absent for this long before the rail is cycled for it. Longer than
     /// Presence's first probe interval, so a part that only missed a few transactions gets
     /// its probe first.
-    static constexpr auto AbsentBeforeCycle = std::chrono::seconds{5};
+    static constexpr auto absentBeforeCycle = std::chrono::seconds{5};
     /// What the wait grows to while a part stays absent through every cycle.
-    static constexpr auto CycleIntervalMax = std::chrono::minutes{5};
+    static constexpr auto cycleIntervalMax = std::chrono::minutes{5};
 };
 
-namespace detail {
-    /// The switch's pin claim, if it has one, becomes the rail's (as a Device takes its reset
-    /// line's), so a Startup that is handed the rail sees the pin as taken.
-    template<typename S>
-    struct RailClaims {};
-
-    template<typename S>
-        requires requires { typename S::Claims; }
-    struct RailClaims<S> {
-        using Claims = typename S::Claims;
-    };
-}   // namespace detail
-
+/// The switch's pin claim, if it has one, becomes the rail's (ForwardClaims), so a Startup that is handed the rail
+/// sees the pin as taken.
 template<typename Clock, typename Switch, typename Config = PowerRailDefaults>
-struct PowerRail : detail::RailClaims<Switch> {
+struct PowerRail : Kvasir::detail::ForwardClaims<Switch> {
     using TimePoint = typename Clock::time_point;
 
-    static constexpr std::chrono::milliseconds OffTime = [] {
-        if constexpr(requires { Config::OffTime; }) {
-            return Kvasir::asDuration(Config::OffTime);
-        } else {
-            return Kvasir::asDuration(PowerRailDefaults::OffTime);
-        }
-    }();
+    static constexpr std::chrono::milliseconds OffTime
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Config, offTime, PowerRailDefaults::offTime));
 
-    static constexpr std::chrono::milliseconds SettleTime = [] {
-        if constexpr(requires { Config::SettleTime; }) {
-            return Kvasir::asDuration(Config::SettleTime);
-        } else {
-            return Kvasir::asDuration(PowerRailDefaults::SettleTime);
-        }
-    }();
+    static constexpr std::chrono::milliseconds SettleTime
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Config, settleTime, PowerRailDefaults::settleTime));
 
-    static constexpr std::chrono::milliseconds AbsentBeforeCycle = [] {
-        if constexpr(requires { Config::AbsentBeforeCycle; }) {
-            return Kvasir::asDuration(Config::AbsentBeforeCycle);
-        } else {
-            return Kvasir::asDuration(PowerRailDefaults::AbsentBeforeCycle);
-        }
-    }();
+    static constexpr std::chrono::milliseconds AbsentBeforeCycle = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config, absentBeforeCycle, PowerRailDefaults::absentBeforeCycle));
 
-    static constexpr std::chrono::milliseconds CycleIntervalMax = [] {
-        if constexpr(requires { Config::CycleIntervalMax; }) {
-            return Kvasir::asDuration(Config::CycleIntervalMax);
-        } else {
-            return Kvasir::asDuration(PowerRailDefaults::CycleIntervalMax);
-        }
-    }();
+    static constexpr std::chrono::milliseconds CycleIntervalMax = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config, cycleIntervalMax, PowerRailDefaults::cycleIntervalMax));
 
     static_assert(OffTime > std::chrono::milliseconds::zero()
                     && SettleTime >= std::chrono::milliseconds::zero()
@@ -158,25 +130,25 @@ struct PowerRail : detail::RailClaims<Switch> {
         if(state_ == State::on) { cycleRequested_ = true; }
     }
 
-    /// Once per loop turn, in place of bus.handler().
+    /// Once per loop turn, in place of bus.turn().
     template<typename B>
-        requires requires(B& b) { b.handler(); }
-    void handler(B& bus) {
-        handler(bus, [](B& b) { b.handler(); });
+        requires requires(B& b) { b.turn(); }
+    void turn(B& bus) {
+        turn(bus, [](B& b) { b.turn(); });
     }
 
-    /// The same with the bus's turn run by `turn(bus)`: a Bus in a DeviceSet runs with the
-    /// set's engine (`rail.handler(set.get<B>(), set.turn())`, DeviceSet.hpp).
+    /// The same with the bus's turn run by `busTurn(bus)`: a Bus in a DeviceSet runs with the
+    /// set's engine (`rail.turn(set.get<B>(), set.engineStep())`, DeviceSet.hpp).
     template<typename B,
-             typename Turn>
+             typename BusTurn>
         requires requires(B& b) {
             b.restart();
             { b.absentCount() } -> std::convertible_to<std::size_t>;
             { b.answeringCount() } -> std::convertible_to<std::size_t>;
             { B::Parts } -> std::convertible_to<std::size_t>;
         }
-    void handler(B&     bus,
-                 Turn&& turn) {
+    void turn(B&        bus,
+              BusTurn&& busTurn) {
         auto const now = Clock::now();
         if(!started_) {
             started_ = true;
@@ -197,11 +169,11 @@ struct PowerRail : detail::RailClaims<Switch> {
             state_ = State::on;
             break;
         case State::on:
-            turn(bus);
+            busTurn(bus);
             switch(due_(bus.absentCount(), bus.answeringCount() + offline_(bus) == B::Parts, now)) {
             case Due::no: return;
             case Due::requested:
-                UC_LOG_I("i2c power rail: cycle {} on request", cycles_ + 1);
+                UC_LOG_D("i2c power rail: cycle {} on request", cycles_ + 1);
                 break;
             case Due::absent:
                 // Not rate limited as Presence's lines are: the interval it doubles is the limit.
@@ -253,7 +225,7 @@ private:
             // is for as much as one that stays away: the absence is only over once no part
             // has been absent for as long as it takes to be cycled for.
             if(absentSince_) {
-                if(allPresent_.stopped()) { allPresent_.restart(AbsentBeforeCycle, now); }
+                if(allPresent_.isStopped()) { allPresent_.restart(AbsentBeforeCycle, now); }
                 if(allPresent_.expired(now)) { absentSince_.reset(); }
             }
             return Due::no;
@@ -265,7 +237,7 @@ private:
         }
         if(now - *absentSince_ < interval_) { return Due::no; }
         // Doubled without overflowing, whatever CycleIntervalMax a Config declares.
-        interval_ = interval_ >= CycleIntervalMax / 2 ? CycleIntervalMax : interval_ * 2;
+        interval_ = Kvasir::doubledUpTo(interval_, CycleIntervalMax);
         return Due::absent;
     }
 

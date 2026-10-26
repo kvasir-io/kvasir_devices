@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -195,9 +196,9 @@ struct Tmag5273 {
     /// DEVICE_ID (Dh) VER, bits 1:0, is 1h (the 40 / 80 mT part) or 2h (133 / 266 mT); 0h and 3h are
     /// reserved (TMAG5273.md:2162..2173).
     static constexpr std::array Identity{
-      RegisterCheck{"device-id", 0x0D, 1, true, 0x03, 0x01, 0x02},
-      RegisterCheck{"manufacturer-id-lsb", 0x0E, 1, true, 0xFF, 0x49},
-      RegisterCheck{"manufacturer-id-msb", 0x0F, 1, true, 0xFF, 0x54},
+      Engine::RegisterCheck{"device-id", 0x0D, 1, true, 0x03, 0x01, 0x02},
+      Engine::RegisterCheck{"manufacturer-id-lsb", 0x0E, 1, true, 0xFF, 0x49},
+      Engine::RegisterCheck{"manufacturer-id-msb", 0x0F, 1, true, 0xFF, 0x54},
     };
     static constexpr Address7                Address = 0x22;
     static constexpr std::array<Address7, 4> Addresses{0x22, 0x35, Address7::reserved(0x78), 0x44};
@@ -230,19 +231,16 @@ struct Tmag5273 {
 
     static constexpr std::chrono::milliseconds ReadPeriod = Tmag5273Detail::readPeriod(Avg, Ch);
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::write({.reg = 0x00,                      .payload = {Config1}}
-      ), // CONV_AVG
-      Step::write(
-        {.reg = 0x02, .payload = {SensorConfig1, SensorConfig2}}
-      ), // channels; angle and ranges
-      Step::write({.reg = 0x07,                         .payload = {0x01}}
-      ), // T_CH_EN
-      Step::write({.reg = 0x18,                         .payload = {0x10}}
-      ), // CONV_STATUS: clear POR
-      Step::write({.reg = 0x01,                      .payload = {Config2}}
-      ), // the operating mode, last
+      Engine::Step::write({.reg = 0x00, .payload = {Config1}}),   // CONV_AVG
+      Engine::Step::write(
+        {.reg = 0x02, .payload = {SensorConfig1, SensorConfig2}}),   // channels; angle and ranges
+      Engine::Step::write({.reg = 0x07, .payload = {0x01}}),         // T_CH_EN
+      Engine::Step::write({.reg = 0x18, .payload = {0x10}}),         // CONV_STATUS: clear POR
+      Engine::Step::write({.reg = 0x01, .payload = {Config2}}),      // the operating mode, last
     };
+    // clang-format on
 
     struct State {
         std::uint8_t   deviceId{};       ///< DEVICE_ID
@@ -275,11 +273,12 @@ struct Tmag5273 {
         static constexpr bool Timestamped = true;
 
         /// The conversion time of the averaging and channels the part holds now.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return Tmag5273Detail::readPeriod(state.averaging, state.channels);
         }
 
-        static constexpr std::array Steps{Step::read({.reg = 0x10, .count = 12, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x10, .count = 12, .offset = 0})};
 
         struct Sample {
             NanoTesla     x{};   ///< 0 when the channel is not enabled
@@ -296,10 +295,10 @@ struct Tmag5273 {
         /// Unchanged while RESULT_STATUS says no conversion is complete (Table 8-27). The data
         /// sheet is silent on whether a read clears it; if not, a read inside one conversion period
         /// repeats the last set as a new sample.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
             auto const status = data.u8(8);
-            if((status & 0x01U) == 0) { return Outcome<Sample>::unchanged(); }
+            if((status & 0x01U) == 0) { return Engine::Outcome<Sample>::unchanged(); }
             auto const xyBr = Tmag5273Detail::rangeNt(state.version, state.ranges.xy);
             auto const zBr  = Tmag5273Detail::rangeNt(state.version, state.ranges.z);
             Sample     s{};
@@ -323,7 +322,7 @@ struct Tmag5273 {
               static_cast<std::int32_t>(static_cast<std::int64_t>(data.u8(11)) * xyBr / 128));
             s.diagnostic   = (status & 0x02U) != 0;
             s.powerOnReset = (status & 0x10U) != 0;
-            return Outcome<Sample>::ok(s);
+            return Engine::Outcome<Sample>::ok(s);
         }
     };
 
@@ -333,10 +332,10 @@ struct Tmag5273 {
         using Value                        = AveragingCount;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(static_cast<unsigned>(value) << 2U);
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -351,10 +350,10 @@ struct Tmag5273 {
         using Value                        = ChannelSet;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(static_cast<unsigned>(value) << 4U);
-            return Step::writeBuffer({.reg = 0x02, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x02, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -368,10 +367,10 @@ struct Tmag5273 {
         using Value                        = RangeConfig;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(Tmag5273Detail::sensorConfig2(value));
-            return Step::writeBuffer({.reg = 0x03, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x03, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -388,10 +387,10 @@ struct Tmag5273 {
         using Value                        = OperatingMode;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -400,8 +399,8 @@ struct Tmag5273 {
         }
     };
 
-    using Reads  = List<Field>;
-    using Writes = List<Averaging, MagneticChannels, Ranges, Operating>;
+    using Reads  = Engine::List<Field>;
+    using Writes = Engine::List<Averaging, MagneticChannels, Ranges, Operating>;
 };
 
 }   // namespace Kvasir::I2C::Chips

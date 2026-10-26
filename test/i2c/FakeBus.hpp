@@ -8,7 +8,7 @@
 #include <deque>
 #include <functional>
 #include <initializer_list>
-#include <kvasir/Devices/I2C/EngineFeatures.hpp>
+#include <kvasir/Devices/Engine/EngineFeatures.hpp>
 #include <map>
 #include <span>
 #include <support/FakeClock.hpp>
@@ -46,10 +46,10 @@ struct Transaction {
 
     Kind                      kind{Kind::bus};
     std::uint8_t              address{};
-    std::vector<std::uint8_t> sent{};
+    std::vector<std::uint8_t> sent;
     std::size_t               recvLen{};
-    std::vector<std::uint8_t> received{};   // filled in by complete()
-    FakeClock::time_point     at{};
+    std::vector<std::uint8_t> received;   // filled in by complete()
+    FakeClock::time_point     at;
 
     [[nodiscard]] bool isBus() const { return kind == Kind::bus; }
 
@@ -61,7 +61,7 @@ struct Transaction {
 /// What every fake bus shares whatever its tag: the result, the request and the model's
 /// signature. Out of the template so that one device model (RegisterModel, a responder
 /// lambda) answers on any of them.
-enum class FakeBusResult : std::uint8_t { failed, notAcknowledged, succeeded };
+enum class FakeBusResult : std::uint8_t { failed, nack, ok };
 
 /// The queued drivers' request: up to two prefix bytes (a register, an EEPROM address) go out
 /// ahead of sendData in the same write. The transcript and the models see the two joined:
@@ -72,9 +72,9 @@ struct FakeBusRequest {
     std::uint8_t                       address{};
     std::uint8_t                       prefixBytes{};
     std::array<std::byte, MaxPrefix>   prefix{};
-    std::span<std::byte const>         sendData{};
-    std::span<std::byte>               receiveData{};
-    std::function<void(FakeBusResult)> callback{};
+    std::span<std::byte const>         sendData;
+    std::span<std::byte>               receiveData;
+    std::function<void(FakeBusResult)> callback;
 
     [[nodiscard]] std::size_t sendBytes() const { return prefixBytes + sendData.size(); }
 
@@ -90,7 +90,7 @@ struct FakeBusRequest {
     }
 };
 
-/// A request with a deadline on the test clock: a bus with requestDeadlines (kvasir_devices BusTypes.hpp), whose
+/// A request with a deadline on the test clock: a bus with queueFeatures.deadlines (kvasir_devices BusTypes.hpp), whose
 /// timeout the engine then uses instead of its own in-flight net.
 struct FakeDeadlineRequest : FakeBusRequest {
     FakeClock::time_point deadline{FakeClock::time_point::max()};
@@ -104,8 +104,8 @@ struct FakeBusFor {
     using Result  = FakeBusResult;
     using Request = Req;
     /// Every engine feature on, so the tests of each one run on the fake.
-    static constexpr Kvasir::I2C::EngineFeatures Features = Kvasir::I2C::AllEngineFeatures;
-    using Responder                                       = FakeBusResponder;
+    static constexpr Kvasir::Engine::EngineFeatures Features = Kvasir::Engine::AllEngineFeatures;
+    using Responder                                          = FakeBusResponder;
 
     /// What a real bus's transfer timeout is, for timeout(): tens of milliseconds.
     static constexpr auto TransferTimeout = std::chrono::milliseconds{25};
@@ -138,13 +138,12 @@ struct FakeBusFor {
 
     /// Every pending request answered by the model (a NAK when there is none).
     static void complete() {
-        auto batch = std::move(pending);
+        auto const batch = std::move(pending);
         pending.clear();
-        for(auto& r : batch) {
+        for(auto const& r : batch) {
             auto const sent = r.sent();
-            auto const res
-              = respond ? respond(r.address, sent, r.receiveData) : Result::notAcknowledged;
-            if(res == Result::succeeded) { received_(r, r.receiveData.size()); }
+            auto const res  = respond ? respond(r.address, sent, r.receiveData) : Result::nack;
+            if(res == Result::ok) { received_(r, r.receiveData.size()); }
             ++answered;
             r.callback(res);
         }
@@ -154,7 +153,7 @@ struct FakeBusFor {
     /// cause. False, and nothing done, when nothing is pending.
     static bool complete(Result r) {
         if(pending.empty()) { return false; }
-        auto req = std::move(pending.front());
+        auto const req = std::move(pending.front());
         pending.pop_front();
         ++answered;
         req.callback(r);
@@ -162,7 +161,7 @@ struct FakeBusFor {
     }
 
     /// The address was acknowledged and a data byte was not: what the bus reports as `failed`
-    /// (a NAK on the address alone is `notAcknowledged`).
+    /// (a NAK on the address alone is `nack`).
     static bool dataNak() { return complete(Result::failed); }
 
     /// The transfer timed out: the bus's own timeout passes, then the request fails.
@@ -176,7 +175,7 @@ struct FakeBusFor {
     /// a receive buffer that is partly written is what a driver must not take for an answer.
     static bool partialRead(std::size_t n) {
         if(pending.empty()) { return false; }
-        auto req = std::move(pending.front());
+        auto const req = std::move(pending.front());
         pending.pop_front();
         if(respond) {
             std::vector<std::byte> whole(req.receiveData.size());
@@ -273,7 +272,7 @@ struct RegisterModel {
     std::uint8_t                                   address{};
     std::map<std::uint32_t, Reg>                   mem{};
     std::uint32_t                                  pointer{};
-    std::vector<std::uint32_t>                     readOnly{};
+    std::vector<std::uint32_t>                     readOnly;
     std::function<void(std::uint32_t, Reg const&)> onWrite{};
     int                                            writes{};
     int                                            reads{};
@@ -309,7 +308,7 @@ struct RegisterModel {
     FakeBusResult operator()(std::uint8_t               addr,
                              std::span<std::byte const> sent,
                              std::span<std::byte>       recv) {
-        if(addr != address) { return FakeBusResult::notAcknowledged; }
+        if(addr != address) { return FakeBusResult::nack; }
         if(!sent.empty()) {
             if(sent.size() < RegBytes) { return FakeBusResult::failed; }
             pointer = 0;
@@ -341,22 +340,7 @@ struct RegisterModel {
             }
             ++reads;
         }
-        return FakeBusResult::succeeded;
-    }
-};
-
-/// Several models on one bus, by address.
-struct Bus {
-    std::vector<FakeBusResponder> devices{};
-
-    FakeBusResult operator()(std::uint8_t               addr,
-                             std::span<std::byte const> sent,
-                             std::span<std::byte>       recv) {
-        for(auto& d : devices) {
-            auto const r = d(addr, sent, recv);
-            if(r != FakeBusResult::notAcknowledged) { return r; }
-        }
-        return FakeBusResult::notAcknowledged;
+        return FakeBusResult::ok;
     }
 };
 

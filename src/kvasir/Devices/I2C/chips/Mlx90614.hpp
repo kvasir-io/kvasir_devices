@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -39,18 +40,19 @@ struct Mlx90614 {
     [[nodiscard]] static constexpr bool pecOk(Bytes        data,
                                               std::size_t  i,
                                               std::uint8_t command) {
-        std::array<std::byte, 5> frame{static_cast<std::byte>(Addr << 1),
-                                       std::byte{command},
-                                       static_cast<std::byte>((Addr << 1) | 1),
-                                       data.at(i),
-                                       data.at(i + 1)};
+        std::array<std::byte, 5> const frame{static_cast<std::byte>(Addr << 1),
+                                             std::byte{command},
+                                             static_cast<std::byte>((Addr << 1) | 1),
+                                             data.at(i),
+                                             data.at(i + 1)};
         return crc8Smbus(Bytes{frame}) == data.u8(i + 2);
     }
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{200};
-        static constexpr std::array Steps{Step::read({.reg = 0x06, .count = 3, .offset = 0}),
-                                          Step::read({.reg = 0x07, .count = 3, .offset = 3})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x06, .count = 3, .offset = 0}),
+          Engine::Step::read({.reg = 0x07, .count = 3, .offset = 3})};
 
         struct Sample {
             CentiDegC ambient{};
@@ -61,17 +63,21 @@ struct Mlx90614 {
             return Units::centiDegC(static_cast<std::int32_t>(raw) * 2 - 27315);
         }
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
-            if(!pecOk(data, 0, 0x06) || !pecOk(data, 3, 0x07)) { return Outcome<Sample>::reject(); }
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
+            if(!pecOk(data, 0, 0x06) || !pecOk(data, 3, 0x07)) {
+                return Engine::Outcome<Sample>::reject();
+            }
             auto const ta = data.le16(0);
             auto const to = data.le16(3);
-            if((ta & 0x8000U) != 0 || (to & 0x8000U) != 0) { return Outcome<Sample>::reject(); }
-            if(ta < MinAmbient || to < MinObject) { return Outcome<Sample>::reject(); }
-            return Outcome<Sample>::ok({centi(ta), centi(to)});
+            if((ta & 0x8000U) != 0 || (to & 0x8000U) != 0) {
+                return Engine::Outcome<Sample>::reject();
+            }
+            if(ta < MinAmbient || to < MinObject) { return Engine::Outcome<Sample>::reject(); }
+            return Engine::Outcome<Sample>::ok({centi(ta), centi(to)});
         }
     };
 
-    using Reads = List<Temperature>;
+    using Reads = Engine::List<Temperature>;
 };
 
 }   // namespace Kvasir::I2C::Chips

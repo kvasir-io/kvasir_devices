@@ -2,6 +2,7 @@
 #include "Bytes.hpp"
 #include "Duration.hpp"
 #include "kvasir/Atomic/Queue.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -15,19 +16,23 @@ namespace Kvasir {
 /// The knobs of the 1-Wire bus, with their defaults; derive and redeclare what you change.
 struct OneWireDefaults {
     /// Deadline for the transaction in flight, beyond the time its bits take: each bit slot
-    /// is timed from handler(), so on a millisecond tick a slot can take up to two of them,
-    /// and a transaction is given `SlotBudget` per bit on top of this. It only bounds a bus
+    /// is timed from turn(), so on a millisecond tick a slot can take up to two of them,
+    /// and a transaction is given `slotBudget` per bit on top of this. It only bounds a bus
     /// that has stopped answering.
-    static constexpr auto TransactionTimeout = std::chrono::milliseconds{100};
-    static constexpr auto SlotBudget         = std::chrono::milliseconds{2};
+    static constexpr auto transactionTimeout = std::chrono::milliseconds{100};
+    static constexpr auto slotBudget         = std::chrono::milliseconds{2};
 };
 
 /// A 1-Wire master bit-banged on `Pin` (open drain: driven low, released to an input), as a
 /// state machine over Clock: one transaction at a time, a reset pulse then the bytes out
-/// then the bytes in, each bit slot timed against Clock::now() from handler() and the slot's
-/// own microseconds spun in Clock::delay. The bit timings are the standard-speed ones of
-/// the Maxim application note 126 (reset 480 us, presence sample at 70 us, write-1 low
-/// 5 us, write-0 low 65 us, read sample at 13 us, slot 64 us).
+/// then the bytes in, each bit slot timed against Clock::now() from turn() and the slot's
+/// own microseconds spun in Clock::delay. Standard speed: reset 480 us, presence sample at
+/// 70 us, the rest 410 us, slot 64 us are Maxim application note 126's (Table 2 H, I, J, B;
+/// other/AN126_1wire_communication_through_software.md l.48-64); write-1 low 5 us, write-0
+/// low 65 us and the read sample at 13 us (3 us low) are not - AN126 has 6, 60 and 6 + 9 -
+/// but inside the MAX31820's limits: tLOW1 1-15 us, tLOW0 60-120 us, tRDV 15 us max, tSLOT
+/// 60-120 us, tRSTL >= 480 us, presence low from 15-60 us for 60-240 us (other/MAX31820.md
+/// l.132-141).
 ///
 ///     acquire() -> send(now, bytes) | receive(now, n) | sendReceive(now, bytes, n)
 ///     operationState(now) until it is not ongoing -> getReceivedBytes(...) -> release()
@@ -38,33 +43,25 @@ struct OneWire {
     enum class State : std::uint8_t { idle, blocked, resetPulse, sending, receiving };
     enum class OperationState : std::uint8_t { succeeded, failed, ongoing };
 
-    static constexpr std::chrono::milliseconds TransactionTimeout = [] {
-        if constexpr(requires { Config::TransactionTimeout; }) {
-            return Kvasir::asDuration(Config::TransactionTimeout);
-        } else {
-            return std::chrono::milliseconds{OneWireDefaults::TransactionTimeout};
-        }
-    }();
+    static constexpr std::chrono::milliseconds TransactionTimeout = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       transactionTimeout,
+                       std::chrono::milliseconds{OneWireDefaults::transactionTimeout}));
 
-    static constexpr std::chrono::milliseconds SlotBudget = [] {
-        if constexpr(requires { Config::SlotBudget; }) {
-            return Kvasir::asDuration(Config::SlotBudget);
-        } else {
-            return std::chrono::milliseconds{OneWireDefaults::SlotBudget};
-        }
-    }();
+    static constexpr std::chrono::milliseconds SlotBudget = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config, slotBudget, std::chrono::milliseconds{OneWireDefaults::slotBudget}));
 
     template<typename C>
     static void getReceivedBytes(C& c) {
         assert(c.size() <= buffer_.size());
-        buffer_.pop_into(c);
+        buffer_.popInto(c);
     }
 
     template<typename OIT>
     static void getReceivedBytes(OIT first,
                                  OIT last) {
+        // the caller asks for what was received: front() on an empty buffer is the queue's overflow policy
         while(first != last) {
-            assert(!buffer_.empty());
             *first = buffer_.front();
             buffer_.pop();
             ++first;
@@ -72,7 +69,7 @@ struct OneWire {
     }
 
     static OperationState operationState(TimePoint const& currentTime) {
-        auto op = operationState_;
+        auto const op = operationState_;
         if(op == OperationState::ongoing) {
             if(currentTime > timeoutTime_) {
                 state_          = State::blocked;
@@ -124,7 +121,7 @@ struct OneWire {
         receiveSize_ = size;
     }
 
-    static void handler() {
+    static void turn() {
         auto const currentTime = Clock::now();
         switch(state_) {
         case State::idle:
@@ -153,13 +150,13 @@ struct OneWire {
         case State::sending:
             {
                 if(currentTime > waitTime_) {
-                    if(buffer_.empty()) {
+                    if(auto const* const next = buffer_.peek(); next == nullptr) {
                         bitCount_    = 0;
                         currentByte_ = std::byte{};
                         state_       = State::receiving;
                     } else {
-                        auto b   = buffer_.front();
-                        auto bit = ((b >> bitCount_) & std::byte{1}) == std::byte{1};
+                        auto const b   = *next;
+                        auto const bit = ((b >> bitCount_) & std::byte{1}) == std::byte{1};
                         writeBit(bit);
                         ++bitCount_;
                         if(bitCount_ == 8) {
@@ -178,7 +175,7 @@ struct OneWire {
                         operationState_ = OperationState::succeeded;
                         state_          = State::blocked;
                     } else {
-                        auto b = std::byte(readBit());
+                        auto const b = std::byte(readBit());
                         currentByte_ |= b << bitCount_;
                         ++bitCount_;
                         if(bitCount_ == 8) {
@@ -236,7 +233,8 @@ struct OneWire {
     }
 
 private:
-    // Standard-speed slot timings (AN126).
+    // Standard-speed slot timings: AN126's where they match it, the others inside the MAX31820
+    // limits (the class comment above).
     static constexpr std::chrono::microseconds ResetLow{480};
     static constexpr std::chrono::microseconds PresenceSample{70};
     static constexpr std::chrono::microseconds PresenceRest{410};

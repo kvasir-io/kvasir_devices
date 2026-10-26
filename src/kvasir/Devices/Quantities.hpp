@@ -2,7 +2,8 @@
 
 #include <concepts>
 #include <cstdint>
-#include <mp-units/systems/si.h>
+// constants.h: the SI units, prefixes and standard_gravity - what the aliases below name (si.h adds unit_symbols)
+#include <mp-units/systems/si/constants.h>
 
 /// What a chip description reports, with the scale in the type rather than in the member
 /// name. One conversion then serves every chip, and generic code over "a temperature sensor"
@@ -23,11 +24,23 @@
 /// Bus-agnostic: the I2C descriptions and the SPI drivers report through the same types.
 /// I2C/Quantities.hpp re-exports everything here into Kvasir::I2C, where the descriptions
 /// name the aliases unqualified.
-namespace Kvasir {
-
-namespace Units {
+namespace Kvasir { namespace Units {
     namespace mpu = mp_units;
     namespace si  = mp_units::si;
+
+    namespace detail {
+        /// The one factory body: `Units::milliDegC(x)` is x in the unit of the quantity type, x converted to its
+        /// representation (int32 or uint32). An object rather than a function template per quantity, so every
+        /// factory below is one line; a call compiles as it did. Built with delta<>, which an offset unit (Celsius)
+        /// needs and every other unit takes too.
+        template<typename Q>
+        struct Make {
+            template<std::integral T>
+            [[nodiscard]] constexpr Q operator()(T value) const {
+                return mpu::delta<Q::reference>(static_cast<typename Q::rep>(value));
+            }
+        };
+    }   // namespace detail
 
     // -- temperature ---------------------------------------------------------------------
     //
@@ -40,32 +53,16 @@ namespace Units {
     using MilliDegC = mpu::quantity<si::milli<si::degree_Celsius>, std::int32_t>;
 
     /// The canonical one: everything converts to it without loss, so this is what a generic
-    /// reader and the TemperatureSource concept below name.
+    /// reader names.
     using Temperature = MilliDegC;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr DegC degC(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return mpu::delta<si::degree_Celsius>(x);
-    }
+    inline constexpr detail::Make<DegC> degC{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr DeciDegC deciDegC(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return mpu::delta<si::deci<si::degree_Celsius>>(x);
-    }
+    inline constexpr detail::Make<DeciDegC> deciDegC{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr CentiDegC centiDegC(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return mpu::delta<si::centi<si::degree_Celsius>>(x);
-    }
+    inline constexpr detail::Make<CentiDegC> centiDegC{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliDegC milliDegC(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return mpu::delta<si::milli<si::degree_Celsius>>(x);
-    }
+    inline constexpr detail::Make<MilliDegC> milliDegC{};
 
     /// The one place a temperature leaves the type system, for an application that wants a
     /// float. Generic over the scale, which is the point: one bridge rather than one per
@@ -75,18 +72,6 @@ namespace Units {
     [[nodiscard]] constexpr float celsius(mpu::quantity<R,
                                                         Rep> t) {
         return mpu::value_cast<float>(t).numerical_value_in(si::degree_Celsius);
-    }
-
-    /// The same quantity with a float representation, in the same unit: the one place an
-    /// application converts before it divides, filters or prints, instead of spelling out
-    /// `value_cast<float>` at every use. `toFloat(sample.pressure).numerical_value_in(si::pascal)`.
-    template<auto R,
-             typename Rep>
-    [[nodiscard]] constexpr mpu::quantity<R,
-                                          float>
-    toFloat(mpu::quantity<R,
-                          Rep> q) {
-        return mpu::value_cast<float>(q);
     }
 
     /// The integer a quantity holds, in its own unit: what a description writes to a register
@@ -114,26 +99,14 @@ namespace Units {
     using MilliPercent = mpu::quantity<si::milli<mpu::percent>, std::uint32_t>;
     using Humidity     = MilliPercent;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr CentiPercent centiPercent(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::centi<mpu::percent>;
-    }
+    inline constexpr detail::Make<CentiPercent> centiPercent{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliPercent milliPercent(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::milli<mpu::percent>;
-    }
+    inline constexpr detail::Make<MilliPercent> milliPercent{};
 
     // -- pressure ------------------------------------------------------------------------
     using Pascal = mpu::quantity<si::pascal, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr Pascal pascal(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::pascal;
-    }
+    inline constexpr detail::Make<Pascal> pascal{};
 
     // -- voltage, current, power ---------------------------------------------------------
     using NanoVolt  = mpu::quantity<si::nano<si::volt>, std::int32_t>;
@@ -145,233 +118,117 @@ namespace Units {
     using MicroWatt = mpu::quantity<si::micro<si::watt>, std::uint32_t>;
     using MilliWatt = mpu::quantity<si::milli<si::watt>, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr NanoVolt nanoVolt(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::nano<si::volt>;
-    }
+    inline constexpr detail::Make<NanoVolt> nanoVolt{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroVolt microVolt(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::micro<si::volt>;
-    }
+    inline constexpr detail::Make<MicroVolt> microVolt{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliVolt milliVolt(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::milli<si::volt>;
-    }
+    inline constexpr detail::Make<MilliVolt> milliVolt{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr NanoAmp nanoAmp(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::nano<si::ampere>;
-    }
+    inline constexpr detail::Make<NanoAmp> nanoAmp{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliAmp milliAmp(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::milli<si::ampere>;
-    }
+    inline constexpr detail::Make<MilliAmp> milliAmp{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroAmp microAmp(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::micro<si::ampere>;
-    }
+    inline constexpr detail::Make<MicroAmp> microAmp{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroWatt microWatt(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::micro<si::watt>;
-    }
+    inline constexpr detail::Make<MicroWatt> microWatt{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliWatt milliWatt(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::milli<si::watt>;
-    }
+    inline constexpr detail::Make<MilliWatt> milliWatt{};
 
     // -- illuminance ---------------------------------------------------------------------
     using MicroLux = mpu::quantity<si::micro<si::lux>, std::uint32_t>;
     using MilliLux = mpu::quantity<si::milli<si::lux>, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroLux microLux(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::micro<si::lux>;
-    }
+    inline constexpr detail::Make<MicroLux> microLux{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliLux milliLux(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::milli<si::lux>;
-    }
+    inline constexpr detail::Make<MilliLux> milliLux{};
 
     // -- acceleration, as the accelerometers report it: a fraction of standard gravity ----
     using MilliG = mpu::quantity<si::milli<si::standard_gravity>, std::int32_t>;
     using MicroG = mpu::quantity<si::micro<si::standard_gravity>, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliG milliG(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::milli<si::standard_gravity>;
-    }
+    inline constexpr detail::Make<MilliG> milliG{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroG microG(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::micro<si::standard_gravity>;
-    }
+    inline constexpr detail::Make<MicroG> microG{};
 
     // -- magnetic flux density -----------------------------------------------------------
     using NanoTesla  = mpu::quantity<si::nano<si::tesla>, std::int32_t>;
     using MicroTesla = mpu::quantity<si::micro<si::tesla>, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr NanoTesla nanoTesla(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::nano<si::tesla>;
-    }
+    inline constexpr detail::Make<NanoTesla> nanoTesla{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroTesla microTesla(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::micro<si::tesla>;
-    }
+    inline constexpr detail::Make<MicroTesla> microTesla{};
 
     // -- angular rate --------------------------------------------------------------------
     using MicroDegPerSec = mpu::quantity<si::micro<si::degree> / si::second, std::int32_t>;
     using MilliDegPerSec = mpu::quantity<si::milli<si::degree> / si::second, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroDegPerSec microDegPerSec(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::micro<si::degree> / si::second;
-    }
+    inline constexpr detail::Make<MicroDegPerSec> microDegPerSec{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliDegPerSec milliDegPerSec(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::milli<si::degree> / si::second;
-    }
+    inline constexpr detail::Make<MilliDegPerSec> milliDegPerSec{};
 
     // -- resistance ----------------------------------------------------------------------
     using MicroOhm = mpu::quantity<si::micro<si::ohm>, std::uint32_t>;
     using MilliOhm = mpu::quantity<si::milli<si::ohm>, std::uint32_t>;
     using Ohm      = mpu::quantity<si::ohm, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroOhm microOhm(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::micro<si::ohm>;
-    }
+    inline constexpr detail::Make<MicroOhm> microOhm{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliOhm milliOhm(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::milli<si::ohm>;
-    }
+    inline constexpr detail::Make<MilliOhm> milliOhm{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr Ohm ohm(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::ohm;
-    }
+    inline constexpr detail::Make<Ohm> ohm{};
 
     // -- length --------------------------------------------------------------------------
     using MilliMetre = mpu::quantity<si::milli<si::metre>, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliMetre milliMetre(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::milli<si::metre>;
-    }
+    inline constexpr detail::Make<MilliMetre> milliMetre{};
 
     // -- speed ---------------------------------------------------------------------------
     using MilliMetrePerSecond = mpu::quantity<si::milli<si::metre> / si::second, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliMetrePerSecond milliMetrePerSecond(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::milli<si::metre> / si::second;
-    }
+    inline constexpr detail::Make<MilliMetrePerSecond> milliMetrePerSecond{};
 
     // -- plane angle ---------------------------------------------------------------------
     using CentiDegree = mpu::quantity<si::centi<si::degree>, std::int32_t>;
     /// A latitude or longitude: +-180e6 fits the int32 with room to spare.
     using MicroDegree = mpu::quantity<si::micro<si::degree>, std::int32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr CentiDegree centiDegree(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::centi<si::degree>;
-    }
+    inline constexpr detail::Make<CentiDegree> centiDegree{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MicroDegree microDegree(T value) {
-        auto const x = static_cast<std::int32_t>(value);
-        return x * si::micro<si::degree>;
-    }
+    inline constexpr detail::Make<MicroDegree> microDegree{};
 
     // -- capacitance ---------------------------------------------------------------------
     using PicoFarad = mpu::quantity<si::pico<si::farad>, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr PicoFarad picoFarad(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::pico<si::farad>;
-    }
+    inline constexpr detail::Make<PicoFarad> picoFarad{};
 
     // -- frequency -----------------------------------------------------------------------
     using Hertz = mpu::quantity<si::hertz, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr Hertz hertz(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::hertz;
-    }
+    inline constexpr detail::Make<Hertz> hertz{};
 
     // -- rotational speed, as a fan tachometer reports it --------------------------------
     using Rpm = mpu::quantity<mpu::one / mpu::non_si::minute, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr Rpm rpm(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * (mpu::one / mpu::non_si::minute);
-    }
+    inline constexpr detail::Make<Rpm> rpm{};
 
     // -- ratios: whole percent, parts per million ----------------------------------------
     using Percent = mpu::quantity<mpu::percent, std::uint32_t>;
     using Ppm     = mpu::quantity<mpu::parts_per_million, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr Percent percent(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * mpu::percent;
-    }
+    inline constexpr detail::Make<Percent> percent{};
 
-    template<std::integral T>
-    [[nodiscard]] constexpr Ppm ppm(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * mpu::parts_per_million;
-    }
+    inline constexpr detail::Make<Ppm> ppm{};
 
     // -- UV index ------------------------------------------------------------------------
     //
     // Dimensionless, but not a ratio of two like quantities, so it is its own unit rather
     // than a scale on `one`: a UV index cannot be added to a percentage by accident.
-    inline constexpr struct uv_index final : mpu::named_unit<"UVI", mpu::one> {
-    } uv_index;
+    inline constexpr struct UvIndex final : mpu::named_unit<"UVI", mpu::one> {
+    } uvIndex;
 
-    using MilliUvi = mpu::quantity<si::milli<uv_index>, std::uint32_t>;
+    using MilliUvi = mpu::quantity<si::milli<uvIndex>, std::uint32_t>;
 
-    template<std::integral T>
-    [[nodiscard]] constexpr MilliUvi milliUvi(T value) {
-        auto const x = static_cast<std::uint32_t>(value);
-        return x * si::milli<uv_index>;
-    }
+    inline constexpr detail::Make<MilliUvi> milliUvi{};
 
     static_assert(MilliDegC{centiDegC(2350)} == milliDegC(23500),
                   "centi widens to milli exactly");
@@ -381,17 +238,5 @@ namespace Units {
                   "a quantity is the integer it holds");
     static_assert(MicroOhm{milliOhm(2)} == microOhm(2000),
                   "a quantity converts to a finer scale implicitly");
-    static_assert(toFloat(milliDegC(23500)).numerical_value_in(si::milli<si::degree_Celsius>)
-                    == 23500.0f,
-                  "toFloat keeps the unit and changes the representation");
 
-}   // namespace Units
-
-/// A device whose one read group reports a temperature: what a display or a log formatter
-/// can be written against once, instead of once per chip.
-template<typename D>
-concept TemperatureSource = requires(D const& d) {
-    { d.latest().temperature } -> std::convertible_to<Units::Temperature>;
-};
-
-}   // namespace Kvasir
+}}   // namespace Kvasir::Units

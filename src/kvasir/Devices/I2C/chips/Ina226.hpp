@@ -1,8 +1,10 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -18,51 +20,31 @@ namespace Kvasir::I2C::Chips {
 /// (the reset default: 1 average, 1.1 ms conversions, shunt and bus continuous);
 /// calibration 0x05 = 0.00512 / (Current_LSB * R_shunt) (6.5.1: 2560 for 2 mOhm and 1
 /// mA). Shunt 0x01 at 2.5 uV/LSB, bus 0x02 at 1.25 mV/LSB, current 0x04 in Current_LSB,
-/// power 0x03 in 25 x Current_LSB (Table 6-1), every `Timing::Period` (100 ms). The shunt is in
+/// power 0x03 in 25 x Current_LSB (Table 6-1), every `Timing::period` (100 ms). The shunt is in
 /// microohms as on the rest of the family; a `MilliOhm` argument converts. 0x40..0x4F by
 /// A1/A0.
 template<MicroOhm Shunt      = Units::microOhm(2000),
          MicroAmp CurrentLsb = Units::microAmp(1000),
-         typename Timing     = DefaultTiming>
+         typename Timing     = Engine::DefaultTiming>
 struct Ina226 {
     static constexpr std::string_view Name = "INA226";
     /// TI INA226. INA226.md:874..883: Manufacturer ID (FEh) 5449h, Die ID (FFh) 2260h or 2261h.
     static constexpr std::array Identity{
-      RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
-      RegisterCheck{         "die-id", 0xFF, 2, true, 0xFFFE, 0x2260},
+      Engine::RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
+      Engine::RegisterCheck{         "die-id", 0xFF, 2, true, 0xFFFE, 0x2260},
     };
     static constexpr Address7    Address       = 0x40;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 16> Addresses{0x40,
-                                                        0x41,
-                                                        0x42,
-                                                        0x43,
-                                                        0x44,
-                                                        0x45,
-                                                        0x46,
-                                                        0x47,
-                                                        0x48,
-                                                        0x49,
-                                                        0x4A,
-                                                        0x4B,
-                                                        0x4C,
-                                                        0x4D,
-                                                        0x4E,
-                                                        0x4F};
+    static constexpr auto Addresses = addressRun<0x40, 16>();
 
     static_assert(Shunt > Units::microOhm(0) && CurrentLsb > Units::microAmp(0),
                   "the shunt value and the current LSB are what the calibration is computed "
                   "from; neither may be zero");
-    static constexpr std::chrono::milliseconds ReadPeriod = [] {
-        if constexpr(requires { Timing::Period; }) {
-            return Kvasir::asDuration(Timing::Period);
-        } else {
-            return std::chrono::milliseconds{100};
-        }
-    }();
+    static constexpr std::chrono::milliseconds ReadPeriod
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{100}));
     static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
-                  "Timing::Period is how often Power is read; 0 never reads it");
+                  "Timing::period is how often Power is read; 0 never reads it");
 
     /// 0.00512 / (Current_LSB[A] * R[Ohm]) = 5.12e9 / (LSB[uA] * R[uOhm]).
     static constexpr std::uint64_t CalibrationValue
@@ -78,15 +60,16 @@ struct Ina226 {
     static_assert(CurrentLsb <= Units::microAmp(65535),
                   "a full-scale current count times CurrentLsb is carried in 32 bits");
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::write({.reg = 0x00, .payload = {0x41, 0x27}}
-      ),
+      Engine::Step::write({.reg = 0x00, .payload = {0x41, 0x27}}),
     };
+    // clang-format on
 
     /// Calibration (05h). It resets to 0 -- current and power then read 0 -- when the part
     /// browns out or sees a general-call reset while the MCU keeps running, so it is read back
     /// every second and written again when it has been lost, as Linux ina2xx.c restores it.
-    struct ShuntCal : Groups::Word<0x05, Calibration> {
+    struct ShuntCal : Engine::Groups::Word<0x05, Calibration> {
         static constexpr std::chrono::milliseconds VerifyDelay{3};
         static constexpr std::chrono::milliseconds VerifyInterval{1000};
     };
@@ -106,10 +89,11 @@ struct Ina226 {
 
     struct Power {
         static constexpr auto       Period = ReadPeriod;
-        static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 2, .offset = 0}),
-                                          Step::read({.reg = 0x02, .count = 2, .offset = 2}),
-                                          Step::read({.reg = 0x03, .count = 2, .offset = 4}),
-                                          Step::read({.reg = 0x04, .count = 2, .offset = 6})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x02, .count = 2, .offset = 2}),
+          Engine::Step::read({.reg = 0x03, .count = 2, .offset = 4}),
+          Engine::Step::read({.reg = 0x04, .count = 2, .offset = 6})};
 
         struct Sample {
             MicroVolt shuntVoltage{};
@@ -132,8 +116,8 @@ struct Ina226 {
         }
     };
 
-    using Reads  = List<Power>;
-    using Writes = List<ShuntCal>;
+    using Reads  = Engine::List<Power>;
+    using Writes = Engine::List<ShuntCal>;
 };
 
 }   // namespace Kvasir::I2C::Chips

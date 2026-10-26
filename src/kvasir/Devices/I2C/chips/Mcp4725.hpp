@@ -1,7 +1,8 @@
 #pragma once
 
 #include "../../Duration.hpp"
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -49,16 +50,15 @@ namespace Mcp4725Detail {
 /// after a reset. `Supply` only scales `codeFor()` and `Status::Sample::voltage()`; it does
 /// not reach the chip. 0x60..0x67: A0 is a pin, A2 A1 are factory options.
 ///
-/// `Timing::LevelPeriod` rewrites a level the application set at that period: a part that
+/// `Timing::levelPeriod` rewrites a level the application set at that period: a part that
 /// browned out comes back at its EEPROM value without a NAK, and there is no cheap read-back.
-template<MilliVolt Supply = Units::milliVolt(3300), typename Timing = DefaultTiming>
+template<MilliVolt Supply = Units::milliVolt(3300), typename Timing = Engine::DefaultTiming>
 struct Mcp4725 {
     static constexpr std::string_view Name          = "MCP4725";
     static constexpr Address7         Address       = 0x60;
     static constexpr std::size_t      RegisterBytes = 0;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67};
+    static constexpr auto Addresses = addressRun<0x60, 8>();
 
     static_assert(Supply > Units::milliVolt(0),
                   "the supply is what a code is a fraction of");
@@ -90,9 +90,9 @@ struct Mcp4725 {
     struct LevelRewrite {};
 
     template<typename T>
-        requires requires { T::LevelPeriod; }
+        requires requires { T::levelPeriod; }
     struct LevelRewrite<T> {
-        static constexpr std::chrono::milliseconds Period = Kvasir::asDuration(T::LevelPeriod);
+        static constexpr std::chrono::milliseconds Period = Kvasir::asDuration(T::levelPeriod);
     };
 
     /// The output, 0..4095 of VDD.
@@ -100,12 +100,12 @@ struct Mcp4725 {
         using Value                        = Output;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>((static_cast<unsigned>(value.powerDown) << 4)
                                                | ((value.code >> 8) & 0x0FU));
             buffer[1] = static_cast<std::byte>(value.code & 0xFF);
-            return Step::commandBuffer({.offset = 0, .count = 2});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 2});
         }
     };
 
@@ -118,20 +118,20 @@ struct Mcp4725 {
         /// another of the part's finite write cycles. Level (volatile) is replayed instead.
         static constexpr bool Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0]
               = static_cast<std::byte>(0x60U | (static_cast<unsigned>(value.powerDown) << 1));
             buffer[1] = static_cast<std::byte>((value.code >> 4) & 0xFF);
             buffer[2] = static_cast<std::byte>((value.code & 0x0F) << 4);
-            return Step::commandBuffer(
+            return Engine::Step::commandBuffer(
               {.offset = 0, .count = 3, .delay = std::chrono::milliseconds{50}});
         }
     };
 
     /// On demand (request<Status>()): what the part holds.
     struct Status {
-        static constexpr std::array Steps{Step::receive({.count = 5, .offset = 0})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 5, .offset = 0})};
 
         struct Sample {
             bool          ready{};       ///< RDY/BSY: no EEPROM write in progress
@@ -162,8 +162,8 @@ struct Mcp4725 {
         }
     };
 
-    using Reads  = List<Status>;
-    using Writes = List<Level, Persist>;
+    using Reads  = Engine::List<Status>;
+    using Writes = Engine::List<Level, Persist>;
 };
 
 }   // namespace Kvasir::I2C::Chips

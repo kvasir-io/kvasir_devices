@@ -3,13 +3,10 @@
 #include "../Quantities.hpp"
 
 /// The quantities live in Kvasir::Units (../Quantities.hpp), shared with the SPI drivers. The
-/// I2C spellings are aliases of them: `Kvasir::I2C::Units::celsius`,
-/// `I2C::CentiDegC` unqualified inside a description, `I2C::TemperatureSource`.
+/// quantity types are declared into Kvasir::I2C as well, so a description writes `CentiDegC`
+/// unqualified; everything else (the units, `si`, `mpu`, `in()`) is spelled `Kvasir::Units::`.
 namespace Kvasir::I2C {
 
-namespace Units = ::Kvasir::Units;
-
-// The aliases are visible unqualified inside a description, which is where they are written.
 using Units::CentiDegC;
 using Units::DeciDegC;
 using Units::DegC;
@@ -52,7 +49,5 @@ using Units::Percent;
 using Units::PicoFarad;
 using Units::Ppm;
 using Units::Rpm;
-
-using ::Kvasir::TemperatureSource;
 
 }   // namespace Kvasir::I2C

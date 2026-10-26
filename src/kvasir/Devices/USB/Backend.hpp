@@ -21,9 +21,9 @@
 ///
 /// THE CONTROLLER
 ///
-///     static constexpr std::size_t MaxPacketSize;   // has to be USB::MaxPacketSize (64)
-///     static constexpr std::size_t EndpointCount;   // endpoint numbers it has, endpoint 0 included
-///     static constexpr bool        AsyncCancel;     // see "Taking packets back"
+///     static constexpr std::size_t maxPacketSize;   // has to be USB::MaxPacketSize (64)
+///     static constexpr std::size_t endpointCount;   // endpoint numbers it has, endpoint 0 included
+///     static constexpr bool        asyncCancel;     // see "Taking packets back"
 ///
 ///     template<auto Handler> using Isr;             // the vector table entries that run Handler
 ///     using Provides; using Claims;                 // Startup resources        (each optional)
@@ -53,7 +53,7 @@
 ///     Sink::busReset()                         nothing else is reported from the same interrupt
 ///     Sink::setup(SetupPacket const&)          after the completions that came before it
 ///     Sink::transferComplete(ep, in)           one packet went out or came in
-///     Sink::cancelComplete(ep, in)             AsyncCancel only
+///     Sink::cancelComplete(ep, in)             asyncCancel only
 ///     Sink::startOfFrame(std::uint16_t)        only when the config asks (ConfigTraits::UseSof)
 ///     Sink::suspend() / Sink::resume()         where the controller can tell; optional
 ///
@@ -66,9 +66,9 @@
 /// One type per endpoint number and direction, whoever names it: its state is static. Packets are
 /// at most MaxPacketSize, and the backend copies - a span handed over is free again on return.
 ///
-///     static constexpr std::size_t QueueDepth;   // packets that can be with the controller at once
-///     static constexpr bool        AsyncCancel;  // the controller's
-///     using FreeBuffers = std::array<bool, ...>; // one flag per hardware buffer (>= QueueDepth)
+///     static constexpr std::size_t queueDepth;   // packets that can be with the controller at once
+///     static constexpr bool        asyncCancel;  // the controller's
+///     using FreeBuffers = std::array<bool, ...>; // one flag per hardware buffer (>= queueDepth)
 ///     static FreeBuffers freeBuffers();          // which of them are free, asked of the hardware
 ///     static std::size_t armedBuffers();         // how many are not
 ///
@@ -124,9 +124,9 @@
 ///
 /// Taking packets back. cancel() takes whatever is armed away from the controller.
 ///
-///     AsyncCancel = false    auto cancel() -> std::size_t;   done on return. IN: how many armed
+///     asyncCancel = false    auto cancel() -> std::size_t;   done on return. IN: how many armed
 ///                            packets were never sent, which the caller may hand over again.
-///     AsyncCancel = true     void cancel();                  a request. The controller answers
+///     asyncCancel = true     void cancel();                  a request. The controller answers
 ///                            with Sink::cancelComplete, and there
 ///                            std::size_t cancelComplete();   finishes it and returns that count.
 ///
@@ -181,8 +181,8 @@ using EndpointOf = typename BackendOf<DeviceT>::template Endpoint<Number, Dir, T
 namespace detail {
     template<typename E>
     concept EndpointCommon = requires {
-        { E::QueueDepth } -> std::convertible_to<std::size_t>;
-        { E::AsyncCancel } -> std::convertible_to<bool>;
+        { E::queueDepth } -> std::convertible_to<std::size_t>;
+        { E::asyncCancel } -> std::convertible_to<bool>;
         typename E::FreeBuffers;
         { E::freeBuffers() } -> std::same_as<typename E::FreeBuffers>;
         { E::armedBuffers() } -> std::convertible_to<std::size_t>;
@@ -195,9 +195,9 @@ namespace detail {
     };
 
     template<typename E>
-    concept EndpointCancel = (E::AsyncCancel && requires {
+    concept EndpointCancel = (E::asyncCancel && requires {
                                  { E::cancelComplete() } -> std::convertible_to<std::size_t>;
-                             }) || (!E::AsyncCancel && requires {
+                             }) || (!E::asyncCancel && requires {
                                  { E::cancel() } -> std::convertible_to<std::size_t>;
                              });
 
@@ -218,9 +218,9 @@ namespace detail {
 
     template<typename B>
     concept Controller = requires(std::uint8_t address) {
-        { B::MaxPacketSize } -> std::convertible_to<std::size_t>;
-        { B::EndpointCount } -> std::convertible_to<std::size_t>;
-        { B::AsyncCancel } -> std::convertible_to<bool>;
+        { B::maxPacketSize } -> std::convertible_to<std::size_t>;
+        { B::endpointCount } -> std::convertible_to<std::size_t>;
+        { B::asyncCancel } -> std::convertible_to<bool>;
         B::prepare();
         B::connect();
         B::setAddress(address);

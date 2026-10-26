@@ -1,16 +1,11 @@
 /// The MAX31865: the Callendar-Van Dusen arithmetic, and the driver against a model of the part.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/chips/Max31865.hpp>
 #include <span>
 #include <support/FakeClock.hpp>
@@ -32,7 +27,7 @@ struct Part {
     std::uint16_t               code{16384};   // R = R0: 0 degC
     bool                        overVoltage{};
     Release                     release{Release::outside};
-    FakeClock::time_point       nextConversion{};
+    FakeClock::time_point       nextConversion;
 
     void powerOn() {
         reg                        = {0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00};
@@ -104,15 +99,15 @@ Part part{};
 
 /// The old behaviour: a faulted conversion only cleared, registers never read back.
 struct OldBehaviour : Kvasir::SPI::Max31865Defaults {
-    static constexpr std::uint16_t RejectedRestart = 0;
-    static constexpr auto          RegisterCheck   = std::chrono::seconds{0};
+    static constexpr std::uint16_t rejectedRestart = 0;
+    static constexpr auto          registerCheck   = std::chrono::seconds{0};
 };
 
 struct Tag {};
 
 /// The older driver: bring-ups only.
 struct NoLevers : Kvasir::SPI::Max31865Defaults {
-    static constexpr std::uint8_t PlainBringUps = 0;
+    static constexpr std::uint8_t plainBringUps = 0;
 };
 
 using Lever = Kvasir::SPI::Max31865Lever;
@@ -135,33 +130,24 @@ using OldRtd   = Kvasir::SPI::Max31865<Bus,
                                        OldBehaviour>;
 
 /// Declared right after a case's device: resets the bus while the device still lives.
-struct BusScope {
-    ~BusScope() { Bus::reset(); }
-};
+using BusScope = Spi::BusScope<Bus>;
 
 void fresh() {
-    Bus::reset();
-    FakeClock::set(1s);
-    Pins::reset();
-    Log::reset();
+    Spi::Harness::fresh<Bus>([](std::uint8_t m) { return part.exchange(m); });
     part = {};
     part.powerOn();
-    Bus::partSelected = [] { return !Pins::level[Spi::Cs::id]; };
-    Bus::exchange     = [](std::uint8_t m) { return part.exchange(m); };
 }
+
+/// 1 ms turns, the clock first, then the part (unless the case has taken it off the bus).
+constexpr Spi::Loop loop{.step = 1ms, .order = Spi::ClockOrder::first};
 
 template<typename D>
 void run(D&                        d,
          std::chrono::milliseconds span,
          bool                      withPart = true) {
-    auto const until = FakeClock::now() + span;
-    while(FakeClock::now() < until) {
-        FakeClock::advance(1ms);
+    Spi::Harness::runFor<Bus>(d, span, loop, [withPart] {
         if(withPart) { part.tick(); }
-        Bus::handler();
-        d.handler();
-        Bus::tick();
-    }
+    });
 }
 
 /// Runs until the driver has a reading, at most `span`; how long it took.
@@ -196,12 +182,13 @@ void bringUp() {
     testCase("MAX31865: bring-up writes the thresholds and reads the registers back");
     fresh();
     part.reg[3] = 0x12;   // left over from before the MCU's reset
-    Rtd        rtd{};
-    BusScope   scope{};
-    auto const took = untilReading(rtd, 2s);
-    check(rtd.temperature().has_value(), "a reading after the bring-up");
+    Rtd            rtd{};
+    BusScope const scope{};
+    auto const     took    = untilReading(rtd, 2s);
+    auto const     reading = rtd.temperature();
+    check(reading.has_value(), "a reading after the bring-up");
     check(took < 700ms, "within the startup delay and a conversion");
-    checkEq(*rtd.temperature(), 0, "0 degC");
+    if(reading) { checkEq(*reading, 0, "0 degC"); }
     checkEq(part.reg[0], 0xC1, "VBIAS, auto, 50 Hz");
     checkEq(part.reg[3], 0xFF, "the high threshold back at its POR value");
     checkEq(rtd.bringUps(), 1, "one bring-up");
@@ -221,8 +208,8 @@ void bringUp() {
 void thresholdChanged() {
     testCase("MAX31865: a threshold changed under the driver (every conversion faulted)");
     fresh();
-    Rtd      rtd{};
-    BusScope scope{};
+    Rtd            rtd{};
+    BusScope const scope{};
     untilReading(rtd, 2s);
     part.reg[3]            = 0x00;   // high threshold 0x00FF: 0 degC is past it
     part.reg[4]            = 0xFF;
@@ -245,8 +232,8 @@ void thresholdChanged() {
 
     testCase("MAX31865: ... and with the knobs of the first driver it stays without one");
     fresh();
-    OldRtd   old{};
-    BusScope oldScope{};
+    OldRtd         old{};
+    BusScope const oldScope{};
     untilReading(old, 2s);
     part.reg[3] = 0x00;
     part.reg[4] = 0xFF;
@@ -257,8 +244,8 @@ void thresholdChanged() {
 void configurationChanged() {
     testCase("MAX31865: the configuration changed under the driver, conversions still coming");
     fresh();
-    Rtd      rtd{};
-    BusScope scope{};
+    Rtd            rtd{};
+    BusScope const scope{};
     untilReading(rtd, 2s);
     part.reg[0] = 0xD1;   // 3-wire: still converting, the reading silently wrong
     run(rtd, 11s);
@@ -270,8 +257,8 @@ void configurationChanged() {
 void powerLost() {
     testCase("MAX31865: the part reset under the driver (POR: no conversions)");
     fresh();
-    Rtd      rtd{};
-    BusScope scope{};
+    Rtd            rtd{};
+    BusScope const scope{};
     untilReading(rtd, 2s);
     part.powerOn();
     part.reg[0] = 0x00;
@@ -285,8 +272,8 @@ void powerLost() {
 void overVoltage() {
     testCase("MAX31865: an overvoltage that lasts: no reading, then back when it is gone");
     fresh();
-    Rtd      rtd{};
-    BusScope scope{};
+    Rtd            rtd{};
+    BusScope const scope{};
     untilReading(rtd, 2s);
     part.overVoltage = true;
     run(rtd, 30s);
@@ -310,8 +297,8 @@ void overVoltage() {
 void heldUntil(Part::Release by,
                Lever         lever) {
     fresh();
-    Rtd      rtd{};
-    BusScope scope{};
+    Rtd            rtd{};
+    BusScope const scope{};
     untilReading(rtd, 2s);
     part.release     = by;
     part.overVoltage = true;
@@ -338,8 +325,8 @@ void levers() {
 
     testCase("MAX31865: ... and bring-ups alone (the older driver) never end it");
     fresh();
-    PlainRtd plain{};
-    BusScope scope{};
+    PlainRtd       plain{};
+    BusScope const scope{};
     untilReading(plain, 2s);
     part.release     = Part::Release::vbiasOff;
     part.overVoltage = true;
@@ -352,8 +339,8 @@ void levers() {
 void absentOnlyAfterAFailedBringUp() {
     testCase("MAX31865: absent() means a bring-up failed since the part last answered");
     fresh();
-    Rtd      rtd{};
-    BusScope scope{};
+    Rtd            rtd{};
+    BusScope const scope{};
     untilReading(rtd, 2s);
     check(rtd.temperature().has_value() && !rtd.absent(), "answering: not absent");
     // the part resets under the driver: a bring-up follows, with nothing unidentified since
@@ -384,8 +371,8 @@ void noPart() {
         fresh();
         Bus::exchange = {};
         Bus::floating = level;
-        Rtd      rtd{};
-        BusScope scope{};
+        Rtd            rtd{};
+        BusScope const scope{};
         // DRDY floats low as well: the driver would read a conversion whenever it may
         Pins::level[Spi::Drdy::id] = false;
         run(rtd, 10s, false);

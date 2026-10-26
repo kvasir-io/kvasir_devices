@@ -8,7 +8,7 @@
 
 /// The BME280 / BMP280 trimming parameters and the datasheet's integer compensation
 /// (BST-BME280-DS001 4.2.3 rev 1.1, BMP280 Table 17: the same formulas), bus-neutral: the
-/// I2C description (I2C/chips/Bme280.hpp) and the SPI driver (SPI/Bme280.hpp) both decode
+/// I2C description (I2C/chips/Bme280.hpp) and the SPI driver (SPI/chips/Bme280.hpp) both decode
 /// through it, so a compensation fix lands in both at once.
 namespace Kvasir::Bme280Compensation {
 

@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -32,25 +34,24 @@ struct Mcp23017 {
     /// a pair with sequential operation on (MCP23017.md:480..541). The part has no identity register.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"iocon", 0x0A, 1, true, 0xE0, 0x00},
+      Engine::RegisterCheck{"iocon", 0x0A, 1, true, 0xE0, 0x00},
     };
     static constexpr Address7    Address       = 0x20;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27};
+    static constexpr auto Addresses = addressRun<0x20, 8>();
 
     static constexpr std::array Init{
-      Step::write(
+      Engine::Step::write(
         {.reg     = 0x05,
          .payload = {0x00}}),   // IOCON if BANK = 1 (else GPINTENB): BANK = 0 from here on
-      Step::write(
+      Engine::Step::write(
         {.reg = 0x0A, .payload = {0x00}}),   // IOCON in BANK = 0: sequential, no mirroring
     };
 
     struct Pins {
         static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Step::read({.reg = 0x12, .count = 2})};
+        static constexpr std::array Steps{Engine::Step::read({.reg = 0x12, .count = 2})};
 
         struct Sample {
             std::uint16_t port{};   ///< GPIOA | GPIOB << 8
@@ -64,28 +65,15 @@ struct Mcp23017 {
         [[nodiscard]] static constexpr Sample decode(Bytes data) { return {data.le16(0)}; }
     };
 
-    /// One 16-bit pair, A in the low byte, with the reset value the chip powers up in:
+    /// One 16-bit pair each, A in the low byte, with the reset value the chip powers up in:
     /// written again after every bring-up.
-    template<std::uint16_t Reg, std::uint16_t Init>
-    struct Pair {
-        using Value                          = std::uint16_t;
-        static constexpr std::size_t Bytes   = 2;
-        static constexpr Value       Initial = Init;
+    using Direction = Engine::Groups::WordLe<0x00, 0xFFFF>;   ///< IODIR: 1 = input
+    using PullUp = Engine::Groups::WordLe<0x0C, 0x0000>;   ///< GPPU: 1 = 100 k pull-up on an input
+    using Output = Engine::Groups::WordLe<0x14, 0x0000>;   ///< OLAT
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
-            putLe16(buffer, 0, value);
-            return Step::writeBuffer({.reg = Reg, .offset = 0, .count = 2});
-        }
-    };
-
-    using Direction = Pair<0x00, 0xFFFF>;   ///< IODIR: 1 = input
-    using PullUp    = Pair<0x0C, 0x0000>;   ///< GPPU: 1 = 100 k pull-up on an input
-    using Output    = Pair<0x14, 0x0000>;   ///< OLAT
-
-    using Reads = List<Pins>;
+    using Reads = Engine::List<Pins>;
     /// Output before Direction: the latches hold their value before a pin becomes an output.
-    using Writes = List<Output, Direction, PullUp>;
+    using Writes = Engine::List<Output, Direction, PullUp>;
 };
 
 }   // namespace Kvasir::I2C::Chips

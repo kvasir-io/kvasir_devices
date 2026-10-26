@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -23,39 +25,34 @@ namespace Kvasir::I2C::Chips {
 /// Unlike the INA226 family there is no calibration register and no current register -- the
 /// part reports shunt voltage and the current is worked out here, which is why the shunt
 /// value is a template parameter. `Ina3221<>` is the 50 mOhm the +-3.2 A breakout uses,
-/// read every `Timing::Period` (200 ms; at the reset configuration a full round of the three
+/// read every `Timing::period` (200 ms; at the reset configuration a full round of the three
 /// channels takes 6.6 ms). 0x40..0x43 by the A0 pin.
-template<MicroOhm Shunt = Units::microOhm(50000), typename Timing = DefaultTiming>
+template<MicroOhm Shunt = Units::microOhm(50000), typename Timing = Engine::DefaultTiming>
 struct Ina3221 {
     static constexpr std::string_view Name = "INA3221";
     /// TI INA3221. INA3221.md:914..915, Manufacturer ID FEh = 5449h and Die ID FFh = 3220h.
     /// Configuration (00h, INA3221.md:939..998): RST clear, CH1en..CH3en set, MODE3..1 = 111b, shunt
     /// and bus continuous.
     static constexpr std::array Identity{
-      RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
-      RegisterCheck{         "die-id", 0xFF, 2, true, 0xFFFF, 0x3220},
+      Engine::RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
+      Engine::RegisterCheck{         "die-id", 0xFF, 2, true, 0xFFFF, 0x3220},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"channels-continuous", 0x00, 2, true, 0xF007, 0x7007},
+      Engine::RegisterCheck{"channels-continuous", 0x00, 2, true, 0xF007, 0x7007},
     };
     static constexpr Address7    Address       = 0x40;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x40, 0x41, 0x42, 0x43};
+    static constexpr auto Addresses = addressRun<0x40, 4>();
 
     static_assert(Shunt >= Units::microOhm(77),
                   "the shunt value is what the current is worked out from: below 77 uOhm the "
                   "full-scale current is past the 32 bits a MicroAmp holds");
-    static constexpr std::chrono::milliseconds ReadPeriod = [] {
-        if constexpr(requires { Timing::Period; }) {
-            return Kvasir::asDuration(Timing::Period);
-        } else {
-            return std::chrono::milliseconds{200};
-        }
-    }();
+    static constexpr std::chrono::milliseconds ReadPeriod
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{200}));
     static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
-                  "Timing::Period is how often Power is read; 0 never reads it");
+                  "Timing::period is how often Power is read; 0 never reads it");
 
     static constexpr std::size_t Channels = 3;
 
@@ -78,12 +75,12 @@ struct Ina3221 {
         /// Shunt and bus interleaved, channel by channel; the pointer does not
         /// auto-increment, so each register is its own read.
         static constexpr std::array Steps{
-          Step::read({.reg = 0x01, .count = 2, .offset = 0}),
-          Step::read({.reg = 0x02, .count = 2, .offset = 2}),
-          Step::read({.reg = 0x03, .count = 2, .offset = 4}),
-          Step::read({.reg = 0x04, .count = 2, .offset = 6}),
-          Step::read({.reg = 0x05, .count = 2, .offset = 8}),
-          Step::read({.reg = 0x06, .count = 2, .offset = 10}),
+          Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x02, .count = 2, .offset = 2}),
+          Engine::Step::read({.reg = 0x03, .count = 2, .offset = 4}),
+          Engine::Step::read({.reg = 0x04, .count = 2, .offset = 6}),
+          Engine::Step::read({.reg = 0x05, .count = 2, .offset = 8}),
+          Engine::Step::read({.reg = 0x06, .count = 2, .offset = 10}),
         };
 
         struct Sample {
@@ -117,10 +114,10 @@ struct Ina3221 {
         /// run its course disables that alert until a power cycle or a reset (7.3.2.4).
         static constexpr Value Initial = 0x7127;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, value);
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 2});
         }
     };
 
@@ -130,16 +127,16 @@ struct Ina3221 {
         static constexpr std::size_t Items = 6;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         limit,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             // 13 bits signed: -4096..4095 counts, so a limit past +-163.8 mV clamps rather than
             // wrapping into one of the other sign
             auto const raw = Units::value(limit) / 40000;
             auto const code
               = static_cast<std::int16_t>(raw > 4095 ? 4095 : (raw < -4096 ? -4096 : raw));
             putBe16(buffer, 0, static_cast<std::uint16_t>(static_cast<std::uint16_t>(code) << 3));
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = static_cast<std::uint16_t>(0x07 + item), .offset = 0, .count = 2});
         }
     };
@@ -151,8 +148,8 @@ struct Ina3221 {
         return 2 * channel + 1;
     }
 
-    using Reads  = List<Power>;
-    using Writes = List<Config, Limits>;
+    using Reads  = Engine::List<Power>;
+    using Writes = Engine::List<Config, Limits>;
 };
 
 }   // namespace Kvasir::I2C::Chips

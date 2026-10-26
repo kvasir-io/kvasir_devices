@@ -1,18 +1,13 @@
 /// LTC2641: the 16-bit frame for every resolution (LTC2641_LTC2642.md, Serial Interface and Tables
 /// 1a-1c), the code-to-voltage line, and the Dac over the queued master - one 16-bit frame per
 /// write, CS high after it, the newest code winning while a frame is out.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/chips/Ltc2641.hpp>
 #include <support/FakeClock.hpp>
 #include <vector>
@@ -83,7 +78,7 @@ using Cs  = Spi::Cs;
 /// The part: DIN shifted in on each byte while CS is low, the word latched when CS rises after
 /// exactly 16 bits (md:529).
 struct Part {
-    std::vector<std::uint16_t> latched{};
+    std::vector<std::uint16_t> latched;
     std::uint32_t              shift{};
     int                        bits{};
     std::uint32_t              csRisesSeen{};
@@ -109,18 +104,15 @@ Part* part{};
 std::uint8_t onByte(std::uint8_t mosi) { return part->exchange(mosi); }
 
 void fresh(Part& p) {
-    Bus::reset();
-    Pins::reset();
-    FakeClock::set(1s);
-    Log::reset();
-    part              = &p;
-    Bus::partSelected = [] { return !Pins::level[Cs::id]; };
-    Bus::exchange     = onByte;
+    Spi::Harness::fresh<Bus>(onByte);
+    part = &p;
 }
 
+/// Not a harness loop: no clock and no turn of the Dac's own - its write() queues, and the
+/// master's turns plus a latch on each CS edge are all a frame needs.
 void settle(Part& p) {
     for(int i = 0; i < 4; ++i) {
-        Bus::handler();
+        Bus::turn();
         Bus::tick();
         p.latch();
     }
@@ -153,7 +145,7 @@ void newestWins() {
     D::Dac<Bus, Cs, 12> dac{};
     Bus::stall = true;
     dac.write(0x001);
-    Bus::handler();
+    Bus::turn();
     check(dac.busy(), "the first frame is out");
     dac.write(0x002);
     dac.write(0x003);

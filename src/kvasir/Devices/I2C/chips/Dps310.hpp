@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -42,7 +43,7 @@ namespace Dps310Detail {
     constexpr std::array<std::int32_t, 8>
       ScaleFactor{524288, 1572864, 3670016, 7864320, 253952, 516096, 1040384, 2088960};
 
-    [[nodiscard]] constexpr std::int32_t scaleFactor(std::uint8_t osr) {
+    [[nodiscard]] constexpr std::int32_t scaleFactorOf(std::uint8_t osr) {
         return ScaleFactor[osr & 0x07U];
     }
 
@@ -125,11 +126,11 @@ struct Dps310 {
     /// Configuration: MEAS_CFG (0x08, DPS310.md:1235): COEF_RDY and SENSOR_RDY set, MEAS_CTRL 111b,
     /// continuous pressure and temperature.
     static constexpr std::array Identity{
-      RegisterCheck{"product-id", 0x0D, 1, true, 0x0F, 0x00},
+      Engine::RegisterCheck{"product-id", 0x0D, 1, true, 0x0F, 0x00},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"ready-and-continuous", 0x08, 1, true, 0xC7, 0xC7},
+      Engine::RegisterCheck{"ready-and-continuous", 0x08, 1, true, 0xC7, 0xC7},
     };
     static constexpr Address7    Address       = 0x77;
     static constexpr std::size_t RegisterBytes = 1;
@@ -147,13 +148,13 @@ struct Dps310 {
     /// The coefficients are ready 40 ms after power-up (TCoef_rdy).
     static constexpr auto StartupDelay = std::chrono::milliseconds{50};
 
-    [[nodiscard]] static constexpr std::uint8_t prsCfg(std::uint8_t osr,
-                                                       std::uint8_t rate) {
+    [[nodiscard]] static constexpr std::uint8_t prsCfgOf(std::uint8_t osr,
+                                                         std::uint8_t rate) {
         return static_cast<std::uint8_t>(((rate & 0x07U) << 4) | (osr & 0x07U));
     }
 
-    [[nodiscard]] static constexpr std::uint8_t tmpCfg(std::uint8_t osr,
-                                                       std::uint8_t rate) {
+    [[nodiscard]] static constexpr std::uint8_t tmpCfgOf(std::uint8_t osr,
+                                                         std::uint8_t rate) {
         return static_cast<std::uint8_t>(
           (Sensor == Dps310Detail::TempSensor::external ? 0x80U : 0x00U) | ((rate & 0x07U) << 4)
           | (osr & 0x07U));
@@ -161,37 +162,39 @@ struct Dps310 {
 
     /// Above 8x oversampling the result must be shifted: bit 2 is P_SHIFT, bit 3 T_SHIFT
     /// (CFG_REG, 8.6; Linux dps310.c names bit 4 for the pressure shift, which is INT_PRS).
-    [[nodiscard]] static constexpr std::uint8_t cfgReg(std::uint8_t osrP,
-                                                       std::uint8_t osrT) {
+    [[nodiscard]] static constexpr std::uint8_t cfgRegOf(std::uint8_t osrP,
+                                                         std::uint8_t osrT) {
         return static_cast<std::uint8_t>((osrP > 3 ? 0x04U : 0x00U) | (osrT > 3 ? 0x08U : 0x00U));
     }
 
-    static constexpr std::uint8_t PrsCfg = prsCfg(OsrP, RateP);
-    static constexpr std::uint8_t TmpCfg = tmpCfg(OsrT, RateT);
-    static constexpr std::uint8_t CfgReg = cfgReg(OsrP, OsrT);
+    static constexpr std::uint8_t PrsCfg = prsCfgOf(OsrP, RateP);
+    static constexpr std::uint8_t TmpCfg = tmpCfgOf(OsrT, RateT);
+    static constexpr std::uint8_t CfgReg = cfgRegOf(OsrP, OsrT);
 
-    static constexpr std::int32_t Kp = Dps310Detail::scaleFactor(OsrP);
-    static constexpr std::int32_t Kt = Dps310Detail::scaleFactor(OsrT);
+    static constexpr std::int32_t Kp = Dps310Detail::scaleFactorOf(OsrP);
+    static constexpr std::int32_t Kt = Dps310Detail::scaleFactorOf(OsrT);
 
     static constexpr std::chrono::milliseconds MeasurementPeriod
       = Dps310Detail::measurementPeriod(RateP, RateT);
 
     static constexpr std::array Init{
-      Step::read({.reg = 0x08, .count = 1, .offset = 19}),   // MEAS_CFG: COEF_RDY
-      Step::read({.reg = 0x28, .count = 1, .offset = 0}),    // COEF_SRCE
-      Step::read({.reg = 0x10, .count = 18, .offset = 1}),   // the nine calibration coefficients
-      Step::identify(),
-      Step::write({.reg = 0x08, .payload = {0x00}}),   // standby first
-      Step::write({.reg     = 0x0E,
-                   .payload = {0xA5}}),   // the temperature erratum workaround (Infineon's driver)
-      Step::write({.reg = 0x0F, .payload = {0x96}}),
-      Step::write({.reg = 0x62, .payload = {0x02}}),
-      Step::write({.reg = 0x0E, .payload = {0x00}}),
-      Step::write({.reg = 0x0F, .payload = {0x00}}),
-      Step::write({.reg = 0x06, .payload = {PrsCfg}}),
-      Step::write({.reg = 0x07, .payload = {TmpCfg}}),
-      Step::write({.reg = 0x09, .payload = {CfgReg}}),
-      Step::write(
+      Engine::Step::read({.reg = 0x08, .count = 1, .offset = 19}),   // MEAS_CFG: COEF_RDY
+      Engine::Step::read({.reg = 0x28, .count = 1, .offset = 0}),    // COEF_SRCE
+      Engine::Step::read(
+        {.reg = 0x10, .count = 18, .offset = 1}),   // the nine calibration coefficients
+      Engine::Step::identify(),
+      Engine::Step::write({.reg = 0x08, .payload = {0x00}}),   // standby first
+      Engine::Step::write(
+        {.reg     = 0x0E,
+         .payload = {0xA5}}),   // the temperature erratum workaround (Infineon's driver)
+      Engine::Step::write({.reg = 0x0F, .payload = {0x96}}),
+      Engine::Step::write({.reg = 0x62, .payload = {0x02}}),
+      Engine::Step::write({.reg = 0x0E, .payload = {0x00}}),
+      Engine::Step::write({.reg = 0x0F, .payload = {0x00}}),
+      Engine::Step::write({.reg = 0x06, .payload = {PrsCfg}}),
+      Engine::Step::write({.reg = 0x07, .payload = {TmpCfg}}),
+      Engine::Step::write({.reg = 0x09, .payload = {CfgReg}}),
+      Engine::Step::write(
         {.reg     = 0x08,
          .payload = {0x07},
          .delay   = std::chrono::milliseconds{100}}),   // continuous pressure and temperature
@@ -249,11 +252,12 @@ struct Dps310 {
         /// The faster of the two channels' rates, as configured at compile time.
         static constexpr auto       Period = MeasurementPeriod;
         static constexpr std::array Steps{
-          Step::read({.reg = 0x08, .count = 1, .offset = 6}),   // MEAS_CFG: PRS_RDY, TMP_RDY
-          Step::read({.reg = 0x00, .count = 6, .offset = 0})};
+          Engine::Step::read(
+            {.reg = 0x08, .count = 1, .offset = 6}),   // MEAS_CFG: PRS_RDY, TMP_RDY
+          Engine::Step::read({.reg = 0x00, .count = 6, .offset = 0})};
 
         /// And the rate the part runs at now, after a Config write.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return Dps310Detail::measurementPeriod(state.rateP, state.rateT);
         }
 
@@ -262,13 +266,13 @@ struct Dps310 {
             MilliDegC temperature{};   ///< 0.001 degC
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(6) & 0x30U) == 0) { return Outcome<Sample>::unchanged(); }
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(6) & 0x30U) == 0) { return Engine::Outcome<Sample>::unchanged(); }
             std::int64_t const     praw = Bytes::signExtend(data.be24(0), 24);
             std::int64_t const     traw = Bytes::signExtend(data.be24(3), 24);
-            std::int64_t const     kp   = Dps310Detail::scaleFactor(state.osrP);
-            std::int64_t const     kt   = Dps310Detail::scaleFactor(state.osrT);
+            std::int64_t const     kp   = Dps310Detail::scaleFactorOf(state.osrP);
+            std::int64_t const     kt   = Dps310Detail::scaleFactorOf(state.osrT);
             constexpr std::int64_t S    = 256;   // fraction bits the pressure is carried at
 
             // c00 + ps * (c10 + ps * (c20 + ps * c30))
@@ -283,7 +287,8 @@ struct Dps310 {
             // T = c0 / 2 + c1 * ts, in millidegrees
             auto const t = std::int64_t{state.c0} * 500 + std::int64_t{state.c1} * 1000 * traw / kt;
 
-            return Outcome<Sample>::ok({Units::pascal((x0 + y + z) / S), Units::milliDegC(t)});
+            return Engine::Outcome<Sample>::ok(
+              {Units::pascal((x0 + y + z) / S), Units::milliDegC(t)});
         }
     };
 
@@ -296,7 +301,7 @@ struct Dps310 {
         using Value                        = Dps310Detail::Config;
         static constexpr std::size_t Bytes = 3;
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   5>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
@@ -304,16 +309,16 @@ struct Dps310 {
             auto const osrT  = static_cast<std::uint8_t>(value.osrTemperature);
             auto const rateP = static_cast<std::uint8_t>(value.ratePressure);
             auto const rateT = static_cast<std::uint8_t>(value.rateTemperature);
-            buffer[0]        = static_cast<std::byte>(prsCfg(osrP, rateP));
-            buffer[1]        = static_cast<std::byte>(tmpCfg(osrT, rateT));
-            buffer[2]        = static_cast<std::byte>(cfgReg(osrP, osrT));
+            buffer[0]        = static_cast<std::byte>(prsCfgOf(osrP, rateP));
+            buffer[1]        = static_cast<std::byte>(tmpCfgOf(osrT, rateT));
+            buffer[2]        = static_cast<std::byte>(cfgRegOf(osrP, osrT));
             return {
-              Step::write(
+              Engine::Step::write(
                 {.reg = 0x08, .payload = {0x00}}),   // idle while the configuration changes
-              Step::writeBuffer({.reg = 0x06, .offset = 0, .count = 1}),
-              Step::writeBuffer({.reg = 0x07, .offset = 1, .count = 1}),
-              Step::writeBuffer({.reg = 0x09, .offset = 2, .count = 1}),
-              Step::write(
+              Engine::Step::writeBuffer({.reg = 0x06, .offset = 0, .count = 1}),
+              Engine::Step::writeBuffer({.reg = 0x07, .offset = 1, .count = 1}),
+              Engine::Step::writeBuffer({.reg = 0x09, .offset = 2, .count = 1}),
+              Engine::Step::write(
                 {.reg = 0x08, .payload = {0x07}}),   // continuous pressure and temperature
             };
         }
@@ -327,8 +332,8 @@ struct Dps310 {
         }
     };
 
-    using Reads  = List<Measurement>;
-    using Writes = List<Config>;
+    using Reads  = Engine::List<Measurement>;
+    using Writes = Engine::List<Config>;
 };
 
 }   // namespace Kvasir::I2C::Chips

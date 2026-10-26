@@ -7,36 +7,41 @@
 // 32 bits before a CS rising edge as a command word (ADS8675.md:1494-1502).
 //
 // Contexts: sampleCallback() from the sample timer's interrupt, pinInterrupt() (which submits)
-// from the RVS pin's, the frame's callback from the master's completion, handler() from the loop.
+// from the RVS pin's, the frame's callback from the master's completion, turn() from the loop.
+#include "../../Bytes.hpp"
 #include "../../Duration.hpp"
-#include "../../Link.hpp"
 #include "../../Log.hpp"
 #include "../../Quantities.hpp"
+#include "../Client.hpp"
 #include "../QueueCore.hpp"
-#include "kvasir/Util/RateLimiter.hpp"
+#include "kvasir/Hal/Spi.hpp"
+#include "kvasir/Log/LogLimited.hpp"
+#include "kvasir/Log/RateLimiter.hpp"
+#include "kvasir/Util/Config.hpp"
+#include "kvasir/Util/Link.hpp"
 #include "kvasir/Util/StaticFunction.hpp"
 
 #include <array>
 #include <atomic>
-#include <bit>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <span>
+#include <type_traits>
 #include <utility>
 
 namespace Kvasir { namespace SPI {
 
     struct Ads8675Defaults {
         /// tD_RST_POR 20 ms typ and tPWRUP 20 ms.
-        static constexpr auto ResetLow     = std::chrono::milliseconds{500};
-        static constexpr auto ResetRecover = std::chrono::milliseconds{100};
+        static constexpr auto resetLow     = std::chrono::milliseconds{500};
+        static constexpr auto resetRecover = std::chrono::milliseconds{100};
         /// 0x04: +-0.625 x VREF (internal 4.096 V) = +-2.56 V. toVoltage() assumes this range.
-        static constexpr std::uint8_t RangeSel = 0x04;
-        static constexpr Units::Hertz MaxClock = Units::hertz(66'670'000);
+        static constexpr std::uint8_t rangeSel = 0x04;
+        static constexpr Units::Hertz maxClock = Units::hertz(66'670'000);
         /// Failed bring-ups in a row before link() says absent; it goes on regardless.
-        static constexpr std::uint8_t AbsentAfterFailures = 3;
+        static constexpr std::uint8_t absentAfterFailures = 3;
     };
 
     /// Bring-up writes RANGE_SEL and reads it back (the word comes in the next frame); a part that
@@ -44,7 +49,7 @@ namespace Kvasir { namespace SPI {
     /// after a reset (ADS8675.md:1641).
     ///
     ///     Kvasir::SPI::Ads8675<Spi, Clock, Pin::cs, Pin::rvs, Pin::rst> adc{[](Units::MicroVolt v) { ... }};
-    ///     timer ISR:  adc.sampleCallback();      RVS edge ISR: adc.pinInterrupt();      loop: adc.handler();
+    ///     timer ISR:  adc.sampleCallback();      RVS edge ISR: adc.pinInterrupt();      loop: adc.turn();
     ///
     /// A sample due while the previous frame is still on the wire is skipped and counted.
     template<typename Master,
@@ -58,47 +63,27 @@ namespace Kvasir { namespace SPI {
         using TimePoint = typename Clock::time_point;
         using Callback  = StaticFunction<void(Units::MicroVolt), 128>;
 
-        static constexpr std::chrono::milliseconds ResetLow = [] {
-            if constexpr(requires { Config::ResetLow; }) {
-                return Kvasir::asDuration(Config::ResetLow);
-            } else {
-                return std::chrono::milliseconds{Ads8675Defaults::ResetLow};
-            }
-        }();
-        static constexpr std::chrono::milliseconds ResetRecover = [] {
-            if constexpr(requires { Config::ResetRecover; }) {
-                return Kvasir::asDuration(Config::ResetRecover);
-            } else {
-                return std::chrono::milliseconds{Ads8675Defaults::ResetRecover};
-            }
-        }();
-        static constexpr std::uint8_t RangeSel = [] {
-            if constexpr(requires { Config::RangeSel; }) {
-                return static_cast<std::uint8_t>(Config::RangeSel);
-            } else {
-                return Ads8675Defaults::RangeSel;
-            }
-        }();
-        static constexpr std::uint8_t AbsentAfterFailures = [] {
-            if constexpr(requires { Config::AbsentAfterFailures; }) {
-                return static_cast<std::uint8_t>(Config::AbsentAfterFailures);
-            } else {
-                return Ads8675Defaults::AbsentAfterFailures;
-            }
-        }();
-        static constexpr auto Setup = Master::setup(ClockMode::_0, [] {
-            if constexpr(requires { Config::MaxClock; }) {
-                return Config::MaxClock;
-            } else {
-                return Ads8675Defaults::MaxClock;
-            }
-        }());
+        static constexpr std::chrono::milliseconds ResetLow = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config, resetLow, std::chrono::milliseconds{Ads8675Defaults::resetLow}));
+        static constexpr std::chrono::milliseconds ResetRecover = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config,
+                           resetRecover,
+                           std::chrono::milliseconds{Ads8675Defaults::resetRecover}));
+        static constexpr std::uint8_t RangeSel = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, rangeSel, Ads8675Defaults::rangeSel));
+        static constexpr std::uint8_t AbsentAfterFailures = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, absentAfterFailures, Ads8675Defaults::absentAfterFailures));
+        static constexpr auto Setup
+          = Master::setup(Hal::ClockMode::mode0,
+                          KVASIR_CONFIG_OR(Config, maxClock, Ads8675Defaults::maxClock));
 
         [[nodiscard]] static constexpr Units::MicroVolt toVoltage(std::int16_t code) {
             return Units::microVolt(std::int32_t{code} * 625 / 2);
         }
 
         template<typename F>
+            requires(!std::same_as<std::remove_cvref_t<F>,
+                                   Ads8675>)
         explicit Ads8675(F&& f) : dataF_{std::forward<F>(f)} {}
 
         Ads8675(Ads8675 const&)            = delete;   // the frames' callbacks point at it
@@ -122,12 +107,9 @@ namespace Kvasir { namespace SPI {
         }
 
         /// Answering once RANGE_SEL read back, absent after AbsentAfterFailures failed bring-ups.
-        [[nodiscard]] Link link() const {
-            if(ready()) { return Link::answering; }
-            return bringUpFailures_ >= AbsentAfterFailures ? Link::absent : Link::starting;
-        }
+        [[nodiscard]] Link link() const { return bringUpFailures_.link(ready()); }
 
-        [[nodiscard]] bool present() const { return ready(); }
+        [[nodiscard]] bool answering() const { return ready(); }
 
         /// CS high starts a conversion; skipped while a frame is still clocked out, which it would cut.
         void sampleCallback() {
@@ -144,10 +126,8 @@ namespace Kvasir { namespace SPI {
             if(!ready() || running_.load(std::memory_order_acquire)) { return; }
             data_               = std::array<std::byte, 4>{};
             bool const accepted = submit_([this](auto r) {
-                if(r == decltype(r)::succeeded) {
-                    std::uint16_t v{};
-                    std::memcpy(&v, data_.data(), 2);
-                    auto const code = static_cast<std::int32_t>(std::byteswap(v) >> 2) - 8192;
+                if(r == decltype(r)::ok) {
+                    auto const code = static_cast<std::int32_t>(Bytes{data_}.be16(0) >> 2) - 8192;
                     samples_.fetch_add(1, std::memory_order_relaxed);
                     dataF_(toVoltage(static_cast<std::int16_t>(code)));
                 } else {
@@ -163,7 +143,7 @@ namespace Kvasir { namespace SPI {
             }
         }
 
-        void handler() {
+        void turn() {
             auto const now = Clock::now();
             logSkipped_(now);
             switch(state_) {
@@ -218,8 +198,8 @@ namespace Kvasir { namespace SPI {
                 // CS stays low: the first sampleCallback() raises it
                 if(!running_.load(std::memory_order_acquire)) {
                     if(ok_ && data_[0] == std::byte{0x00} && data_[1] == std::byte{RangeSel}) {
-                        state_           = State::idle;
-                        bringUpFailures_ = 0;
+                        state_ = State::idle;
+                        bringUpFailures_.cleared();
                         ready_.store(true, std::memory_order_release);
                     } else {
                         errors_.fetch_add(1, std::memory_order_relaxed);
@@ -252,16 +232,14 @@ namespace Kvasir { namespace SPI {
 
         static constexpr std::uint32_t SkippedKey = rateLimitKey(2);
 
-        static void lower_() { apply(clear(Cs{})); }
-
-        static constexpr Lines lines_{&lower_, nullptr, nullptr, nullptr};
+        static constexpr Lines csLines = ChipSelect<Cs, false>::lines;
 
         template<typename F>
         [[nodiscard]] bool submit_(F&& done) {
             running_.store(true, std::memory_order_release);
             bool const accepted
               = Master::submit(typename Master::Request{.setup = Setup,
-                                                        .lines = lines_,
+                                                        .lines = csLines,
                                                         .tx    = std::span<std::byte const>{data_},
                                                         .rx    = std::span{data_},
                                                         .callback = std::forward<F>(done)});
@@ -275,7 +253,7 @@ namespace Kvasir { namespace SPI {
             data_ = frame;
             ok_   = false;
             static_cast<void>(submit_([this](auto r) {
-                ok_ = r == decltype(r)::succeeded;
+                ok_ = r == decltype(r)::ok;
                 running_.store(false, std::memory_order_release);
             }));
         }
@@ -294,9 +272,7 @@ namespace Kvasir { namespace SPI {
             return true;
         }
 
-        void bringUpFailed_() {
-            if(bringUpFailures_ != 0xFF) { ++bringUpFailures_; }
-        }
+        void bringUpFailed_() { bringUpFailures_.failed(); }
 
         void logSkipped_(TimePoint now) {
             auto const skipped = skipped_.load(std::memory_order_relaxed);
@@ -317,12 +293,12 @@ namespace Kvasir { namespace SPI {
         std::atomic<bool> ready_{false};
         bool volatile ok_{};
         State                                       state_{State::reset};
-        std::uint8_t                                bringUpFailures_{};
+        FailureStreak<AbsentAfterFailures>          bringUpFailures_{};
         std::array<std::byte, 4>                    data_{};
-        std::atomic<std::uint32_t>                  errors_{};
-        std::atomic<std::uint32_t>                  skipped_{};
+        std::atomic<std::uint32_t>                  errors_;
+        std::atomic<std::uint32_t>                  skipped_;
         std::uint32_t                               skippedLogged_{};
-        std::atomic<std::uint32_t>                  samples_{};
+        std::atomic<std::uint32_t>                  samples_;
         [[no_unique_address]] LogRateLimiter<Clock> log_{};
     };
 

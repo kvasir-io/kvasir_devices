@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -57,7 +58,7 @@ namespace Lsm303agrDetail {
         return std::chrono::milliseconds{0};
     }
 
-    struct AccelState : Groups::DeviceId {
+    struct AccelState : Engine::Groups::DeviceId {
         std::uint8_t fs{};   ///< CTRL_REG4_A FS as written now
     };
 }   // namespace Lsm303agrDetail
@@ -91,11 +92,11 @@ struct Lsm303agrAccel {
     /// Configuration: TEMP_CFG_REG_A (1Fh) TEMP_EN[1:0] = 11b, the temperature sensor on
     /// (LSM303AGR.md:1298).
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x33},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x33},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"temp-en", 0x1F, 1, true, 0xC0, 0xC0},
+      Engine::RegisterCheck{"temp-en", 0x1F, 1, true, 0xC0, 0xC0},
     };
     static constexpr Address7                Address = 0x19;
     static constexpr std::array<Address7, 1> Addresses{0x19};
@@ -113,11 +114,12 @@ struct Lsm303agrAccel {
     static constexpr auto StartupDelay = std::chrono::milliseconds{20};
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x20, .payload = {Ctrl1}}),
-      Step::write({.reg = 0x23, .payload = {Ctrl4}}),
+      Engine::Step::write({.reg = 0x20, .payload = {Ctrl1}}),
+      Engine::Step::write({.reg = 0x23, .payload = {Ctrl4}}),
       // TEMP_EN; then the high-resolution turn-on time, 7/ODR (Table 14): the samples before
       // it are not settled.
-      Step::write({.reg = 0x1F, .payload = {0xC0}, .delay = 7 * Lsm303agrDetail::odrPeriod(Odr)}),
+      Engine::Step::write(
+        {.reg = 0x1F, .payload = {0xC0}, .delay = 7 * Lsm303agrDetail::odrPeriod(Odr)}),
     };
 
     using State = Lsm303agrDetail::AccelState;
@@ -137,8 +139,9 @@ struct Lsm303agrAccel {
 
         /// 0xA7 and 0x8C: the MSB is what turns a burst into an auto-incrementing read.
         static constexpr std::array Steps{
-          Step::read({.reg = 0xA7, .count = 7, .offset = 0}),    // STATUS_REG_A, OUT_X_L_A ..
-          Step::read({.reg = 0x8C, .count = 2, .offset = 7})};   // OUT_TEMP_L_A
+          Engine::Step::read(
+            {.reg = 0xA7, .count = 7, .offset = 0}),   // STATUS_REG_A, OUT_X_L_A ..
+          Engine::Step::read({.reg = 0x8C, .count = 2, .offset = 7})};   // OUT_TEMP_L_A
 
         struct Sample {
             MicroG    x{};
@@ -154,9 +157,11 @@ struct Lsm303agrAccel {
                                              * Units::value(AccelPerCount[fs & 0x03U]));
         }
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(0) & 0x08U) == 0) { return Outcome<Sample>::unchanged(); }   // ZYXDA
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(0) & 0x08U) == 0) {
+                return Engine::Outcome<Sample>::unchanged();
+            }   // ZYXDA
             Sample sample{};
             sample.x = Units::microG(accel(data.s16le(1), state.fs));
             sample.y = Units::microG(accel(data.s16le(3), state.fs));
@@ -164,7 +169,7 @@ struct Lsm303agrAccel {
             // (lsb / 64) / 4 + 25 degC, in millidegrees
             sample.temperature
               = Units::milliDegC(static_cast<std::int32_t>(data.s16le(7)) * 1000 / 256 + 25000);
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -174,10 +179,10 @@ struct Lsm303agrAccel {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Fs;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(0x88U | (static_cast<unsigned>(value) << 4U));
-            return Step::writeBuffer({.reg = 0x23, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x23, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -186,8 +191,8 @@ struct Lsm303agrAccel {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<Range>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<Range>;
 };
 
 /// The magnetometer half, at 0x1E. WHO_AM_I_M 0x4F reads 0x40, CFG_REG_A_M 0x60 (MD 1:0,
@@ -204,13 +209,13 @@ struct Lsm303agrMag {
     /// Configuration: CFG_REG_A_M (60h) MD[1:0] = 00b continuous; CFG_REG_B_M (61h) OFF_CANC, which
     /// the offset specification assumes (LSM303AGR.md:852..887); CFG_REG_C_M (62h) BDU.
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x4F, 1, true, 0xFF, 0x40},
+      Engine::RegisterCheck{"who-am-i", 0x4F, 1, true, 0xFF, 0x40},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{         "continuous", 0x60, 1, true, 0x03, 0x00},
-      RegisterCheck{"offset-cancellation", 0x61, 1, true, 0x02, 0x02},
-      RegisterCheck{                "bdu", 0x62, 1, true, 0x10, 0x10},
+      Engine::RegisterCheck{         "continuous", 0x60, 1, true, 0x03, 0x00},
+      Engine::RegisterCheck{"offset-cancellation", 0x61, 1, true, 0x02, 0x02},
+      Engine::RegisterCheck{                "bdu", 0x62, 1, true, 0x10, 0x10},
     };
     static constexpr Address7                Address = 0x1E;
     static constexpr std::array<Address7, 1> Addresses{0x1E};
@@ -226,18 +231,18 @@ struct Lsm303agrMag {
     static constexpr auto StartupDelay = std::chrono::milliseconds{20};
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x62, .payload = {0x10}}),   // CFG_REG_C_M: BDU
+      Engine::Step::write({.reg = 0x62, .payload = {0x10}}),   // CFG_REG_C_M: BDU
       // CFG_REG_B_M: OFF_CANC -- the magnetic offset of +-60 mgauss (M_TyOff) is specified
       // with offset cancellation on (4.1.2)
-      Step::write({.reg = 0x61, .payload = {0x02}}),
-      Step::write(
+      Engine::Step::write({.reg = 0x61, .payload = {0x02}}),
+      Engine::Step::write(
         {.reg     = 0x60,
          .payload = {CfgA},
          .delay
          = std::chrono::milliseconds{20}}),   // CFG_REG_A_M: out of power-down into continuous
     };
 
-    using State = Groups::DeviceId;
+    using State = Engine::Groups::DeviceId;
 
     /// What the engine read of the Identity above, once it matched and before Init runs:
     /// `state().deviceId` is the part's own word, read once.
@@ -252,7 +257,8 @@ struct Lsm303agrMag {
         /// datasheet's I2C section gives every register the MSB as the increment bit, but ST's
         /// own lsm303agr_reg.c and Linux (st_magn, multi_read_bit false for this part) both
         /// read the magnetometer's bursts without it, and 0xE7 is not a register of this half.
-        static constexpr std::array Steps{Step::read({.reg = 0x67, .count = 7, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x67, .count = 7, .offset = 0})};
 
         struct Sample {
             NanoTesla x{};
@@ -264,15 +270,17 @@ struct Lsm303agrMag {
             return Units::nanoTesla(static_cast<std::int64_t>(raw) * Units::value(FieldPerCount));
         }
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data,
-                                                              Sample const&) {
-            if((data.u8(0) & 0x08U) == 0) { return Outcome<Sample>::unchanged(); }   // Zyxda
-            return Outcome<Sample>::ok(
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data,
+                                                                      Sample const&) {
+            if((data.u8(0) & 0x08U) == 0) {
+                return Engine::Outcome<Sample>::unchanged();
+            }   // Zyxda
+            return Engine::Outcome<Sample>::ok(
               {field(data.s16le(1)), field(data.s16le(3)), field(data.s16le(5))});
         }
     };
 
-    using Reads = List<Field>;
+    using Reads = Engine::List<Field>;
 };
 
 }   // namespace Kvasir::I2C::Chips

@@ -1,23 +1,31 @@
 #pragma once
 // An SD memory card in SPI mode: bring-up, single-block read and write, on a queued SPI master.
-// Non-blocking: one request in flight, handler() once a loop turn; the callbacks only set flags.
+// Non-blocking: one request in flight, turn() once a loop turn; a callback only ends the OneFrame
+// (Client.hpp) that turn() takes.
 //
 // Facts from the SD Physical Layer Simplified Specification 9.10 ("SD spec", cited as
 // section:line). It leaves out the SPI timing values (7.5), so NCR is our own `ResponseBytes`.
 //
 // A command and its data are one CS-low sequence of held requests. A main-loop pause longer than
-// the master's HoldTimeout between two of them cuts it: the card is parked for RetryAfter and
-// brought up again.
+// the master's holdTimeout between two of them cuts it: the card is parked for retryAfter and
+// brought up again. A card that keeps failing waits twice as long before each next bring-up (up to
+// ten minutes, or retryAfter if that is longer); one that comes up starts over at retryAfter.
 //
 // A pulled card is only seen reliably with a pull-up on MISO (RP2350 pads reset pulled DOWN):
 // with MISO low every command reads R1 0x00 and every data phase an error token, hence
-// RejectedLost.
+// rejectedLost.
+#include "../Bytes.hpp"
 #include "../Duration.hpp"
-#include "../Link.hpp"
 #include "../Log.hpp"
 #include "../Quantities.hpp"
+#include "Client.hpp"
 #include "QueueCore.hpp"
-#include "kvasir/Util/Crc.hpp"
+#include "kvasir/Hal/Spi.hpp"
+#include "kvasir/Port/Hooks.hpp"
+#include "kvasir/Runtime/CrcImageEngine.hpp"   // ImageEngine and the software engines (Util/Crc.hpp)
+#include "kvasir/Util/Backoff.hpp"
+#include "kvasir/Util/Config.hpp"
+#include "kvasir/Util/Link.hpp"
 #include "kvasir/Util/Periodic.hpp"
 
 #include <array>
@@ -32,18 +40,18 @@ namespace Kvasir { namespace SPI {
 
     struct SdCardDefaults {
         /// SD spec 4.2.1:2790, 4.2:2782, 4.3:3019.
-        static constexpr Units::Hertz IdentificationClock = Units::hertz(400'000);
+        static constexpr Units::Hertz identificationClock = Units::hertz(400'000);
         /// Default Speed mode (SD spec 2:1404).
-        static constexpr Units::Hertz DataClock = Units::hertz(25'000'000);
+        static constexpr Units::Hertz dataClock = Units::hertz(25'000'000);
         /// ACMD41 until the card leaves idle (4.2.3:2829, :2845).
-        static constexpr std::chrono::milliseconds InitTimeout{1000};
+        static constexpr std::chrono::milliseconds initTimeout{1000};
         /// SDHC/SDXC read (4.6.2.1:4639).
-        static constexpr std::chrono::milliseconds ReadTimeout{100};
+        static constexpr std::chrono::milliseconds readTimeout{100};
         /// Busy after a block: 250 ms for SDHC (4.6.2.2:4645), up to 500 ms on SDXC (:4647-4649).
-        static constexpr std::chrono::milliseconds WriteTimeout{500};
-        static constexpr std::chrono::milliseconds RetryAfter{1000};
+        static constexpr std::chrono::milliseconds writeTimeout{500};
+        static constexpr std::chrono::milliseconds retryAfter{1000};
         /// Rejections in a row after which the card counts as lost; one is a bad block.
-        static constexpr std::uint8_t RejectedLost = 8;
+        static constexpr std::uint8_t rejectedLost = 8;
     };
 
     enum class SdResult : std::uint8_t {
@@ -62,15 +70,10 @@ namespace Kvasir { namespace SPI {
         static constexpr std::size_t BlockBytes    = 512;
         using Block                                = std::span<std::byte, BlockBytes>;
         using ConstBlock                           = std::span<std::byte const, BlockBytes>;
-        static constexpr std::uint8_t RejectedLost = [] {
-            if constexpr(requires { Config::RejectedLost; }) {
-                return static_cast<std::uint8_t>(Config::RejectedLost);
-            } else {
-                return SdCardDefaults::RejectedLost;
-            }
-        }();
+        static constexpr std::uint8_t RejectedLost = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, rejectedLost, SdCardDefaults::rejectedLost));
 
-        SdCard() { apply(set(Cs{})); }
+        SdCard() { Select::release(); }
 
         SdCard(SdCard const&)            = delete;   // the transfers' callbacks point at it
         SdCard& operator=(SdCard const&) = delete;
@@ -131,19 +134,15 @@ namespace Kvasir { namespace SPI {
 
         [[nodiscard]] std::uint8_t rejectedInRow() const { return rejectedInRow_; }
 
-        void handler() {
+        void turn() {
             auto const now = Clock::now();
-            if(inFlight_) {
-                if(!done_) { return; }
-                inFlight_ = false;
-                if(!ok_) {
-                    fault_(SdResult::busFault);
-                    return;
-                }
-                advance_(now);
-                return;
+            switch(xfer_.take()) {
+            case Frame::Poll::running: return;
+            case Frame::Poll::failed:  fault_(SdResult::busFault); return;
+            case Frame::Poll::ok:      advance_(now); return;
+            case Frame::Poll::idle:    break;
             }
-            if(phase_ == Phase::waiting && !retry_.armed(now)) { start_(); }
+            if(phase_ == Phase::waiting && (retry_.failures == 0 || retry_.due(now))) { start_(); }
         }
 
     private:
@@ -174,95 +173,97 @@ namespace Kvasir { namespace SPI {
 
         static constexpr std::size_t ResponseBytes = 16;   // NCR bound, see the file comment
 
-        static constexpr typename Spi::Setup identification_
-          = Spi::setup(ClockMode::_0, Config::IdentificationClock);
-        static constexpr typename Spi::Setup data_clock_
-          = Spi::setup(ClockMode::_0, Config::DataClock);
+        static constexpr typename Spi::Setup identificationSetup = Spi::setup(
+          Hal::ClockMode::mode0,
+          KVASIR_CONFIG_OR(Config, identificationClock, SdCardDefaults::identificationClock));
+        static constexpr typename Spi::Setup dataSetup
+          = Spi::setup(Hal::ClockMode::mode0,
+                       KVASIR_CONFIG_OR(Config, dataClock, SdCardDefaults::dataClock));
 
-        static void selectCs_() { apply(clear(Cs{})); }
+        using Select = ChipSelect<Cs>;
+        using Frame  = OneFrame<Spi>;
 
-        static void deselectCs_() { apply(set(Cs{})); }
+        /// The card's lines; `select` is the identity of its holds.
+        static constexpr Lines csLines = Select::lines;
 
-        static constexpr Lines lines_{&selectCs_, &deselectCs_, nullptr};
+        Phase                   phase_{Phase::waiting};
+        Op                      op_{Op::none};
+        Step                    step_{};
+        After                   after_{};
+        std::optional<SdResult> opDone_;
 
-        Phase                      phase_{Phase::waiting};
-        Op                         op_{Op::none};
-        Step                       step_{};
-        After                      after_{};
-        std::optional<SdResult>    opDone_{};
-        Kvasir::Deadline<Clock>    retry_{};   ///< stopped: the first bring-up at once
-        typename Clock::time_point deadline_{};
-        typename Clock::time_point initDeadline_{};
-        bool                       inFlight_{};
-        bool volatile done_{};   ///< written by the completion
-        bool volatile ok_{};
-        bool                           ccs_{};
-        bool                           v2_{};
-        bool                           ocrBusy_{};
-        std::uint8_t                   rejectedInRow_{};
-        std::uint8_t                   cmd_{};
-        std::uint8_t                   r1_{};
-        std::uint8_t                   polls_{};
-        std::uint8_t                   extraBytes_{};
-        std::uint32_t                  ocr_{};
-        std::uint32_t                  r7_{};
-        std::uint32_t                  blocks_{};
-        std::uint32_t                  opLba_{};
-        std::uint32_t                  bringUps_{};
-        std::uint32_t                  crcErrors_{};
-        std::uint32_t                  errors_{};
-        Link                           link_{Link::starting};
-        std::byte*                     data_{};
-        std::byte const*               cdata_{};
-        std::size_t                    dataBytes_{};
-        std::array<std::byte, 18>      small_{};   // CSD / CID block + CRC
-        std::array<std::byte, 7>       frame_{};
-        std::array<std::byte, 4>       extra_{};
-        std::array<std::byte, 1>       one_{};
-        std::array<std::byte, 2>       crc_{};
-        std::array<std::byte, 10>      clocks_{};
-        std::array<std::uint8_t, 16>   cid_{};
-        std::array<std::byte, 1> const startToken_{std::byte{0xFE}};
+        /// The pause before the next bring-up: retryAfter, doubling while it keeps failing.
+        Kvasir::Backoff<
+          Clock,
+          Kvasir::RetryFromMs<static_cast<std::uint64_t>(
+            Kvasir::asDuration(KVASIR_CONFIG_OR(Config, retryAfter, SdCardDefaults::retryAfter))
+              .count())>>
+                                     retry_{};   ///< no failure yet: the first bring-up at once
+        typename Clock::time_point   deadline_{};
+        typename Clock::time_point   initDeadline_{};
+        Frame                        xfer_{};   ///< the request on the wire, ended by its callback
+        bool                         ccs_{};
+        bool                         v2_{};
+        bool                         ocrBusy_{};
+        std::uint8_t                 rejectedInRow_{};
+        std::uint8_t                 cmd_{};
+        std::uint8_t                 r1_{};
+        std::uint8_t                 polls_{};
+        std::uint8_t                 extraBytes_{};
+        std::uint32_t                ocr_{};
+        std::uint32_t                r7_{};
+        std::uint32_t                blocks_{};
+        std::uint32_t                opLba_{};
+        std::uint32_t                bringUps_{};
+        std::uint32_t                crcErrors_{};
+        std::uint32_t                errors_{};
+        Link                         link_{Link::starting};
+        std::byte*                   data_{};
+        std::byte const*             cdata_{};
+        std::size_t                  dataBytes_{};
+        std::array<std::byte, 18>    small_{};   // CSD / CID block + CRC
+        std::array<std::byte, 7>     frame_{};
+        std::array<std::byte, 4>     extra_{};
+        std::array<std::byte, 1>     one_{};
+        std::array<std::byte, 2>     crc_{};
+        std::array<std::byte, 10>    clocks_{};
+        std::array<std::uint8_t, 16> cid_{};
+        std::array<std::byte, 1> const startToken{std::byte{0xFE}};
 
-        SdResult mayStart_() const {
+        [[nodiscard]] SdResult mayStart_() const {
             if(phase_ != Phase::ready) { return SdResult::notReady; }
-            if(op_ != Op::none || inFlight_) { return SdResult::busy; }
+            if(op_ != Op::none || !xfer_.idle()) { return SdResult::busy; }
             return SdResult::ok;
         }
 
-        std::uint32_t address_(std::uint32_t lba) const { return ccs_ ? lba : lba * 512U; }
+        [[nodiscard]] std::uint32_t address_(std::uint32_t lba) const {
+            return ccs_ ? lba : lba * 512U;
+        }
 
         // -- the wire ------------------------------------------------------------------------
 
         bool submit_(typename Spi::Request r) {
-            done_ = false;
-            ok_   = false;
-            r.callback
-              = [this](auto res) {   // the master's result type: TransferResult or ...Tracked
-                    ok_   = res == decltype(res)::succeeded;
-                    done_ = true;
-                };
-            inFlight_ = Spi::submit(r);
-            if(!inFlight_) {
+            bool const accepted = xfer_.start(r);
+            if(!accepted) {
                 // A full queue: the sequence is failed and the card tried again.
                 fault_(SdResult::busFault);
             }
-            return inFlight_;
+            return accepted;
         }
 
         void send_(std::span<std::byte const> tx,
                    bool                       hold) {
             submit_(
-              typename Spi::Request{.setup = setup_(), .lines = lines_, .tx = tx, .hold = hold});
+              typename Spi::Request{.setup = setup_(), .lines = csLines, .tx = tx, .hold = hold});
         }
 
         void receive_(std::span<std::byte> rx) {
             submit_(
-              typename Spi::Request{.setup = setup_(), .lines = lines_, .rx = rx, .hold = true});
+              typename Spi::Request{.setup = setup_(), .lines = csLines, .rx = rx, .hold = true});
         }
 
-        typename Spi::Setup setup_() const {
-            return phase_ == Phase::ready ? data_clock_ : identification_;
+        [[nodiscard]] typename Spi::Setup setup_() const {
+            return phase_ == Phase::ready ? dataSetup : identificationSetup;
         }
 
         /// CRC7, G(x) = x^7 + x^3 + 1 (SD spec 4.5; CRC-7/MMC), as CRC << 1 | end bit.
@@ -286,11 +287,19 @@ namespace Kvasir { namespace SPI {
                         == 0x87,
                       "CMD8(0x1AA)'s CRC byte is 0x87");
 
+        // Named through the class's own parameters (Port::LateT), so the image's choice (the hook
+        // Kvasir::Crc::ImageEngines) is looked up where the image instantiates the card, not where this header
+        // is read: the hook may come after this include.
+        using BlockCrc = Kvasir::Port::LateT<Crc::ImageEngine<Crc::Presets::crc16Xmodem, 256>, Spi>;
+
     public:
         /// CRC16-CCITT, G(x) = x^16 + x^12 + x^5 + 1 (SD spec 4.5; CRC-16/XMODEM), over a data
-        /// block. A byte table (512 bytes of flash): it runs over every 512-byte block read.
+        /// block: the image's engine (Kvasir::Crc::ImageEngine - a chip's hardware where the image names one,
+        /// else a byte table, 512 bytes of flash: it runs over every 512-byte block read and written). A constant
+        /// expression takes the table, so the vectors below hold whatever the image chose. Always the CRC: an
+        /// engine whose hardware fails computes the span in software (kvasir/Runtime/CrcImageEngine.hpp).
         static constexpr std::uint16_t crc16(std::span<std::byte const> bytes) {
-            return Crc::Crc16Xmodem<256>::compute(bytes);
+            return BlockCrc::compute(bytes);
         }
 
     private:
@@ -316,19 +325,16 @@ namespace Kvasir { namespace SPI {
             after_      = after;
             frame_[0]   = std::byte{0xFF};
             frame_[1]   = std::byte{static_cast<std::uint8_t>(0x40U | index)};
-            frame_[2]   = std::byte{static_cast<std::uint8_t>(arg >> 24U)};
-            frame_[3]   = std::byte{static_cast<std::uint8_t>(arg >> 16U)};
-            frame_[4]   = std::byte{static_cast<std::uint8_t>(arg >> 8U)};
-            frame_[5]   = std::byte{static_cast<std::uint8_t>(arg)};
-            frame_[6]   = std::byte{crc7_(std::span{frame_}.subspan(1, 5))};
-            step_       = Step::command;
-            polls_      = 0;
+            putBe32(frame_, 2, arg);
+            frame_[6] = std::byte{crc7_(std::span{frame_}.subspan(1, 5))};
+            step_     = Step::command;
+            polls_    = 0;
             send_(frame_, true);
         }
 
         /// CS up, then eight clocks so the card lets go of MISO.
         void endSequence_() {
-            Spi::releaseHold(lines_);
+            Spi::releaseHold(csLines);
             step_ = Step::gap;
             clocks_.fill(std::byte{0xFF});
             submit_(typename Spi::Request{.setup = setup_(),
@@ -345,12 +351,12 @@ namespace Kvasir { namespace SPI {
             clocks_.fill(std::byte{0xFF});
             step_ = Step::gap;
             submit_(
-              typename Spi::Request{.setup = identification_, .lines = Lines{}, .tx = clocks_});
+              typename Spi::Request{.setup = identificationSetup, .lines = Lines{}, .tx = clocks_});
         }
 
         void fault_(SdResult r) {
             ++errors_;
-            Spi::releaseHold(lines_);
+            Spi::releaseHold(csLines);
             if(op_ != Op::none) {
                 opDone_ = r;
                 op_     = Op::none;
@@ -368,7 +374,7 @@ namespace Kvasir { namespace SPI {
             }
             phase_ = Phase::waiting;
             link_  = Link::absent;
-            retry_.restart(Kvasir::asDuration(Config::RetryAfter), Clock::now());
+            retry_.failed(Clock::now());
         }
 
         /// Reported once the sequence and its clocks are over, so the next one can start at once.
@@ -384,8 +390,11 @@ namespace Kvasir { namespace SPI {
             switch(step_) {
             case Step::gap:
                 if(phase_ == Phase::clocks) {
-                    phase_        = Phase::bringUp;
-                    initDeadline_ = now + Kvasir::asDuration(Config::InitTimeout);
+                    phase_ = Phase::bringUp;
+                    initDeadline_
+                      = now
+                      + Kvasir::asDuration(
+                          KVASIR_CONFIG_OR(Config, initTimeout, SdCardDefaults::initTimeout));
                     command_(0, 0, 0, After::goIdle);
                 } else if(phase_ == Phase::bringUp && after_ == After::cidRead) {
                     up_();
@@ -464,8 +473,11 @@ namespace Kvasir { namespace SPI {
                         endAndFault_(SdResult::rejected);
                         return;
                     }
-                    step_     = Step::busy;
-                    deadline_ = now + Kvasir::asDuration(Config::WriteTimeout);
+                    step_ = Step::busy;
+                    deadline_
+                      = now
+                      + Kvasir::asDuration(
+                          KVASIR_CONFIG_OR(Config, writeTimeout, SdCardDefaults::writeTimeout));
                     receive_(one_);
                     return;
                 }
@@ -487,9 +499,7 @@ namespace Kvasir { namespace SPI {
         }
 
         void blockIn_(typename Clock::time_point) {
-            auto const got
-              = static_cast<std::uint16_t>((std::to_integer<std::uint16_t>(crc_[0]) << 8U)
-                                           | std::to_integer<std::uint16_t>(crc_[1]));
+            auto const got = Bytes{crc_}.be16(0);
             if(after_ == After::readToken) {
                 if(crc16(std::span<std::byte const>{data_, BlockBytes}) != got) {
                     ++crcErrors_;
@@ -535,17 +545,12 @@ namespace Kvasir { namespace SPI {
         }
 
         void endAndFault_(SdResult r) {
-            Spi::releaseHold(lines_);
+            Spi::releaseHold(csLines);
             fault_(r);
         }
 
         void afterResponse_(typename Clock::time_point now) {
-            auto const extra = [this] {
-                return (std::to_integer<std::uint32_t>(extra_[0]) << 24U)
-                     | (std::to_integer<std::uint32_t>(extra_[1]) << 16U)
-                     | (std::to_integer<std::uint32_t>(extra_[2]) << 8U)
-                     | std::to_integer<std::uint32_t>(extra_[3]);
-            };
+            auto const extra = [this] { return Bytes{extra_}.be32(0); };
             switch(after_) {
             case After::goIdle:
                 // R1 0x01: in idle state, in SPI mode (7.2.1)
@@ -588,7 +593,9 @@ namespace Kvasir { namespace SPI {
                     return;
                 }
                 step_     = Step::token;
-                deadline_ = now + Kvasir::asDuration(Config::ReadTimeout);
+                deadline_ = now
+                          + Kvasir::asDuration(
+                              KVASIR_CONFIG_OR(Config, readTimeout, SdCardDefaults::readTimeout));
                 receive_(one_);
                 return;
             case After::writeBlock:
@@ -597,10 +604,9 @@ namespace Kvasir { namespace SPI {
                     return;
                 }
                 // start token, block, CRC16: one held request each
-                step_      = Step::dataOut;
-                writeCrc_  = crc16(std::span<std::byte const>{cdata_, BlockBytes});
-                crc_[0]    = std::byte{static_cast<std::uint8_t>(writeCrc_ >> 8U)};
-                crc_[1]    = std::byte{static_cast<std::uint8_t>(writeCrc_)};
+                step_     = Step::dataOut;
+                writeCrc_ = crc16(std::span<std::byte const>{cdata_, BlockBytes});
+                putBe16(crc_, 0, writeCrc_);
                 sendParts_ = 0;
                 sendNextPart_();
                 return;
@@ -613,7 +619,7 @@ namespace Kvasir { namespace SPI {
 
         void sendNextPart_() {
             switch(sendParts_++) {
-            case 0:  send_(startToken_, true); break;
+            case 0:  send_(startToken, true); break;
             case 1:  send_(std::span<std::byte const>{cdata_, BlockBytes}, true); break;
             default: send_(crc_, true); break;
             }
@@ -655,9 +661,10 @@ namespace Kvasir { namespace SPI {
             phase_         = Phase::ready;
             link_          = Link::answering;
             rejectedInRow_ = 0;
+            retry_.succeeded();
             ++bringUps_;
             // CID (5.2): MID [127:120], OID [119:104], PNM [103:64], PSN [55:24]
-            UC_LOG_I(
+            UC_LOG_D(
               "sd card up: {}, OCR {:#010x}, {} blocks, CID MID {:#04x} OID {:#06x} PSN "
               "{:#010x}",
               std::string_view{ccs_ ? "SDHC/SDXC" : "SDSC"},

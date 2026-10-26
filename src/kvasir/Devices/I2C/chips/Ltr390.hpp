@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -38,11 +39,11 @@ namespace Ltr390Detail {
       std::chrono::milliseconds{25},
       std::chrono::milliseconds{13}};
 
-    [[nodiscard]] constexpr std::uint16_t gainValue(std::uint8_t gain) {
+    [[nodiscard]] constexpr std::uint16_t gainValueOf(std::uint8_t gain) {
         return gain < GainValue.size() ? GainValue[gain] : GainValue[0];
     }
 
-    [[nodiscard]] constexpr std::uint8_t resolutionBits(std::uint8_t resolution) {
+    [[nodiscard]] constexpr std::uint8_t resolutionBitsOf(std::uint8_t resolution) {
         return resolution < ResolutionBits.size() ? ResolutionBits[resolution] : ResolutionBits[0];
     }
 
@@ -91,11 +92,11 @@ struct Ltr390 {
     /// Configuration: MAIN_CTRL (0x00) ALS_UVS_EN, bit 1, set and the software reset, bit 4, over
     /// (LTR390.md:359..373).
     static constexpr std::array Identity{
-      RegisterCheck{"part-id", 0x06, 1, true, 0xF0, 0xB0},
+      Engine::RegisterCheck{"part-id", 0x06, 1, true, 0xF0, 0xB0},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"enabled", 0x00, 1, true, 0x12, 0x02},
+      Engine::RegisterCheck{"enabled", 0x00, 1, true, 0x12, 0x02},
     };
     static constexpr Address7                Address = 0x53;
     static constexpr std::array<Address7, 1> Addresses{0x53};
@@ -123,13 +124,13 @@ struct Ltr390 {
       // Software reset: the part resets before it acknowledges the byte, so the write NAKs
       // (Linux ltr390.c: "chip fails to respond to this, so ignore any errors"; Adafruit's
       // reset() says the same).
-      Step::write(
+      Engine::Step::write(
         {.reg = 0x00, .payload = {0x10}, .delay = std::chrono::milliseconds{20}, .mayNak = true}),
-      Step::write({.reg = 0x04, .payload = {MeasRate}}),
-      Step::write({.reg = 0x05, .payload = {GainCode}}),
-      Step::write({.reg     = 0x00,
-                   .payload = {Enabled},
-                   .delay   = ConversionTime + std::chrono::milliseconds{10}}),
+      Engine::Step::write({.reg = 0x04, .payload = {MeasRate}}),
+      Engine::Step::write({.reg = 0x05, .payload = {GainCode}}),
+      Engine::Step::write({.reg     = 0x00,
+                           .payload = {Enabled},
+                           .delay   = ConversionTime + std::chrono::milliseconds{10}}),
     };
 
     struct State {
@@ -155,16 +156,16 @@ struct Ltr390 {
         /// Ambient light, then the same ADC switched to the UV photodiode; MAIN_STATUS before
         /// each result.
         static constexpr std::array Steps{
-          Step::write({.reg     = 0x00,
-                       .payload = {AlsMode},
-                       .delay   = ConversionTime + std::chrono::milliseconds{10}}),
-          Step::read({.reg = 0x07, .count = 1, .offset = 0}),   // MAIN_STATUS
-          Step::read({.reg = 0x0D, .count = 3, .offset = 1}),   // ALSDATA
-          Step::write({.reg     = 0x00,
-                       .payload = {UvsMode},
-                       .delay   = ConversionTime + std::chrono::milliseconds{10}}),
-          Step::read({.reg = 0x07, .count = 1, .offset = 4}),   // MAIN_STATUS
-          Step::read({.reg = 0x10, .count = 3, .offset = 5}),   // UVSDATA
+          Engine::Step::write({.reg     = 0x00,
+                               .payload = {AlsMode},
+                               .delay   = ConversionTime + std::chrono::milliseconds{10}}),
+          Engine::Step::read({.reg = 0x07, .count = 1, .offset = 0}),   // MAIN_STATUS
+          Engine::Step::read({.reg = 0x0D, .count = 3, .offset = 1}),   // ALSDATA
+          Engine::Step::write({.reg     = 0x00,
+                               .payload = {UvsMode},
+                               .delay   = ConversionTime + std::chrono::milliseconds{10}}),
+          Engine::Step::read({.reg = 0x07, .count = 1, .offset = 4}),   // MAIN_STATUS
+          Engine::Step::read({.reg = 0x10, .count = 3, .offset = 5}),   // UVSDATA
         };
 
         struct Sample {
@@ -175,12 +176,12 @@ struct Ltr390 {
 
             /// lux = ALS x 0.6 / (gain x 2^(bits - 18)), scaled by the window transmission.
             [[nodiscard]] constexpr MilliLux lux() const {
-                auto const bits = Ltr390Detail::resolutionBits(resolution);
+                auto const bits = Ltr390Detail::resolutionBitsOf(resolution);
                 // 0.6 / 2^(bits - 18) = 600 x 2^(20 - bits) / (4 x 1000)
                 auto const num
                   = static_cast<std::uint64_t>(als) * 600ULL * (1ULL << (20U - bits)) * 100ULL;
-                auto const den
-                  = static_cast<std::uint64_t>(Ltr390Detail::gainValue(gain)) * 4ULL * WindowValue;
+                auto const den = static_cast<std::uint64_t>(Ltr390Detail::gainValueOf(gain)) * 4ULL
+                               * WindowValue;
                 return Units::milliLux(num / den);
             }
 
@@ -188,20 +189,20 @@ struct Ltr390 {
             /// both scale the divisor from there, and the window transmission too.
             [[nodiscard]] constexpr MilliUvi uvi() const {
                 // counts per UVI = 2300 * (gain/18) * 2^bits / 2^20 * window
-                auto const shift = 20U - Ltr390Detail::resolutionBits(resolution);
-                auto const den   = 2300ULL * Ltr390Detail::gainValue(gain) * WindowValue;
+                auto const shift = 20U - Ltr390Detail::resolutionBitsOf(resolution);
+                auto const den   = 2300ULL * Ltr390Detail::gainValueOf(gain) * WindowValue;
                 auto const num
                   = static_cast<std::uint64_t>(uvs) * 1000ULL * 18ULL * (1ULL << shift) * 100ULL;
                 return Units::milliUvi(num / den);
             }
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
             if((data.u8(0) & 0x08U) == 0 || (data.u8(4) & 0x08U) == 0) {
-                return Outcome<Sample>::unchanged();
+                return Engine::Outcome<Sample>::unchanged();
             }
-            return Outcome<Sample>::ok(
+            return Engine::Outcome<Sample>::ok(
               {data.le24(1) & 0x0FFFFFU, data.le24(5) & 0x0FFFFFU, state.gain, state.resolution});
         }
     };
@@ -213,10 +214,10 @@ struct Ltr390 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Gain;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x05, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x05, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -231,10 +232,10 @@ struct Ltr390 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Resolution;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>((static_cast<unsigned>(value) << 4U) | 0x02U);
-            return Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -243,8 +244,8 @@ struct Ltr390 {
         }
     };
 
-    using Reads  = List<Light>;
-    using Writes = List<GainSetting, ResolutionSetting>;
+    using Reads  = Engine::List<Light>;
+    using Writes = Engine::List<GainSetting, ResolutionSetting>;
 };
 
 }   // namespace Kvasir::I2C::Chips

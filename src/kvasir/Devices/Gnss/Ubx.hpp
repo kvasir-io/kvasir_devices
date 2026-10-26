@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Bytes.hpp"
 #include "../Quantities.hpp"
 
 #include <algorithm>
@@ -325,8 +326,8 @@ namespace Ublox {
               std::uint16_t in,
               std::uint16_t out) {
         auto const mode = static_cast<std::uint8_t>(address << 1U);
-        return ubxFrame(0x06,
-                        0x00,
+        return ubxFrame(CfgClass,
+                        CfgPrtId,
                         std::array<std::uint8_t, 20>{0x00,
                                                      0x00,
                                                      0x00,
@@ -362,8 +363,8 @@ namespace Ublox {
                std::uint8_t  port = 1) {
         auto const b
           = [&](unsigned shift) { return static_cast<std::uint8_t>((baud >> shift) & 0xFFU); };
-        return ubxFrame(0x06,
-                        0x00,
+        return ubxFrame(CfgClass,
+                        CfgPrtId,
                         std::array<std::uint8_t, 20>{port,
                                                      0x00,
                                                      0x00,
@@ -427,7 +428,7 @@ namespace Ublox {
     cfgMsg(std::uint8_t cls,
            std::uint8_t id,
            std::uint8_t rate) {
-        return ubxFrame(0x06, 0x01, std::array<std::uint8_t, 3>{cls, id, rate});
+        return ubxFrame(CfgClass, CfgMsgId, std::array<std::uint8_t, 3>{cls, id, rate});
     }
 
     /// UBX-CFG-MSG, the rates of one message on all six I/O ports at once (32.10.18.2; port 0 is
@@ -442,8 +443,8 @@ namespace Ublox {
                 std::array<std::uint8_t,
                            6> rates) {
         return ubxFrame(
-          0x06,
-          0x01,
+          CfgClass,
+          CfgMsgId,
           std::array<std::uint8_t,
                      8>{cls, id, rates[0], rates[1], rates[2], rates[3], rates[4], rates[5]});
     }
@@ -458,8 +459,8 @@ namespace Ublox {
         auto const ms = static_cast<std::uint16_t>(
           std::clamp(measRate, std::chrono::milliseconds{25}, std::chrono::milliseconds{65535})
             .count());
-        return ubxFrame(0x06,
-                        0x08,
+        return ubxFrame(CfgClass,
+                        CfgRateId,
                         std::array<std::uint8_t, 6>{static_cast<std::uint8_t>(ms & 0xFFU),
                                                     static_cast<std::uint8_t>(ms >> 8U),
                                                     0x01,
@@ -584,19 +585,20 @@ namespace Ublox {
     };
 
     namespace NavPvtImpl {
+        // "All multi-byte values are ordered in Little Endian format" (32.3.5): U1/U2/U4/I4 through Kvasir::Bytes
         [[nodiscard]] constexpr std::uint8_t u1(std::span<std::byte const> p,
                                                 std::size_t                i) {
-            return static_cast<std::uint8_t>(p[i]);
+            return Bytes{p}.u8(i);
         }
 
         [[nodiscard]] constexpr std::uint16_t u2(std::span<std::byte const> p,
                                                  std::size_t                i) {
-            return static_cast<std::uint16_t>(u1(p, i) | (u1(p, i + 1) << 8U));
+            return Bytes{p}.le16(i);
         }
 
         [[nodiscard]] constexpr std::uint32_t u4(std::span<std::byte const> p,
                                                  std::size_t                i) {
-            return u2(p, i) | (static_cast<std::uint32_t>(u2(p, i + 2)) << 16U);
+            return Bytes{p}.le32(i);
         }
 
         [[nodiscard]] constexpr std::int32_t i4(std::span<std::byte const> p,

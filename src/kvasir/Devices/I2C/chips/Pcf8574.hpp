@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -39,7 +40,7 @@ struct Pcf8574 {
 
     struct Pins {
         static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Step::receive({.count = 1})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 1})};
 
         struct Sample {
             std::uint8_t port{};
@@ -57,15 +58,15 @@ struct Pcf8574 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = 0xFF;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{value};
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Pins>;
-    using Writes = List<Port>;
+    using Reads  = Engine::List<Pins>;
+    using Writes = Engine::List<Port>;
 };
 
 /// PCF8575 16-bit quasi-bidirectional port (SCPS121I, 8.3.2): the PCF8574's protocol
@@ -75,12 +76,11 @@ struct Pcf8575 {
     static constexpr Address7         Address       = 0x20;
     static constexpr std::size_t      RegisterBytes = 0;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27};
+    static constexpr auto Addresses = addressRun<0x20, 8>();
 
     struct Pins {
         static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Step::receive({.count = 2})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 2})};
 
         struct Sample {
             std::uint16_t port{};   ///< P0x | P1x << 8
@@ -99,15 +99,15 @@ struct Pcf8575 {
         static constexpr std::size_t Bytes   = 2;
         static constexpr Value       Initial = 0xFFFF;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             putLe16(buffer, 0, value);
-            return Step::commandBuffer({.offset = 0, .count = 2});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 2});
         }
     };
 
-    using Reads  = List<Pins>;
-    using Writes = List<Port>;
+    using Reads  = Engine::List<Pins>;
+    using Writes = Engine::List<Port>;
 };
 
 }   // namespace Kvasir::I2C::Chips

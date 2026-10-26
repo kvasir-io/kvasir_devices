@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -34,7 +35,7 @@ struct Ds3502 {
     static constexpr Address7         Address       = 0x28;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x28, 0x29, 0x2A, 0x2B};
+    static constexpr auto Addresses = addressRun<0x28, 4>();
 
     static constexpr std::uint8_t MaxTap = 127;
 
@@ -42,8 +43,8 @@ struct Ds3502 {
 
     /// MODE = 0x80: wiper writes are volatile from here on.
     static constexpr std::array Init{
-      Step::write({.reg = 0x02, .payload = {0x80}, .delay = std::chrono::milliseconds{1}}),
-      Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+      Engine::Step::write({.reg = 0x02, .payload = {0x80}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct State {
         std::uint8_t powerUpTap{};   ///< what the IVR had it at
@@ -57,7 +58,8 @@ struct Ds3502 {
 
     struct Position {
         static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t tap{};
@@ -82,10 +84,10 @@ struct Ds3502 {
         using Value                        = std::uint8_t;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value > MaxTap ? MaxTap : value);
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
         }
     };
 
@@ -100,27 +102,27 @@ struct Ds3502 {
         /// A one-shot command: replaying it after a reset would spend another write cycle.
         static constexpr bool Transient = true;
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value > MaxTap ? MaxTap : value);
             return {
-              Step::write({.reg = 0x02, .payload = {0x00}}),
-              Step::writeBuffer(
+              Engine::Step::write({.reg = 0x02, .payload = {0x00}}),
+              Engine::Step::writeBuffer(
                 {.reg    = 0x00,
                  .offset = 0,
                  .count  = 1,
                  .delay  = std::chrono::milliseconds{100}}),   // the IVR write cycle, with margin
-              Step::write({.reg = 0x02, .payload = {0x80}})};
+              Engine::Step::write({.reg = 0x02, .payload = {0x80}})};
         }
     };
 
     // MODE is not a write group: with it at 0x00 every Wiper write would also program the IVR
     // and spend an EEPROM cycle. Init sets 0x80, and only Persist leaves it, for one write.
 
-    using Reads  = List<Position>;
-    using Writes = List<Wiper, Persist>;
+    using Reads  = Engine::List<Position>;
+    using Writes = Engine::List<Wiper, Persist>;
 };
 
 }   // namespace Kvasir::I2C::Chips

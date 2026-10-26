@@ -2,13 +2,12 @@
 /// in order, with its waits. Not whether the vendor init table suits a given module.
 ///
 ///   panel_test [-v]     -v prints every transaction
-// clang-format off
-#include <support/LogStubs.hpp>
-// clang-format on
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <kd/Case.hpp>
 #include <kvasir/Devices/Display/Co5300.hpp>
 #include <kvasir/Devices/Display/DcsPanel.hpp>
 #include <kvasir/Devices/Display/St7789.hpp>
@@ -29,27 +28,30 @@ using FakeClock = Kvasir::Test::FakeClock;
 struct Transaction {
     enum class Kind { command, pixels, fill, read, resetHold, resetRelease } kind{};
     std::uint8_t              cmd{};
-    std::vector<std::uint8_t> params{};
+    std::vector<std::uint8_t> params;
     std::size_t               count{};   // pixels / fill / dummy bytes
     std::uint8_t              instruction{};
-    FakeClock::time_point     at{};
+    FakeClock::time_point     at;
 
-    auto time_since_epoch_at() const { return at.time_since_epoch(); }
+    [[nodiscard]] auto timeSinceEpochAt() const { return at.time_since_epoch(); }
 };
 
-/// The bus, recording; a pixel transfer stays busy for a few handler() calls (clearWait).
+/// The bus, recording; a pixel transfer stays busy for a few turn() calls (clearWait).
 struct MockBus {
     static inline std::vector<Transaction> log{};
     static inline int                      busy{};
     static inline bool                     fail{};
+    /// Turns a command keeps the bus busy: 0 = it is sent at once (PioQspi), else queued (SpiDcsBus).
+    static inline int                      commandTurns{};
     static inline std::array<std::byte, 3> idBytes{std::byte{0x33},
                                                    std::byte{0x10},
                                                    std::byte{0x00}};
 
     static void reset() {
         log.clear();
-        busy = 0;
-        fail = false;
+        busy         = 0;
+        fail         = false;
+        commandTurns = 0;
     }
 
     static bool writeCommand(std::uint8_t               cmd,
@@ -60,7 +62,9 @@ struct MockBus {
         t.at   = FakeClock::now();
         for(auto const b : params) { t.params.push_back(static_cast<std::uint8_t>(b)); }
         log.push_back(t);
-        return !fail;
+        if(fail) { return false; }
+        busy = std::max(busy, commandTurns);
+        return true;
     }
 
     static void writePixels(std::span<std::byte const> data,
@@ -100,7 +104,7 @@ struct MockBus {
 
     static void clearError() {}
 
-    static void handler() {
+    static void turn() {
         if(busy > 0) { --busy; }
     }
 };
@@ -116,7 +120,7 @@ struct MockReset {
 };
 
 static_assert(Kvasir::Display::Bus<MockBus>);
-static_assert(Kvasir::Display::ResetLine<MockReset>);
+static_assert(Kvasir::ResetLine<MockReset>);
 
 std::string describe(Transaction const& t) {
     char       buf[64];
@@ -150,17 +154,7 @@ std::string describe(Transaction const& t) {
     return s;
 }
 
-int failures = 0;
-
-void check(bool             ok,
-           std::string_view what) {
-    if(!ok) {
-        std::printf("  FAIL: %.*s\n", static_cast<int>(what.size()), what.data());
-        ++failures;
-    } else if(verbose) {
-        std::printf("  ok:   %.*s\n", static_cast<int>(what.size()), what.data());
-    }
-}
+using Kvasir::Test::check;
 
 /// Index of the first command `cmd` in the log, or -1.
 int findCommand(std::uint8_t cmd,
@@ -189,28 +183,24 @@ long msBetween(int a,
 }
 
 template<typename Panel>
-void exercise(std::string_view name,
-              int              width,
-              int              height,
-              int              colOff,
-              int              rowOff) {
-    using Dcs  = Kvasir::Display::Dcs::Cmd;
-    using Chip = typename Panel::Chip;
+void exercise(char const* name) {
+    using Dcs                       = Kvasir::Display::Dcs::Cmd;
+    using Chip                      = typename Panel::Chip;
+    using Config                    = typename Panel::Config;
+    constexpr int            width  = Config::Width;
+    constexpr int            height = Config::Height;
+    constexpr int            colOff = Config::columnOffset;
+    constexpr int            rowOff = Config::rowOffset;
+    Kvasir::Test::Case const thisCase{name};
 
-    std::printf("%.*s (%d x %d at +%d,+%d)\n",
-                static_cast<int>(name.size()),
-                name.data(),
-                width,
-                height,
-                colOff,
-                rowOff);
+    std::printf("  %d x %d at +%d,+%d\n", width, height, colOff, rowOff);
     MockBus::reset();
     FakeClock::current = {};
     Panel::restart();
 
     int turns = 0;
     while(!Panel::initialised() && !Panel::failed() && turns < 5000) {
-        Panel::handler();
+        Panel::turn();
         FakeClock::advance(std::chrono::milliseconds{1});
         ++turns;
     }
@@ -226,11 +216,11 @@ void exercise(std::string_view name,
     auto const release = findKind(Transaction::Kind::resetRelease);
     check(hold == 0, "RESX is driven low first");
     check(release > hold, "RESX is released after the pulse");
-    check(msBetween(hold, release) >= static_cast<long>(Chip::ResetPulseMs),
+    check(msBetween(hold, release) >= static_cast<long>(Chip::ResetPulse.count()),
           "reset pulse is long enough");
     auto const firstCmd = findKind(Transaction::Kind::command);
     check(firstCmd > release, "no command before RESX is released");
-    check(msBetween(release, firstCmd) >= static_cast<long>(Chip::ResetToCommandMs),
+    check(msBetween(release, firstCmd) >= static_cast<long>(Chip::ResetToCommand.count()),
           "reset-to-command wait honoured");
 
     // The chip's script went out first, verbatim.
@@ -272,7 +262,8 @@ void exercise(std::string_view name,
     check(madctl > colmod, "MADCTL after COLMOD");
     check(slpout > madctl, "SLPOUT after the format block");
     check(fill > slpout, "clear after SLPOUT");
-    check(msBetween(slpout, fill) >= static_cast<long>(Chip::SleepOutMs), "SLPOUT wait honoured");
+    check(msBetween(slpout, fill) >= static_cast<long>(Chip::SleepOut.count()),
+          "SLPOUT wait honoured");
     check(dispon > fill, "DISPON after the clear");
     check(findCommand(Dcs::Slpout) == slpout, "exactly one SLPOUT, from the driver");
     if(Chip::Brightness) {
@@ -308,7 +299,7 @@ void exercise(std::string_view name,
     {
         auto const                           before = MockBus::log.size();
         std::vector<Kvasir::Display::Rgb565> px(static_cast<std::size_t>(width) * 48);
-        while(!Panel::ready()) { Panel::handler(); }
+        while(!Panel::ready()) { Panel::turn(); }
         Panel::blit(Kvasir::Display::Rect{0, 48, width, 48},
                     std::span<Kvasir::Display::Rgb565 const>{px});
         auto const  caset = findCommand(Dcs::Caset, before);
@@ -321,7 +312,7 @@ void exercise(std::string_view name,
         check(pixels > raset && MockBus::log[static_cast<std::size_t>(pixels)].count == px.size(),
               "blit streams exactly the strip's pixels after the window");
         check(!Panel::ready(), "the bus is busy after the blit");
-        for(int i = 0; i < 5; ++i) { Panel::handler(); }
+        for(int i = 0; i < 5; ++i) { Panel::turn(); }
         check(Panel::ready(), "and idle again once the transfer completes");
     }
 
@@ -339,31 +330,72 @@ void exercise(std::string_view name,
 
     // A failing command fails the panel rather than being ignored.
     {
+        check(Panel::link() == Kvasir::Link::answering, "link: answering once brought up");
         MockBus::fail = true;
         Panel::displayOn(false);
         check(Panel::failed(), "a bus timeout fails the panel");
+        check(Panel::link() == Kvasir::Link::absent, "link: absent while failed");
         MockBus::fail = false;
-        // ... and brought up again RetryAfterMs later
+        // ... and brought up again retryAfter later
         auto const failuresBefore = Panel::failures();
         int        retryTurns     = 0;
+        bool       sawStarting    = false;
         while(!Panel::initialised() && retryTurns < 5000) {
             FakeClock::advance(std::chrono::milliseconds{1});
-            Panel::handler();
+            Panel::turn();
+            sawStarting = sawStarting || Panel::link() == Kvasir::Link::starting;
             ++retryTurns;
         }
         check(Panel::initialised(), "the panel is up again after the failure");
-        check(retryTurns >= 1000, "after RetryAfterMs");
+        check(retryTurns >= 1000, "after retryAfter");
+        check(sawStarting, "link: starting during the bring-up");
+        check(Panel::link() == Kvasir::Link::answering, "link: answering again, by itself");
         check(Panel::failures() == failuresBefore + 1, "one failure counted");
         check(Kvasir::Test::Log::warnings >= 1, "and logged");
+    }
+
+    // A panel that keeps failing waits twice as long before each next bring-up; one that comes up starts over.
+    {
+        auto const before = Panel::failures();
+        MockBus::fail     = true;
+        Panel::displayOn(false);   // failure 1: 1 s
+        int failTurns = 0;
+        while(Panel::failures() < before + 3
+              && failTurns < 20000) {   // the retries at 1 s and 1 + 2 s fail again
+            FakeClock::advance(std::chrono::milliseconds{1});
+            Panel::turn();
+            ++failTurns;
+        }
+        check(failTurns >= 3000 && failTurns < 3600,
+              "the second retry comes 2 s after the first (doubling)");
+        MockBus::fail = false;
+        int upTurns   = 0;
+        while(!Panel::initialised() && upTurns < 20000) {
+            FakeClock::advance(std::chrono::milliseconds{1});
+            Panel::turn();
+            ++upTurns;
+        }
+        check(Panel::initialised() && upTurns >= 4000, "the third retry 4 s later brings it up");
+        MockBus::fail = true;
+        Panel::displayOn(false);
+        MockBus::fail  = false;
+        int againTurns = 0;
+        while(!Panel::initialised() && againTurns < 20000) {
+            FakeClock::advance(std::chrono::milliseconds{1});
+            Panel::turn();
+            ++againTurns;
+        }
+        check(againTurns >= 1000 && againTurns < 1800,
+              "after a bring-up the pause is retryAfter again");
     }
 }
 
 struct Co5300Config : Kvasir::Display::DcsDefaults {
     static constexpr int          Width        = 466;
     static constexpr int          Height       = 466;
-    static constexpr int          ColumnOffset = 6;
-    static constexpr int          RowOffset    = 0;
-    static constexpr std::uint8_t Brightness   = 0xA0;
+    static constexpr int          columnOffset = 6;
+    static constexpr int          rowOffset    = 0;
+    static constexpr std::uint8_t brightness   = 0xA0;
 };
 
 struct St77916Config : Kvasir::Display::DcsDefaults {
@@ -385,13 +417,13 @@ struct St7789Config : Kvasir::Display::DcsDefaults {
 void noResetLine() {
     using Panel = Kvasir::St7789::Panel<FakeClock, MockBus, Kvasir::NoReset, St7789Config>;
     using Chip  = Panel::Chip;
-    std::printf("ST7789V with no reset line\n");
+    Kvasir::Test::Case const thisCase{"ST7789V with no reset line"};
     MockBus::reset();
     FakeClock::current = {};
     Panel::restart();
     int turns = 0;
     while(!Panel::initialised() && !Panel::failed() && turns < 5000) {
-        Panel::handler();
+        Panel::turn();
         FakeClock::advance(std::chrono::milliseconds{1});
         ++turns;
     }
@@ -404,10 +436,45 @@ void noResetLine() {
     check(first == 0 && MockBus::log[0].cmd == Kvasir::Display::Dcs::Cmd::Swreset,
           "and it is the script's SWRESET");
     auto const atMs
-      = std::chrono::duration_cast<std::chrono::milliseconds>(MockBus::log[0].time_since_epoch_at())
+      = std::chrono::duration_cast<std::chrono::milliseconds>(MockBus::log[0].timeSinceEpochAt())
           .count();
-    check(atMs < static_cast<long>(Chip::ResetToCommandMs),
+    check(atMs < static_cast<long>(Chip::ResetToCommand.count()),
           "sent without the reset-to-command wait");
+}
+
+/// A bus that queues its commands (SpiDcsBus): every wait of the bring-up starts when the command
+/// before it has gone out, not when it was queued.
+void queuedBus() {
+    using Panel = Kvasir::St7789::Panel<FakeClock, MockBus, Kvasir::NoReset, St7789Config>;
+    using Chip  = Panel::Chip;
+    using Dcs   = Kvasir::Display::Dcs::Cmd;
+    Kvasir::Test::Case const thisCase{"ST7789V on a bus that queues its commands"};
+    MockBus::reset();
+    MockBus::commandTurns = 20;   // 20 ms on the bus per command
+    FakeClock::current    = {};
+    Panel::restart();
+    int turns = 0;
+    while(!Panel::initialised() && !Panel::failed() && turns < 5000) {
+        Panel::turn();
+        FakeClock::advance(std::chrono::milliseconds{1});
+        ++turns;
+    }
+    check(Panel::initialised(), "bring-up completes");
+    std::size_t                pos = 0;
+    Kvasir::Display::Dcs::Step step{};
+    check(Chip::Init.next(pos, step) && step.cmd == Dcs::Swreset, "the script starts with SWRESET");
+    auto const swreset = findCommand(Dcs::Swreset);
+    auto const next = findKind(Transaction::Kind::command, static_cast<std::size_t>(swreset) + 1);
+    check(swreset >= 0 && next > swreset
+            && msBetween(swreset, next) >= 20 + static_cast<long>(step.delayMs),
+          "SWRESET's delay counted from its completion: " + std::to_string(msBetween(swreset, next))
+            + " ms");
+    auto const slpout = findCommand(Dcs::Slpout);
+    auto const fill   = findKind(Transaction::Kind::fill);
+    check(slpout >= 0 && fill > slpout
+            && msBetween(slpout, fill) >= 20 + static_cast<long>(Chip::SleepOut.count()),
+          "SLPOUT's wait counted from its completion");
+    MockBus::commandTurns = 0;
 }
 
 }   // namespace
@@ -416,23 +483,11 @@ int main(int          argc,
          char const** argv) {
     verbose = argc > 1 && std::strcmp(argv[1], "-v") == 0;
 
-    exercise<Kvasir::Co5300::Panel<FakeClock, MockBus, MockReset, Co5300Config>>("CO5300",
-                                                                                 466,
-                                                                                 466,
-                                                                                 6,
-                                                                                 0);
-    exercise<Kvasir::St77916::Panel<FakeClock, MockBus, MockReset, St77916Config>>("ST77916",
-                                                                                   360,
-                                                                                   360,
-                                                                                   0,
-                                                                                   0);
-    exercise<Kvasir::St77922::Panel<FakeClock, MockBus, MockReset, St77922Config>>("ST77922",
-                                                                                   532,
-                                                                                   300,
-                                                                                   0,
-                                                                                   0);
+    exercise<Kvasir::Co5300::Panel<FakeClock, MockBus, MockReset, Co5300Config>>("CO5300");
+    exercise<Kvasir::St77916::Panel<FakeClock, MockBus, MockReset, St77916Config>>("ST77916");
+    exercise<Kvasir::St77922::Panel<FakeClock, MockBus, MockReset, St77922Config>>("ST77922");
     noResetLine();
+    queuedBus();
 
-    std::printf("%s\n", failures == 0 ? "panel test passed" : "PANEL TEST FAILED");
-    return failures == 0 ? 0 : 1;
+    return Kvasir::Test::finish();
 }

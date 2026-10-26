@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -23,18 +24,19 @@ namespace Kvasir::I2C::Chips {
 /// conversion after the write is done (10 ms typical, 15 ms at most, 6.3.1 and the
 /// characteristics table), so the first read waits 35 ms, as Linux does.
 struct Tmp102 {
-    static constexpr std::string_view        Name    = "TMP102";
-    static constexpr Address7                Address = 0x48;
-    static constexpr std::array<Address7, 4> Addresses{0x48, 0x49, 0x4A, 0x4B};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view Name          = "TMP102";
+    static constexpr Address7         Address       = 0x48;
+    static constexpr auto             Addresses     = addressRun<0x48, 4>();
+    static constexpr std::size_t      RegisterBytes = 1;
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::read({.reg = 0x01,              .count = 2,                            .offset = 0}
-      ),
-      Step::identify(),
-      Step::write({.reg = 0x01, .payload = {0x60, 0xA0}, .delay = std::chrono::milliseconds{35}}
-      ),
+      Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
+      Engine::Step::identify(),
+      Engine::Step::write(
+        {.reg = 0x01, .payload = {0x60, 0xA0}, .delay = std::chrono::milliseconds{35}}),
     };
+    // clang-format on
 
     struct State {
         std::uint16_t configuration{};   ///< as the part held it before the write
@@ -49,7 +51,7 @@ struct Tmp102 {
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{250};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2})};
+        static constexpr std::array Steps{Engine::Step::read({.reg = 0x00, .count = 2})};
 
         struct Sample {
             CentiDegC temperature{};   ///< 0.01 degC, from 0.0625 degC steps
@@ -60,7 +62,7 @@ struct Tmp102 {
         }
     };
 
-    using Reads = List<Temperature>;
+    using Reads = Engine::List<Temperature>;
 };
 
 /// LM75B (TI SNOSC66 / NXP): 0x48..0x4F, pointer 00 temperature (11 bit on the LM75B, 9 on
@@ -73,15 +75,14 @@ struct Lm75 {
     static constexpr Address7         Address       = 0x48;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F};
+    static constexpr auto Addresses = addressRun<0x48, 8>();
 
-    static constexpr std::array Init{
-      Step::write({.reg = 0x01, .payload = {0x00}, .delay = std::chrono::milliseconds{110}})};
+    static constexpr std::array Init{Engine::Step::write(
+      {.reg = 0x01, .payload = {0x00}, .delay = std::chrono::milliseconds{110}})};
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{250};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2})};
+        static constexpr std::array Steps{Engine::Step::read({.reg = 0x00, .count = 2})};
 
         struct Sample {
             CentiDegC temperature{};
@@ -92,7 +93,7 @@ struct Lm75 {
         }
     };
 
-    using Reads = List<Temperature>;
+    using Reads = Engine::List<Temperature>;
 };
 
 }   // namespace Kvasir::I2C::Chips

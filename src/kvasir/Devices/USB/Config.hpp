@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kvasir/Util/Config.hpp"
+
 #include <cstdint>
 
 namespace Kvasir::USB {
@@ -8,27 +10,15 @@ namespace Kvasir::USB {
 /// defaults for what it leaves out. What only one chip knows (an interrupt priority, double
 /// buffering) the backend reads itself.
 ///
-///   StartOfFrameCallback(std::uint16_t)   its presence turns the start-of-frame interrupt on
-///   BusPower                              mA, 500
-///   BusPowered                            true
+///   startOfFrameCallback(std::uint16_t)   its presence turns the start-of-frame interrupt on
+///   busPower                              mA, 500
+///   busPowered                            true
 template<typename ConfigT>
 struct ConfigTraits {
-    static constexpr bool UseSof = requires { ConfigT::StartOfFrameCallback(std::uint16_t{}); };
+    static constexpr bool UseSof = requires { ConfigT::startOfFrameCallback(std::uint16_t{}); };
 
-    static constexpr auto BusPower = [] {
-        if constexpr(requires { ConfigT::BusPower; }) {
-            return ConfigT::BusPower;
-        } else {
-            return 500;
-        }
-    }();
+    static constexpr auto BusPower = KVASIR_CONFIG_OR(ConfigT, busPower, 500);
 
-    static constexpr auto BusPowered = [] {
-        if constexpr(requires { ConfigT::BusPowered; }) {
-            return ConfigT::BusPowered;
-        } else {
-            return true;
-        }
-    }();
+    static constexpr auto BusPowered = KVASIR_CONFIG_OR(ConfigT, busPowered, true);
 };
 }   // namespace Kvasir::USB

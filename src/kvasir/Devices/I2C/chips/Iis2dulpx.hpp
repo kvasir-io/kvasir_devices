@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -115,11 +116,11 @@ struct Iis2dulpx {
     /// Configuration: CTRL4 (13h) BDU set, so the two bytes of a sample belong together
     /// (IIS2DULPX.md:1713..1725).
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x47},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x47},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"bdu", 0x13, 1, true, 0x20, 0x20},
+      Engine::RegisterCheck{"bdu", 0x13, 1, true, 0x20, 0x20},
     };
     static constexpr Address7    Address       = 0x18;
     static constexpr std::size_t RegisterBytes = 1;
@@ -175,15 +176,17 @@ struct Iis2dulpx {
     static constexpr auto         WakeRetryDelay = std::chrono::milliseconds{10};
 
     static constexpr std::array Init{
-      Step::write({.reg     = 0x10,
-                   .payload = {0x20},
-                   .delay   = std::chrono::milliseconds{25}}),   // SW_RESET, then the boot time
-      Step::write({.reg = 0x10, .payload = {Ctrl1}}),            // IF_ADD_INC for the burst read
-      Step::write({.reg = 0x12, .payload = {Ctrl3}}),            // HP_EN for a high-performance ODR
-      Step::write({.reg = 0x13, .payload = {0x20}}),             // CTRL4: BDU
-      Step::write({.reg     = 0x14,
-                   .payload = {Ctrl5},
-                   .delay   = std::chrono::milliseconds{25}}),   // ODR, bandwidth and full scale
+      Engine::Step::write(
+        {.reg     = 0x10,
+         .payload = {0x20},
+         .delay   = std::chrono::milliseconds{25}}),            // SW_RESET, then the boot time
+      Engine::Step::write({.reg = 0x10, .payload = {Ctrl1}}),   // IF_ADD_INC for the burst read
+      Engine::Step::write({.reg = 0x12, .payload = {Ctrl3}}),   // HP_EN for a high-performance ODR
+      Engine::Step::write({.reg = 0x13, .payload = {0x20}}),    // CTRL4: BDU
+      Engine::Step::write(
+        {.reg     = 0x14,
+         .payload = {Ctrl5},
+         .delay   = std::chrono::milliseconds{25}}),   // ODR, bandwidth and full scale
     };
 
     struct State {
@@ -209,7 +212,7 @@ struct Iis2dulpx {
 
         /// The rate CTRL5 holds now, which a Config write changes; `Period` is the template's,
         /// which the bus load and the nominal rates are computed from.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             auto const field = static_cast<std::size_t>(state.odr & 0x0FU);
             auto const p
               = field < OdrPeriod.size() ? OdrPeriod[field] : std::chrono::milliseconds::zero();
@@ -217,8 +220,9 @@ struct Iis2dulpx {
         }
 
         /// STATUS, then 0x28..0x2F in one go: three axes then the temperature word.
-        static constexpr std::array Steps{Step::read({.reg = 0x25, .count = 1, .offset = 8}),
-                                          Step::read({.reg = 0x28, .count = 8, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x25, .count = 1, .offset = 8}),
+          Engine::Step::read({.reg = 0x28, .count = 8, .offset = 0})};
 
         struct Sample {
             MicroG    x{};
@@ -234,9 +238,9 @@ struct Iis2dulpx {
         }
 
         /// At the full scale the part holds now, which a Config write changes (applied()).
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(8) & 0x01U) == 0) { return Outcome<Sample>::unchanged(); }   // DRDY
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(8) & 0x01U) == 0) { return Engine::Outcome<Sample>::unchanged(); }   // DRDY
             Sample sample{};
             sample.x = Units::microG(accel(data.s16le(0), state.fs));
             sample.y = Units::microG(accel(data.s16le(2), state.fs));
@@ -245,7 +249,7 @@ struct Iis2dulpx {
             sample.temperature = Units::milliDegC(
               static_cast<std::int32_t>(static_cast<std::int64_t>(data.s16le(6)) * 10000 / 3555)
               + 25000);
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -256,11 +260,11 @@ struct Iis2dulpx {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl5;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0]
               = static_cast<std::byte>(Iis2dulpxDetail::allowedCtrl5(value, HighPerformance));
-            return Step::writeBuffer({.reg = 0x14, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x14, .offset = 0, .count = 1});
         }
 
         /// The full scale is FS, bits 1:0; the rate ODR, bits 7:4.
@@ -271,8 +275,8 @@ struct Iis2dulpx {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<Config>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<Config>;
 };
 
 }   // namespace Kvasir::I2C::Chips

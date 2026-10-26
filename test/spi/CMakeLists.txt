@@ -1,15 +1,9 @@
 # The SPI drivers (src/kvasir/Devices/SPI/) on the host, over the queued master's core with a fake transfer
 # (FakeQueuedSpi.hpp) and a model of the part.
-#
-# cmake -S test/spi -B build/spi && cmake --build build/spi --parallel && ctest --test-dir build/spi
-cmake_minimum_required(VERSION 3.28)
-
-project(kvasir_devices_spi_test LANGUAGES CXX)
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/KvasirDevicesTest.cmake)
 
 foreach(
     test
+    client_test
     max31865_test
     no_part_test
     queue_core_test
@@ -19,11 +13,24 @@ foreach(
     stream_test
     oracle_test
     ltc2400_test
-    ltc2641_test)
+    ltc2641_test
+    nor_flash_test)
     kvasir_devices_test(spi_${test} SOURCE ${test}.cpp)
 endforeach()
 
+# QueuedFront.hpp's ceilingHz(): a device ceiling below the slowest clock the block makes does not compile
+kvasir_devices_compile_fail(
+    spi_front
+    SOURCE
+    queue_core_test.cpp
+    DEFINE_PREFIX
+    QUEUE_CORE_FRONT
+    CASES
+    "BELOW_REACH|rateOutOfReach")
+
 # The SD card as a block device; with the fs library next to this checkout (FS_ROOT, or ../fs) also FAT32 on top of it.
+# fs is found by path only (it is not published, so there is nothing to fetch): a lone checkout and CI build the branch
+# without it.
 if(NOT FS_ROOT)
     get_filename_component(FS_ROOT "${KVASIR_DEVICES_ROOT}/../fs" ABSOLUTE)
 endif()

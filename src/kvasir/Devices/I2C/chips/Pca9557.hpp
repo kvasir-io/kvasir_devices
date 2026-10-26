@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -31,17 +32,17 @@ struct Pca9557 {
     static constexpr Address7         Address       = 0x18;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F};
+    static constexpr auto Addresses = addressRun<0x18, 8>();
 
     static constexpr auto StartupDelay = std::chrono::milliseconds{50};
 
     /// The input port read is the presence probe.
-    static constexpr std::array Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Pins {
         static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t port{};
@@ -58,15 +59,15 @@ struct Pca9557 {
     /// every bring-up, so a device that was reconfigured by something else comes back to a
     /// known state.
     template<std::uint16_t Reg, std::uint8_t Init>
-    using Byte = Groups::InitialByte<Reg, Init>;
+    using Byte = Engine::Groups::InitialByte<Reg, Init>;
 
     using Direction = Byte<0x03, 0xFF>;   ///< configuration: 1 = input (reset 0xFF)
     using Output    = Byte<0x01, 0x00>;   ///< output port (reset 0x00)
     using Polarity  = Byte<0x02, 0xF0>;   ///< polarity inversion (reset 0xF0)
 
-    using Reads = List<Pins>;
+    using Reads = Engine::List<Pins>;
     /// Output before Direction: the latch holds its value before a pin becomes an output.
-    using Writes = List<Output, Direction, Polarity>;
+    using Writes = Engine::List<Output, Direction, Polarity>;
 };
 
 }   // namespace Kvasir::I2C::Chips

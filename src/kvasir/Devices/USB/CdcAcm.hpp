@@ -107,38 +107,36 @@ namespace ACM {
             // Interrupt endpoint polling interval (in ms, max 255 to minimize polling)
             static constexpr std::uint8_t InterruptEndpointInterval = 255;
 
-            constexpr USB::Descriptors::Endpoint CDC_ManagementEndpointDescriptor{
-              .bEndpointAddress{makeEndpointAddress(EndpointDirection::In, ManagementEndpointId)},
-              .bmAttributes{EndpointTransferType::Interrupt},
-              .wMaxPacketSize{ManagementEndpointPacketSize},
-              .bInterval{InterruptEndpointInterval}};
-
-            constexpr USB::Descriptors::Endpoint ACM_DataInEndpointDescriptor{
-              .bEndpointAddress{makeEndpointAddress(EndpointDirection::In, DataEndpointID)},
-              .bmAttributes{EndpointTransferType::Bulk},
-              .wMaxPacketSize{detail::MaxPacketSize}};
-
-            constexpr USB::Descriptors::Endpoint ACM_DataOutEndpointDescriptor{
-              .bEndpointAddress{makeEndpointAddress(EndpointDirection::Out, DataEndpointID)},
-              .bmAttributes{EndpointTransferType::Bulk},
-              .wMaxPacketSize{detail::MaxPacketSize}};
+            constexpr auto CDC_ManagementEndpointDescriptor
+              = USB::Descriptors::endpoint(EndpointDirection::In,
+                                           ManagementEndpointId,
+                                           EndpointTransferType::Interrupt,
+                                           ManagementEndpointPacketSize,
+                                           InterruptEndpointInterval);
+            constexpr auto ACM_DataInEndpointDescriptor
+              = USB::Descriptors::endpoint(EndpointDirection::In,
+                                           DataEndpointID,
+                                           EndpointTransferType::Bulk);
+            constexpr auto ACM_DataOutEndpointDescriptor
+              = USB::Descriptors::endpoint(EndpointDirection::Out,
+                                           DataEndpointID,
+                                           EndpointTransferType::Bulk);
 
             constexpr auto CDC_Interface
-              = USB::Descriptors::detail::generateArray(CDC_ManagementInterfaceDescriptor,
-                                                        CDC_HeaderDescriptor,
-                                                        CDC_CallManagementDescriptor,
-                                                        CDC_ACM_Descriptor,
-                                                        CDC_UnionDescriptor,
-                                                        CDC_ManagementEndpointDescriptor);
+              = USB::Descriptors::generateArray(CDC_ManagementInterfaceDescriptor,
+                                                CDC_HeaderDescriptor,
+                                                CDC_CallManagementDescriptor,
+                                                CDC_ACM_Descriptor,
+                                                CDC_UnionDescriptor,
+                                                CDC_ManagementEndpointDescriptor);
             constexpr auto ACM_Interface
-              = USB::Descriptors::detail::generateArray(ACM_InterfaceDescriptor,
-                                                        ACM_DataOutEndpointDescriptor,
-                                                        ACM_DataInEndpointDescriptor);
+              = USB::Descriptors::generateArray(ACM_InterfaceDescriptor,
+                                                ACM_DataOutEndpointDescriptor,
+                                                ACM_DataInEndpointDescriptor);
 
-            constexpr auto Interface
-              = USB::Descriptors::detail::generateArray(CDC_ACM_InterfaceAssociation,
-                                                        CDC_Interface,
-                                                        ACM_Interface);
+            constexpr auto Interface = USB::Descriptors::generateArray(CDC_ACM_InterfaceAssociation,
+                                                                       CDC_Interface,
+                                                                       ACM_Interface);
 
             return Interface;
         }
@@ -149,15 +147,13 @@ namespace ACM {
              typename Config,
              typename Derived,
              std::size_t FirstInterfaceNumber,
-             std::size_t FirstEndpointNumber,
-             typename Unused = void>
+             std::size_t FirstEndpointNumber>
     struct Mixin {
     private:
         friend Derived;
-        friend struct Kvasir::USB::detail::MixinTraits;   // Grants access to helper functions
+        friend struct Kvasir::USB::MixinTraits;   // Grants access to helper functions
 
-        using Self
-          = Mixin<Clock, Config, Derived, FirstInterfaceNumber, FirstEndpointNumber, Unused>;
+        using Self = Mixin<Clock, Config, Derived, FirstInterfaceNumber, FirstEndpointNumber>;
 
         // CDC-ACM uses 2 interfaces (management + data)
         static constexpr std::size_t InterfaceCount = 2;
@@ -190,12 +186,12 @@ namespace ACM {
           = detail::InterruptInEndpoint<Derived, ManagementEndpointNumber, SerialStateSize>;
 
         // Callbacks
-        static void SetupEndpointsCallback() {
+        static void setupEndpointsCallback() {
             Notification::setup();
-            DataEndpointHandler::SetupEndpointsCallback();
+            DataEndpointHandler::setupEndpointsCallback();
         }
 
-        static bool SetupPacketRequestCallback(SetupPacket const& pkt) {
+        static bool setupPacketRequestCallback(SetupPacket const& pkt) {
             using Direction = SetupPacket::Direction;
             using Recipient = SetupPacket::Recipient;
             using Type      = SetupPacket::Type;
@@ -212,7 +208,7 @@ namespace ACM {
                                 using namespace std::string_view_literals;
                                 Derived::acknowledgeSetupRequest();
                                 connected = (pkt.wValue & 0x01) != 0;
-                                UC_LOG_I("CDC-ACM: Control line state - DTR={}, RTS={}",
+                                UC_LOG_D("CDC-ACM: Control line state - DTR={}, RTS={}",
                                          (pkt.wValue & 0x01) ? "on"sv : "off"sv,
                                          (pkt.wValue & 0x02) ? "on"sv : "off"sv);
                                 return true;
@@ -222,7 +218,7 @@ namespace ACM {
                     case Request::getLineCoding:
                         {
                             if(pkt.direction() == Direction::deviceToHost) {
-                                UC_LOG_I("CDC-ACM: Get line coding request");
+                                UC_LOG_D("CDC-ACM: Get line coding request");
                                 return Derived::ep0INDataPhase(
                                   std::as_bytes(std::span{std::addressof(lineCoding), 1}),
                                   pkt.wLength);
@@ -236,7 +232,7 @@ namespace ACM {
                             {
                                 lineCodingExpected = true;
                                 Derived::ep0OUTDataPhase(sizeof(USB::CDC::LineCoding));
-                                UC_LOG_I("CDC-ACM: Set line coding request");
+                                UC_LOG_D("CDC-ACM: Set line coding request");
                                 return true;
                             }
                         }
@@ -246,17 +242,17 @@ namespace ACM {
                 }
                 return false;
             }
-            return detail::handleEndpointRequest<Derived, Notification>(pkt)
+            return handleEndpointRequest<Derived, Notification>(pkt)
                 || detail::handleSetInterface<Derived>(pkt,
                                                        ManagementInterface,
                                                        Notification::restart)
                 || detail::handleSetInterface<Derived>(pkt,
                                                        DataInterface,
                                                        DataEndpointHandler::restart)
-                || DataEndpointHandler::SetupPacketRequestCallback(pkt);
+                || DataEndpointHandler::setupPacketRequestCallback(pkt);
         }
 
-        static bool EndpointHandlerCallback(std::size_t epNum,
+        static bool endpointHandlerCallback(std::size_t epNum,
                                             bool        in) {
             // Handle line coding data stage on EP0
             if(epNum == 0 && !in && lineCodingExpected) {
@@ -268,7 +264,7 @@ namespace ACM {
                 }
                 std::memcpy(std::addressof(lineCoding), tempBuffer.data(), tempBuffer.size());
                 Derived::acknowledgeSetupRequest();
-                UC_LOG_I(
+                UC_LOG_D(
                   "CDC-ACM: Line coding set - {} baud, {} data bits, parity={}, stop "
                   "bits={}",
                   lineCoding.dwDTERate,
@@ -281,29 +277,29 @@ namespace ACM {
                 Notification::bufferDone();
                 return true;
             }
-            return DataEndpointHandler::EndpointHandlerCallback(epNum, in);
+            return DataEndpointHandler::endpointHandlerCallback(epNum, in);
         }
 
-        static bool AbortDoneCallback(std::size_t epNum,
+        static bool abortDoneCallback(std::size_t epNum,
                                       bool        in) {
             if(epNum == ManagementEndpointNumber && in) {
                 Notification::abortDone();
                 return true;
             }
-            return DataEndpointHandler::AbortDoneCallback(epNum, in);
+            return DataEndpointHandler::abortDoneCallback(epNum, in);
         }
 
-        static void ResetCallback() {
+        static void resetCallback() {
             lineCodingExpected = false;
             connected          = false;
             Notification::busReset();
-            DataEndpointHandler::ResetCallback();
+            DataEndpointHandler::resetCallback();
         }
 
-        static void ConfiguredCallback(std::uint8_t configuration) {
+        static void configuredCallback(std::uint8_t configuration) {
             if(configuration == 0) { connected = false; }
             Notification::configured();
-            DataEndpointHandler::ConfiguredCallback(configuration);
+            DataEndpointHandler::configuredCallback(configuration);
         }
 
         // State
@@ -364,7 +360,7 @@ namespace Kvasir::USB {
 /// EF/02/01, because the two CDC interfaces are tied together by an interface association.
 ///
 ///     using Usb = Kvasir::USB::CdcAcm<HW::UsbBackend, Clock, UsbConfig>;
-///     Usb::isConnected();  Usb::isSendReady();  Usb::send(bytes);  Usb::getRecvBuffer().pop_into(b);
+///     Usb::isConnected();  Usb::isSendReady();  Usb::send(bytes);  Usb::getRecvBuffer().popInto(b);
 template<template<typename, typename> class BackendT,
          typename Clock,
          typename Config,

@@ -3,6 +3,7 @@
 #include "../Log.hpp"
 #include "Backend.hpp"
 #include "Descriptors.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,7 +20,7 @@
 #include <string_view>
 #include <utility>
 
-namespace Kvasir::USB::detail {
+namespace Kvasir::USB {
 
 // Standard requests addressed to one endpoint: GET_STATUS and SET/CLEAR_FEATURE(ENDPOINT_HALT).
 // Endpoint provides Address, halted, halt() and clearHalt().
@@ -54,7 +55,7 @@ bool handleEndpointRequest(SetupPacket const& pkt) {
             }
             Derived::acknowledgeSetupRequest();
             using namespace std::string_view_literals;
-            UC_LOG_I("USB: EP{:#04x} halt {}",
+            UC_LOG_D("USB: EP{:#04x} halt {}",
                      Endpoint::Address,
                      pkt.bRequest == Request::setFeature ? "set"sv : "cleared"sv);
             return true;
@@ -62,6 +63,10 @@ bool handleEndpointRequest(SetupPacket const& pkt) {
     default: return false;
     }
 }
+
+}   // namespace Kvasir::USB
+
+namespace Kvasir::USB::detail {
 
 // SET_INTERFACE on one interface: alternate setting 0 is the only one, and selecting it resets the
 // interface's endpoints (restart).
@@ -86,13 +91,8 @@ bool handleSetInterface(SetupPacket const& pkt,
 // How much one arm of an endpoint may carry: a packet, unless the backend says more
 // (Endpoint::MaxTransfer, Backend.hpp). A whole number of packets.
 template<typename EP>
-inline constexpr std::size_t MaxTransferOf = [] {
-    if constexpr(requires { EP::MaxTransfer; }) {
-        return static_cast<std::size_t>(EP::MaxTransfer);
-    } else {
-        return MaxPacketSize;
-    }
-}();
+inline constexpr std::size_t MaxTransferOf
+  = static_cast<std::size_t>(KVASIR_CONFIG_OR(EP, maxTransfer, MaxPacketSize));
 
 // A size the host sees as "more follows": a whole number of full packets.
 constexpr bool endsOnPacketBoundary(std::size_t size) {
@@ -108,18 +108,18 @@ constexpr bool endsOnPacketBoundary(std::size_t size) {
 //   Framed = false   a byte stream; flush() ends the host's transfer.
 //
 // The application fills the ring, the interrupt empties it (single producer, single consumer).
-// As many packets as the controller takes at once (EP::QueueDepth) are kept armed, so where that
+// As many packets as the controller takes at once (EP::queueDepth) are kept armed, so where that
 // is more than one the host never has to wait for the interrupt between two packets.
 //
 // Stopping takes the endpoint's packets back and resets its data toggle; sending resumes once the
 // controller has let go of them - at once, or in abortDone() where cancelling is a request
-// (EP::AsyncCancel). A halt clear hands the unsent packets over again and keeps the ring: nothing
+// (EP::asyncCancel). A halt clear hands the unsent packets over again and keeps the ring: nothing
 // lost, nothing repeated. SET_CONFIGURATION, SET_INTERFACE and a bus reset drop everything.
 template<typename Derived,
          std::size_t EndpointNumber,
          std::size_t MaxMessageSize,
          bool        Framed,
-         std::size_t RingSize_ = 0>
+         std::size_t RingBytes = 0>
 struct BulkInEndpoint {
     using EP
       = EndpointOf<Derived, EndpointNumber, EndpointDirection::In, EndpointTransferType::Bulk>;
@@ -130,7 +130,7 @@ struct BulkInEndpoint {
     // Framed: room for one message being sent and one being written - unless the config says
     // otherwise (Config::sendRingSize), down to one message: send() then waits for the last one.
     static constexpr std::size_t RingSize
-      = RingSize_ != 0 ? RingSize_ : (Framed ? 2 * MaxMessageSize + 1 : MaxMessageSize);
+      = RingBytes != 0 ? RingBytes : (Framed ? 2 * MaxMessageSize + 1 : MaxMessageSize);
     static_assert(RingSize > MaxMessageSize || !Framed,
                   "the send ring has to hold a whole message (a ring of N holds N - 1 bytes)");
 
@@ -143,11 +143,11 @@ struct BulkInEndpoint {
     static constexpr std::size_t MaxQueuedMessages = 4;
 
     // How many packets may be with the controller.
-    static constexpr std::uint8_t BuffersPerEndpoint = static_cast<std::uint8_t>(EP::QueueDepth);
+    static constexpr std::uint8_t BuffersPerEndpoint = static_cast<std::uint8_t>(EP::queueDepth);
 
     using RingType  = Kvasir::Atomic::Queue<std::byte, RingSize>;
     using SizeQueue = Kvasir::Atomic::
-      Queue<std::uint32_t, MaxQueuedMessages + 1, Kvasir::Atomic::OverFlowPolicyIgnore>;
+      Fifo<std::uint32_t, MaxQueuedMessages, Kvasir::Atomic::OverflowPolicyIgnore>;
 
     static inline RingType ring{};
 
@@ -191,7 +191,7 @@ struct BulkInEndpoint {
         if(stagedSize == 0) {
             if constexpr(Framed) {
                 if(!messageOpen) {
-                    if(!messageSizes.pop_into(messageBytesLeft)) { return; }
+                    if(!messageSizes.popInto(messageBytesLeft)) { return; }
                     messageOpen = true;
                 }
             }
@@ -202,7 +202,7 @@ struct BulkInEndpoint {
                 return;
             }
             std::span<std::byte> chunk{packets[nextSlot].data(), size};
-            if(!ring.pop_into(chunk)) { return; }
+            if(!ring.popInto(chunk)) { return; }
             stagedSize = size;
             if constexpr(Framed) {
                 messageBytesLeft -= static_cast<std::uint32_t>(size);
@@ -284,10 +284,10 @@ struct BulkInEndpoint {
     // Consumer-side flush: safe against the application filling the ring.
     static void dropQueued() {
         std::byte discard{};
-        while(ring.pop_into(discard)) {}
+        while(ring.popInto(discard)) {}
         if constexpr(Framed) {
             std::uint32_t size{};
-            while(messageSizes.pop_into(size)) {}
+            while(messageSizes.popInto(size)) {}
             messageOpen      = false;
             messageBytesLeft = 0;
         }
@@ -300,7 +300,7 @@ struct BulkInEndpoint {
     static void abortTransfers(bool keepQueued) {
         restartPending = true;
         replayUnsent   = keepQueued;
-        if constexpr(EP::AsyncCancel) {
+        if constexpr(EP::asyncCancel) {
             EP::cancel();
             if(!keepQueued) { dropQueued(); }
         } else {
@@ -345,9 +345,9 @@ struct BulkInEndpoint {
         }
     }
 
-    // Only where cancelling is a request (EP::AsyncCancel): the controller's answer.
+    // Only where cancelling is a request (EP::asyncCancel): the controller's answer.
     static void abortDone() {
-        if constexpr(EP::AsyncCancel) { finishCancel(EP::cancelComplete()); }
+        if constexpr(EP::asyncCancel) { finishCancel(EP::cancelComplete()); }
     }
 
     static void halt() {
@@ -446,7 +446,7 @@ struct BulkOutEndpoint {
     //     FullPacketsForTransfers full packets in a row say a stream is coming again;
     //   - a halt clear takes what the transfer holds into the queue before it cancels.
     static constexpr bool ReceivesInPlace
-      = !EP::AsyncCancel && requires(std::span<std::byte> dest) {
+      = !EP::asyncCancel && requires(std::span<std::byte> dest) {
             { EP::armReceiveInto(dest) } -> std::same_as<bool>;
             { EP::received() } -> std::convertible_to<std::size_t>;
             { EP::receivedSoFar() } -> std::convertible_to<std::size_t>;
@@ -455,7 +455,7 @@ struct BulkOutEndpoint {
 
     static constexpr std::size_t MaxReceive = [] {
         if constexpr(ReceivesInPlace) {
-            return static_cast<std::size_t>(EP::MaxReceive);
+            return static_cast<std::size_t>(EP::maxReceive);
         } else {
             return MaxPacketSize;
         }
@@ -534,7 +534,7 @@ struct BulkOutEndpoint {
         if(!keepQueued) { flushPending = true; }
         takeBack(keepQueued);
         static_cast<void>(EP::cancel());
-        if constexpr(!EP::AsyncCancel) { finishCancel(); }
+        if constexpr(!EP::asyncCancel) { finishCancel(); }
     }
 
     // SET_CONFIGURATION and SET_INTERFACE: everything in flight is dropped, and a halt ends - "the
@@ -561,9 +561,9 @@ struct BulkOutEndpoint {
         if(std::exchange(restartPending, false) && Derived::isConfigured() && !halted) { arm(); }
     }
 
-    // Only where cancelling is a request (EP::AsyncCancel): the controller's answer.
+    // Only where cancelling is a request (EP::asyncCancel): the controller's answer.
     static void abortDone() {
-        if constexpr(EP::AsyncCancel) {
+        if constexpr(EP::asyncCancel) {
             static_cast<void>(EP::cancelComplete());
             finishCancel();
         }
@@ -634,7 +634,7 @@ struct BulkOutEndpoint {
     static void service() {
         if(flushPending.load()) {
             std::byte discard{};
-            while(queue.pop_into(discard)) {}
+            while(queue.popInto(discard)) {}
             flushPending = false;
         }
         takeBackStalled();
@@ -653,34 +653,34 @@ struct BulkOutEndpoint {
 // flushes the queue when the endpoint was stopped and lets a paused endpoint take data again.
 template<typename Out>
 struct RecvQueue {
-    bool pop_into(std::byte& out) {
+    bool popInto(std::byte& out) {
         Out::service();
-        bool const got = Out::queue.pop_into(out);
+        bool const got = Out::queue.popInto(out);
         if(got) { Out::service(); }
         return got;
     }
 
     template<typename Range>
-    bool pop_into(Range& range) {
+    bool popInto(Range& range) {
         Out::service();
-        bool const got = Out::queue.pop_into(range);
+        bool const got = Out::queue.popInto(range);
         if(got) { Out::service(); }
         return got;
     }
 
-    std::size_t size() const {
+    [[nodiscard]] std::size_t size() const {
         Out::service();
         return Out::queue.size();
     }
 
-    bool empty() const { return size() == 0; }
+    [[nodiscard]] bool empty() const { return size() == 0; }
 
-    constexpr std::size_t max_size() const { return Out::queue.max_size(); }
+    [[nodiscard]] constexpr std::size_t max_size() const { return Out::queue.max_size(); }
 };
 
 // A bulk function: BulkInEndpoint, plus BulkOutEndpoint when Bidirectional.
-// Config::SendBufferSize sizes the send ring (framed: the largest message),
-// Config::RecvBufferSize the receive queue.
+// Config::sendBufferSize sizes the send ring (framed: the largest message),
+// Config::recvBufferSize the receive queue.
 //
 // A device with several bulk functions sizes each by its interface number instead, where RAM is
 // short - any of these, the plain member or 4096 where one is missing:
@@ -704,8 +704,8 @@ private:
     static constexpr std::size_t SendBufferSize = [] {
         if constexpr(requires { Config::sendBufferSize(InterfaceNumber); }) {
             return static_cast<std::size_t>(Config::sendBufferSize(InterfaceNumber));
-        } else if constexpr(requires { Config::SendBufferSize; }) {
-            return static_cast<std::size_t>(Config::SendBufferSize);
+        } else if constexpr(requires { Config::sendBufferSize; }) {
+            return static_cast<std::size_t>(Config::sendBufferSize);
         } else {
             return std::size_t{4096};
         }
@@ -714,8 +714,8 @@ private:
     static constexpr std::size_t RecvBufferSize = [] {
         if constexpr(requires { Config::recvBufferSize(InterfaceNumber); }) {
             return static_cast<std::size_t>(Config::recvBufferSize(InterfaceNumber));
-        } else if constexpr(requires { Config::RecvBufferSize; }) {
-            return static_cast<std::size_t>(Config::RecvBufferSize);
+        } else if constexpr(requires { Config::recvBufferSize; }) {
+            return static_cast<std::size_t>(Config::recvBufferSize);
         } else {
             return std::size_t{4096};
         }
@@ -737,8 +737,8 @@ private:
 
     static inline RecvQueue<Out> recvQueue{};
 
-    // Callbacks (called by MixinBases)
-    static bool EndpointHandlerCallback(std::size_t epNum,
+    // Callbacks (called by the Device through MixinTraits::Layout<...>::Bases)
+    static bool endpointHandlerCallback(std::size_t epNum,
                                         bool        in) {
         if(epNum != EndpointNumber) { return false; }
         if(in) {
@@ -752,7 +752,7 @@ private:
         return false;
     }
 
-    static bool AbortDoneCallback(std::size_t epNum,
+    static bool abortDoneCallback(std::size_t epNum,
                                   bool        in) {
         if(epNum != EndpointNumber) { return false; }
         if(in) {
@@ -766,21 +766,21 @@ private:
         return false;
     }
 
-    static bool SetupPacketRequestCallback(SetupPacket const& pkt) {
+    static bool setupPacketRequestCallback(SetupPacket const& pkt) {
         if(handleEndpointRequest<Derived, In>(pkt)) { return true; }
         if constexpr(Bidirectional) { return handleEndpointRequest<Derived, Out>(pkt); }
         return false;
     }
 
-    static void ResetCallback() {
+    static void resetCallback() {
         In::busReset();
         if constexpr(Bidirectional) { Out::busReset(); }
     }
 
     // SET_CONFIGURATION resets the data toggles whatever the value.
-    static void ConfiguredCallback(std::uint8_t) { restart(); }
+    static void configuredCallback(std::uint8_t) { restart(); }
 
-    static void SetupEndpointsCallback() {
+    static void setupEndpointsCallback() {
         In::EP::setupEndpoint();
         if constexpr(Bidirectional) { Out::EP::setupEndpoint(); }
     }

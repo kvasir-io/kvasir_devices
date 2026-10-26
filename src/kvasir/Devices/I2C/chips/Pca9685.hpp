@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -46,13 +47,13 @@ struct Pca9685 {
     }();
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x00, .payload = {0x10}}),
-      Step::write({.reg = 0xFE, .payload = {Prescale}}),
-      Step::write({.reg = 0x01, .payload = {0x04}}),
-      Step::write({.reg = 0x00, .payload = {0x20}, .delay = std::chrono::milliseconds{1}}),
-      Step::write({.reg = 0x00, .payload = {0xA0}}),
-      Step::read({.reg = 0xFE, .count = 1, .offset = 0}),   // PRE_SCALE back
-      Step::read({.reg = 0x01, .count = 1, .offset = 1}),   // MODE2 back
+      Engine::Step::write({.reg = 0x00, .payload = {0x10}}),
+      Engine::Step::write({.reg = 0xFE, .payload = {Prescale}}),
+      Engine::Step::write({.reg = 0x01, .payload = {0x04}}),
+      Engine::Step::write({.reg = 0x00, .payload = {0x20}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::write({.reg = 0x00, .payload = {0xA0}}),
+      Engine::Step::read({.reg = 0xFE, .count = 1, .offset = 0}),   // PRE_SCALE back
+      Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1}),   // MODE2 back
     };
 
     struct State {
@@ -85,19 +86,19 @@ struct Pca9685 {
         static constexpr std::size_t Bytes = 4;
         static constexpr Value       Initial{0, 4096};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value.on & 0xFF);
             buffer[1] = static_cast<std::byte>(value.on >> 8);
             buffer[2] = static_cast<std::byte>(value.off & 0xFF);
             buffer[3] = static_cast<std::byte>(value.off >> 8);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = static_cast<std::uint16_t>(0x06 + 4 * item), .offset = 0, .count = 4});
         }
     };
 
-    using Writes = List<Channel>;
+    using Writes = Engine::List<Channel>;
 };
 
 }   // namespace Kvasir::I2C::Chips

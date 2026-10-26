@@ -66,17 +66,19 @@ struct SlowChip {
     static constexpr Address7         Address       = 0x21;
     static constexpr std::size_t      RegisterBytes = 1;
     static constexpr Units::Hertz     I2cMaxClock   = Units::hertz(100'000);
-    static constexpr std::array       Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+    static constexpr std::array       Init{
+      Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Value {
         static constexpr auto       Period = std::chrono::milliseconds{10};
-        static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
     };
 
-    using Reads = List<Value>;
+    using Reads = Kvasir::Engine::List<Value>;
 };
 
 /// The same part with no limit of its own, at another address.
@@ -86,18 +88,18 @@ struct FreeChip {
     static constexpr std::size_t      RegisterBytes = 1;
     static constexpr auto             Init          = SlowChip::Init;
     using Value                                     = SlowChip::Value;
-    using Reads                                     = List<Value>;
+    using Reads                                     = Kvasir::Engine::List<Value>;
 };
 
 struct At250k {
-    static constexpr std::uint8_t Address  = 0x23;
-    static constexpr Units::Hertz BusClock = Units::hertz(250'000);
+    static constexpr std::uint8_t address  = 0x23;
+    static constexpr Units::Hertz busClock = Units::hertz(250'000);
 };
 
 /// Asks for more than the part may take: the part's own limit is the cap (checked below).
 struct At50kOfSlow {
-    static constexpr std::uint8_t Address  = 0x24;
-    static constexpr Units::Hertz BusClock = Units::hertz(50'000);
+    static constexpr std::uint8_t address  = 0x24;
+    static constexpr Units::Hertz busClock = Units::hertz(50'000);
 };
 
 using Slow      = Device<TimedBus, FakeClock, SlowChip>;
@@ -126,7 +128,7 @@ FakeBusResult zeros(std::uint8_t,
                     std::span<std::byte const>,
                     std::span<std::byte> recv) {
     std::ranges::fill(recv, std::byte{});
-    return FakeBusResult::succeeded;
+    return FakeBusResult::ok;
 }
 
 void eachDeviceItsOwnClock() {
@@ -144,7 +146,7 @@ void eachDeviceItsOwnClock() {
     checkEq(*byAddress[Free::Address].begin(), 400'000U, "no limit: the bus's rate");
     checkEq(*byAddress[Mid::Address].begin(), 250'000U, "the Config's clock");
     checkEq(*byAddress[Slower::Address].begin(), 50'000U, "the Config's, below the chip's");
-    check(bus.template get<Slow>().link() == Link::answering, "a clocked device comes up");
+    check(bus.template get<Slow>().link() == Kvasir::Link::answering, "a clocked device comes up");
 }
 
 void loadCountsEachDeviceAtItsClock() {
@@ -163,8 +165,13 @@ void loadCountsEachDeviceAtItsClock() {
 /// timing, the switch's writes the switch's own.
 namespace Behind {
     using Mux     = Device<TimedBus, FakeClock, Chips::Tca9548a>;
-    using SlowCh0 = Device<TimedBus, FakeClock, SlowChip, DefaultConfig, NoReset, MuxGate<Mux, 0>>;
-    using MidCh1  = Device<TimedBus, FakeClock, FreeChip, At250k, NoReset, MuxGate<Mux, 1>>;
+    using SlowCh0 = Device<TimedBus,
+                           FakeClock,
+                           SlowChip,
+                           Kvasir::Engine::DefaultConfig,
+                           Kvasir::NoReset,
+                           MuxGate<Mux, 0>>;
+    using MidCh1  = Device<TimedBus, FakeClock, FreeChip, At250k, Kvasir::NoReset, MuxGate<Mux, 1>>;
     using Wired   = Kvasir::I2C::Bus<TimedBus, FakeClock, Mux, SlowCh0, MidCh1>;
 }   // namespace Behind
 
@@ -178,7 +185,7 @@ void muxWritesCarryTheMuxClock() {
           if(a == Behind::Mux::Address) {
               if(!sent.empty()) { control = std::to_integer<std::uint8_t>(sent[0]); }
               if(!recv.empty()) { recv[0] = std::byte{control}; }
-              return FakeBusResult::succeeded;
+              return FakeBusResult::ok;
           }
           return zeros(a, sent, recv);
       }};

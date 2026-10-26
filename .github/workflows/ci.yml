@@ -26,24 +26,15 @@ jobs:
             - name: Set up C++ environment
               run: |
                 pacman -Syu --noconfirm --disable-download-timeout
-                pacman -S --noconfirm --disable-download-timeout git cmake base-devel ${{ matrix.compiler.cc == 'clang' && 'clang' || '' }}
+                pacman -S --noconfirm --disable-download-timeout git cmake base-devel python ${{ matrix.compiler.cc == 'clang' && 'clang' || '' }}
 
             - name: Checkout repository
               uses: actions/checkout@v5
 
-            # Only the submodules the tests use: uc_log's remote_fmt and string_constant.
-            # A plain git clone rather than a second actions/checkout: act cannot run a JS action for another
-            # repository in the bare archlinux container (no node).
-            - name: Checkout Kvasir SDK
-              run: |
-                git clone --depth 1 https://github.com/kvasir-io/Kvasir_SDK.git "$GITHUB_WORKSPACE/../Kvasir_SDK"
-                cd "$GITHUB_WORKSPACE/../Kvasir_SDK"
-                git submodule update --init --depth 1 uc_log
-                git -C uc_log submodule update --init --depth 1 remote_fmt
-                git -C uc_log/remote_fmt submodule update --init --depth 1 string_constant
-
+            # The test tree fetches the Kvasir SDK (master, with only uc_log -> remote_fmt -> string_constant) itself:
+            # test/cmake/KvasirDevicesTest.cmake.
             - name: Configure CMake
-              run: cmake -S test -B build -DCMAKE_COMPILE_WARNING_AS_ERROR=ON -DKVASIR_ROOT="$(realpath "$GITHUB_WORKSPACE/../Kvasir_SDK")"
+              run: cmake -S test -B build -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
               env:
                 CC: ${{ matrix.compiler.cc }}
                 CXX: ${{ matrix.compiler.cxx }}
@@ -53,3 +44,17 @@ jobs:
 
             - name: Run tests
               run: cd build && ctest --output-on-failure
+
+            # clang-tidy (Kvasir_SDK master's tools/tidy.py and .clang-tidy, .github/actions/tidy) over this tree:
+            # this repository's findings fail, the libraries' are counted as foreign
+            - name: clang-tidy
+              if: matrix.compiler.cc == 'clang' && !matrix.compiler.sanitizer
+              uses: kvasir-io/Kvasir_SDK/.github/actions/tidy@master
+              timeout-minutes: 30
+              with:
+                trees: build
+                mode: ${{ github.event_name == 'pull_request' && 'changed' || 'full' }}
+
+    # the include layering of this repository against Kvasir_SDK tools/layers.toml (any finding fails)
+    layers:
+        uses: kvasir-io/Kvasir_SDK/.github/workflows/package-layers.yml@master

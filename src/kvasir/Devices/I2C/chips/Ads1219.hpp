@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -52,23 +53,8 @@ struct Ads1219 {
     static constexpr std::string_view Name    = "ADS1219";
     static constexpr Address7         Address = 0x40;
     /// A0 and A1 each tie to DGND, DVDD, SDA or SCL: sixteen addresses from 0x40.
-    static constexpr std::array<Address7, 16> Addresses{0x40,
-                                                        0x41,
-                                                        0x42,
-                                                        0x43,
-                                                        0x44,
-                                                        0x45,
-                                                        0x46,
-                                                        0x47,
-                                                        0x48,
-                                                        0x49,
-                                                        0x4A,
-                                                        0x4B,
-                                                        0x4C,
-                                                        0x4D,
-                                                        0x4E,
-                                                        0x4F};
-    static constexpr std::size_t              RegisterBytes = 0;
+    static constexpr auto        Addresses     = addressRun<0x40, 16>();
+    static constexpr std::size_t RegisterBytes = 0;
 
     static constexpr std::size_t Channels = 4;
 
@@ -91,9 +77,9 @@ struct Ads1219 {
     /// (Table 9), which is the check that the part is an ADS1219 (SparkFun's begin() makes the
     /// same one) before a sweep writes to it.
     static constexpr std::array Init{
-      Step::command({.payload = {0x06}, .delay = std::chrono::milliseconds{1}}),   // RESET
-      Step::command({.payload = {0x20}}),                                          // RREG config
-      Step::receive({.count = 1, .offset = 0}),
+      Engine::Step::command({.payload = {0x06}, .delay = std::chrono::milliseconds{1}}),   // RESET
+      Engine::Step::command({.payload = {0x20}}),   // RREG config
+      Engine::Step::receive({.count = 1, .offset = 0}),
     };
 
     struct State {
@@ -115,15 +101,17 @@ struct Ads1219 {
 
         /// Per channel: select it, start it, wait it out, then ask for the result.
         static constexpr auto Steps = [] {
-            std::array<Step, 4 * Channels> s{};
-            std::size_t                    i = 0;
+            std::array<Engine::Step, 4 * Channels> s{};
+            std::size_t                            i = 0;
             for(unsigned c = 0; c < Channels; ++c) {
-                s[i++] = Step::command({
+                s[i++] = Engine::Step::command({
                   .payload = {0x40, Ads1219Detail::config(c, Gain, DataRate)}
                 });
-                s[i++] = Step::command({.payload = {0x08}, .delay = Conversion});   // START/SYNC
-                s[i++] = Step::command({.payload = {0x10}});   // RDATA, then a STOP
-                s[i++] = Step::receive({.count = 3, .offset = static_cast<std::uint8_t>(3 * c)});
+                s[i++]
+                  = Engine::Step::command({.payload = {0x08}, .delay = Conversion});   // START/SYNC
+                s[i++] = Engine::Step::command({.payload = {0x10}});   // RDATA, then a STOP
+                s[i++]
+                  = Engine::Step::receive({.count = 3, .offset = static_cast<std::uint8_t>(3 * c)});
             }
             return s;
         }();
@@ -152,7 +140,7 @@ struct Ads1219 {
         }
     };
 
-    using Reads = List<Sweep>;
+    using Reads = Engine::List<Sweep>;
 };
 
 }   // namespace Kvasir::I2C::Chips

@@ -1,8 +1,10 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -45,40 +47,25 @@ namespace Ina238Detail {
 /// The shunt value, the full-scale current and the ADC range are template parameters, as
 /// on the INA226: decode needs the scale, and the calibration register then has a
 /// compile-time Initial instead of being computed in a constructor. `Ina238<>` is a 2
-/// mOhm shunt at 10 A full scale on the wide range, read every `Timing::Period` (500 ms). The
+/// mOhm shunt at 10 A full scale on the wide range, read every `Timing::period` (500 ms). The
 /// Config group writes CONVDLY with the range the template fixed; `Reset` is the one-shot
 /// RST bit, a Transient group that is not replayed after a bring-up. 0x40..0x4F by A1 A0.
 template<MicroOhm            Shunt      = Units::microOhm(2000),
          MilliAmp            MaxCurrent = Units::milliAmp(10000),
          Ina238Detail::Range Range      = Ina238Detail::Range::mV160,
-         typename Timing                = DefaultTiming>
+         typename Timing                = Engine::DefaultTiming>
 struct Ina238 {
     static constexpr std::string_view Name = "INA238";
     /// TI INA238. INA238.md:1258 (MANUFACTURER_ID 3Eh = 5449h) and :1272..1282 (DEVICE_ID 3Fh: DIEID
     /// 238h in 15:4).
     static constexpr std::array Identity{
-      RegisterCheck{"manufacturer-id", 0x3E, 2, true, 0xFFFF, 0x5449},
-      RegisterCheck{      "device-id", 0x3F, 2, true, 0xFFF0, 0x2380},
+      Engine::RegisterCheck{"manufacturer-id", 0x3E, 2, true, 0xFFFF, 0x5449},
+      Engine::RegisterCheck{      "device-id", 0x3F, 2, true, 0xFFF0, 0x2380},
     };
     static constexpr Address7    Address       = 0x40;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 16> Addresses{0x40,
-                                                        0x41,
-                                                        0x42,
-                                                        0x43,
-                                                        0x44,
-                                                        0x45,
-                                                        0x46,
-                                                        0x47,
-                                                        0x48,
-                                                        0x49,
-                                                        0x4A,
-                                                        0x4B,
-                                                        0x4C,
-                                                        0x4D,
-                                                        0x4E,
-                                                        0x4F};
+    static constexpr auto Addresses = addressRun<0x40, 16>();
 
     /// Not a datasheet figure (neither the INA238's nor the INA237's gives a start-up time):
     /// a margin for the supply to settle before the first transaction.
@@ -87,15 +74,10 @@ struct Ina238 {
     static_assert(Shunt > Units::microOhm(0) && MaxCurrent > Units::milliAmp(0),
                   "the shunt value and the full-scale current are what every reading is "
                   "scaled by; neither may be zero");
-    static constexpr std::chrono::milliseconds ReadPeriod = [] {
-        if constexpr(requires { Timing::Period; }) {
-            return Kvasir::asDuration(Timing::Period);
-        } else {
-            return std::chrono::milliseconds{500};
-        }
-    }();
+    static constexpr std::chrono::milliseconds ReadPeriod
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{500}));
     static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
-                  "Timing::Period is how often Power is read; 0 never reads it");
+                  "Timing::period is how often Power is read; 0 never reads it");
 
     static constexpr bool Range40mV = Range == Ina238Detail::Range::mV40;
 
@@ -108,9 +90,8 @@ struct Ina238 {
     static constexpr std::uint64_t CalibrationWanted = [] {
         auto const lsb   = static_cast<std::uint64_t>(Units::value(CurrentLsb));   // nA
         auto const shunt = static_cast<std::uint64_t>(Units::value(Shunt));        // uOhm
-        auto       v     = (8192ULL * lsb * shunt + 5'000'000'000ULL) / 10'000'000'000ULL;
-        if constexpr(Range40mV) { v *= 4; }
-        return v;
+        auto const v     = (8192ULL * lsb * shunt + 5'000'000'000ULL) / 10'000'000'000ULL;
+        return Range40mV ? v * 4 : v;
     }();
     static_assert(CalibrationWanted <= 0x7FFF,
                   "SHUNT_CAL is 15 bits: lower MaxCurrent or the shunt until 819.2e6 x "
@@ -145,12 +126,12 @@ struct Ina238 {
         static constexpr auto Period = ReadPeriod;
 
         static constexpr std::array Steps{
-          Step::read({.reg = 0x04, .count = 2, .offset = 0}),    // shunt voltage
-          Step::read({.reg = 0x05, .count = 2, .offset = 2}),    // bus voltage
-          Step::read({.reg = 0x06, .count = 2, .offset = 4}),    // die temperature
-          Step::read({.reg = 0x07, .count = 2, .offset = 6}),    // current
-          Step::read({.reg = 0x08, .count = 3, .offset = 8}),    // power, 24 bit
-          Step::read({.reg = 0x0B, .count = 2, .offset = 11}),   // DIAG_ALRT
+          Engine::Step::read({.reg = 0x04, .count = 2, .offset = 0}),    // shunt voltage
+          Engine::Step::read({.reg = 0x05, .count = 2, .offset = 2}),    // bus voltage
+          Engine::Step::read({.reg = 0x06, .count = 2, .offset = 4}),    // die temperature
+          Engine::Step::read({.reg = 0x07, .count = 2, .offset = 6}),    // current
+          Engine::Step::read({.reg = 0x08, .count = 3, .offset = 8}),    // power, 24 bit
+          Engine::Step::read({.reg = 0x0B, .count = 2, .offset = 11}),   // DIAG_ALRT
         };
 
         struct Sample {
@@ -181,9 +162,9 @@ struct Ina238 {
 
         /// MATHOF (DIAG_ALRT bit 9) set means the current or power register overflowed and is
         /// not a reading: rejected.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const diag = data.be16(11);
-            if((diag & 0x0200U) != 0) { return Outcome<Sample>::reject(); }
+            if((diag & 0x0200U) != 0) { return Engine::Outcome<Sample>::reject(); }
             Sample sample{};
             sample.shuntVoltage = Units::nanoVolt(static_cast<std::int32_t>(data.s16be(0))
                                                   * (Range40mV ? 1250 : 5000));
@@ -195,7 +176,7 @@ struct Ina238 {
             // POWER_LSB is 0.2 x CURRENT_LSB, so nanowatts / 5 per count.
             sample.power = Units::microWatt(static_cast<std::int64_t>(data.be24(8)) * lsb / 5000);
             sample.diagnostics = diag;
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -217,10 +198,10 @@ struct Ina238 {
             return r;
         }
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, raw(value));
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 2});
         }
     };
 
@@ -233,20 +214,20 @@ struct Ina238 {
         static constexpr std::size_t Bytes     = 2;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, 0x8000);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = 0x00, .offset = 0, .count = 2, .delay = std::chrono::milliseconds{2}});
         }
     };
 
-    using AdcConfig = Groups::Word<0x01, 0xFB68>;
+    using AdcConfig = Engine::Groups::Word<0x01, 0xFB68>;
     /// Computed from the template parameters, written after every bring-up.
-    using ShuntCal = Groups::Word<0x02, Calibration>;
+    using ShuntCal = Engine::Groups::Word<0x02, Calibration>;
 
-    using Reads  = List<Power>;
-    using Writes = List<Config, AdcConfig, ShuntCal, Reset>;
+    using Reads  = Engine::List<Power>;
+    using Writes = Engine::List<Config, AdcConfig, ShuntCal, Reset>;
 };
 
 /// The INA237 is the same silicon at a lower accuracy grade: same register map, same
@@ -257,7 +238,7 @@ struct Ina238 {
 template<MicroOhm            Shunt      = Units::microOhm(2000),
          MilliAmp            MaxCurrent = Units::milliAmp(10000),
          Ina238Detail::Range Range      = Ina238Detail::Range::mV160,
-         typename Timing                = DefaultTiming>
+         typename Timing                = Engine::DefaultTiming>
 struct Ina237 : Ina238<Shunt, MaxCurrent, Range, Timing> {
     using Base = Ina238<Shunt, MaxCurrent, Range, Timing>;
 
@@ -265,11 +246,11 @@ struct Ina237 : Ina238<Shunt, MaxCurrent, Range, Timing> {
     /// TI INA237. INA237.md:1233, MANUFACTURER_ID 3Eh = 5449h. Its data sheet lists no device ID.
     /// Configuration: ADC_CONFIG (01h) MODE 15:12 = Fh, continuous (INA237.md:934).
     static constexpr std::array Identity{
-      RegisterCheck{"manufacturer-id", 0x3E, 2, true, 0xFFFF, 0x5449},
+      Engine::RegisterCheck{"manufacturer-id", 0x3E, 2, true, 0xFFFF, 0x5449},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"continuous", 0x01, 2, true, 0xF000, 0xF000},
+      Engine::RegisterCheck{"continuous", 0x01, 2, true, 0xF000, 0xF000},
     };
 
     /// MANUFACTURER_ID alone: 3Fh is not a register the INA237 documents.

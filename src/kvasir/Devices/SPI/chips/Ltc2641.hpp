@@ -12,8 +12,11 @@
 // - The timing below is what such a firmware has to meet; all minimums are a few ns.
 // - `Ltc2641::Dac<Master, Cs, Bits>` writes it through a queued SPI master (QueueCore.hpp), one
 //   16-bit frame a write, the newest code winning while one is on the wire.
+#include "../../Bytes.hpp"
 #include "../../Quantities.hpp"
+#include "../Client.hpp"
 #include "../QueueCore.hpp"
+#include "kvasir/Hal/Spi.hpp"
 
 #include <array>
 #include <atomic>
@@ -29,7 +32,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2641 {
 
     /// DIN is taken on the SCLK rising edge (pin functions md:247, md:529), and SCLK's idle level
     /// is not constrained beyond t7/t8: mode 0 (mode 3 would do as well).
-    inline constexpr ClockMode Mode = ClockMode::_0;
+    inline constexpr Hal::ClockMode Mode = Hal::ClockMode::mode0;
 
     // Timing Characteristics (md:222-238, page 5), over temperature, VDD 3 V or 5 V.
     /// fSCLK at most 50 MHz, 50 % duty cycle.
@@ -79,9 +82,9 @@ namespace Kvasir { namespace SPI { namespace Ltc2641 {
     [[nodiscard]] constexpr std::array<std::byte,
                                        2>
     frameBytes(std::uint32_t code) {
-        auto const w = frame<Bits>(code);
-        return {std::byte{static_cast<std::uint8_t>(w >> 8U)},
-                std::byte{static_cast<std::uint8_t>(w & 0xFFU)}};
+        std::array<std::byte, 2> b{};
+        putBe16(b, 0, static_cast<std::uint16_t>(frame<Bits>(code)));
+        return b;
     }
 
     /// VOUT for a code on the unipolar LTC2641: VREF x code / 2^Bits (Table 1a, md:565-575).
@@ -109,7 +112,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2641 {
                       "fSCLK is at most 50 MHz (LTC2641_LTC2642.md:237)");
         static constexpr auto Setup = Master::setup(Mode, Units::hertz(ClockHz));
 
-        Dac() { apply(set(Cs{})); }
+        Dac() { ChipSelect<Cs>::release(); }
 
         Dac(Dac const&)            = delete;
         Dac& operator=(Dac const&) = delete;
@@ -139,11 +142,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2641 {
         [[nodiscard]] bool busy() const { return running_.load(std::memory_order_acquire); }
 
     private:
-        static void select_() { apply(clear(Cs{})); }
-
-        static void deselect_() { apply(set(Cs{})); }
-
-        static constexpr Lines lines_{&select_, &deselect_, nullptr, nullptr};
+        static constexpr Lines csLines = ChipSelect<Cs>::lines;
 
         /// Whoever turns `running_` from false to true owns the wire and sends what is pending; a
         /// completion gives it back and kicks again, so a write that lands while a frame is out is
@@ -164,12 +163,12 @@ namespace Kvasir { namespace SPI { namespace Ltc2641 {
             word_         = w;   // a native halfword: `wide` sends it MSB first
             bool const ok = Master::submit(
               typename Master::Request{.setup    = Setup,
-                                       .lines    = lines_,
+                                       .lines    = csLines,
                                        .tx       = std::as_bytes(std::span{&word_, 1}),
                                        .rx       = std::as_writable_bytes(std::span{&sink_, 1}),
                                        .wide     = true,
                                        .callback = [this](auto r) {
-                                           if(r == decltype(r)::succeeded) {
+                                           if(r == decltype(r)::ok) {
                                                last_.store(word_, std::memory_order_relaxed);
                                                writes_.fetch_add(1, std::memory_order_relaxed);
                                            } else {
@@ -186,8 +185,8 @@ namespace Kvasir { namespace SPI { namespace Ltc2641 {
 
         std::uint16_t              word_{};
         std::uint16_t              sink_{};
-        std::atomic<std::uint16_t> next_{};
-        std::atomic<std::uint16_t> last_{};
+        std::atomic<std::uint16_t> next_;
+        std::atomic<std::uint16_t> last_;
         std::atomic<bool>          pending_{false};
         std::atomic<bool>          running_{false};
         std::atomic<std::uint32_t> writes_{0};

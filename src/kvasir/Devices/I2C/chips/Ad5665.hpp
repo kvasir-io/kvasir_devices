@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -35,7 +36,7 @@ struct Ad5665 {
     /// otherwise keep -- and it is what an absent device is probed with. Level's Initial and
     /// a set InternalReference follow it.
     static constexpr std::array Init{
-      Step::command({.payload = {0x28, 0x00, 0x01}}
+      Engine::Step::command({.payload = {0x28, 0x00, 0x01}}
       )
     };
 
@@ -46,13 +47,13 @@ struct Ad5665 {
         static constexpr std::size_t Bytes   = 3;
         static constexpr Value       Initial = 0;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         code,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         code,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(0x18U | item);   // write and update channel
             buffer[1] = static_cast<std::byte>(code >> 8);
             buffer[2] = static_cast<std::byte>(code & 0xFF);
-            return Step::commandBuffer({.offset = 0, .count = 3});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 3});
         }
     };
 
@@ -64,12 +65,12 @@ struct Ad5665 {
         using Value                        = Reference;
         static constexpr std::size_t Bytes = 3;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         reference,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         reference,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{0x38};   // command 111, DAC address don't care
             buffer[1] = std::byte{0x00};
             buffer[2] = reference == Reference::on ? std::byte{0x01} : std::byte{0x00};
-            return Step::commandBuffer({.offset = 0, .count = 3});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 3});
         }
     };
 
@@ -78,7 +79,7 @@ struct Ad5665 {
     static constexpr std::size_t C = 2;
     static constexpr std::size_t D = 3;
 
-    using Writes = List<Level, InternalReference>;
+    using Writes = Engine::List<Level, InternalReference>;
 };
 
 }   // namespace Kvasir::I2C::Chips

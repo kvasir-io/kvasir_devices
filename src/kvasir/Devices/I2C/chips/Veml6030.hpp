@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -108,7 +109,7 @@ struct Veml6030 {
     /// Vishay VEML6030. VEML6030.md:480..487: command code 07h, low byte first; the low byte is the
     /// device ID code 81h, the high byte follows the address option.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x07, 2, false, 0x00FF, 0x0081},
+      Engine::RegisterCheck{"id", 0x07, 2, false, 0x00FF, 0x0081},
     };
     static constexpr Address7                Address = 0x10;
     static constexpr std::array<Address7, 2> Addresses{0x10, 0x48};
@@ -119,15 +120,15 @@ struct Veml6030 {
 
     static constexpr std::uint16_t Conf = Veml6030Detail::conf(G, IT);
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::write({.reg = 0x03, .payload = {0x00, 0x00}}
-      ),
-      Step::write(
+      Engine::Step::write({.reg = 0x03, .payload = {0x00, 0x00}}),
+      Engine::Step::write(
         {.reg     = 0x00,
-                   .payload = {static_cast<std::uint8_t>(Conf & 0xFF), static_cast<std::uint8_t>(Conf >> 8)},
-                   .delay   = Veml6030Detail::integrationTime(IT) + std::chrono::milliseconds{50}}
-      ),
+         .payload = {static_cast<std::uint8_t>(Conf & 0xFF), static_cast<std::uint8_t>(Conf >> 8)},
+         .delay   = Veml6030Detail::integrationTime(IT) + std::chrono::milliseconds{50}}),
     };
+    // clang-format on
 
     struct State {
         std::uint16_t deviceId{};
@@ -153,10 +154,11 @@ struct Veml6030 {
 
     struct Light {
         static constexpr auto       Period = readPeriod(IT);
-        static constexpr std::array Steps{Step::read({.reg = 0x04, .count = 2, .offset = 0}),
-                                          Step::read({.reg = 0x05, .count = 2, .offset = 2})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x04, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x05, .count = 2, .offset = 2})};
 
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return readPeriod(state.integration);
         }
 
@@ -195,10 +197,10 @@ struct Veml6030 {
         static constexpr std::size_t Bytes   = 2;
         static constexpr Value       Initial = Conf;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             putLe16(buffer, 0, value);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg    = 0x00,
                .offset = 0,
                .count  = 2,
@@ -213,8 +215,8 @@ struct Veml6030 {
         }
     };
 
-    using Reads  = List<Light>;
-    using Writes = List<Config>;
+    using Reads  = Engine::List<Light>;
+    using Writes = Engine::List<Config>;
 };
 
 /// Vishay VEML7700 (datasheet 84286): the VEML6030's register set at the fixed address

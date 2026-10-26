@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -47,10 +48,10 @@ namespace Ads1x15Detail {
 namespace Ads1115Detail {
     /// One single-shot conversion of AINn: the config write, then the 7.8 ms conversion at
     /// DR 100b (128 SPS).
-    [[nodiscard]] constexpr Step start(unsigned            channel,
-                                       Ads1x15Detail::Gain gain) {
+    [[nodiscard]] constexpr Engine::Step start(unsigned            channel,
+                                               Ads1x15Detail::Gain gain) {
         auto const cfg = Ads1x15Detail::config(channel, gain);
-        return Step::write({
+        return Engine::Step::write({
           .reg     = 0x01,
           .payload = {static_cast<std::uint8_t>(cfg >> 8), static_cast<std::uint8_t>(cfg & 0xFF)},
           // 128 SPS is 7.8 ms, and the data rate may be 10 % slow (Electrical Characteristics),
@@ -80,11 +81,11 @@ struct Ads1115 {
     /// read between them would be taken for the conversion result.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"single-ended-2v048-single-shot", 0x01, 2, true, 0x4F03, 0x4503},
+      Engine::RegisterCheck{"single-ended-2v048-single-shot", 0x01, 2, true, 0x4F03, 0x4503},
     };
-    static constexpr Address7                Address = 0x48;
-    static constexpr std::array<Address7, 4> Addresses{0x48, 0x49, 0x4A, 0x4B};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7    Address       = 0x48;
+    static constexpr auto        Addresses     = addressRun<0x48, 4>();
+    static constexpr std::size_t RegisterBytes = 1;
 
     /// +FSR, what a code of 0x7FFF + 1 would be.
     static constexpr MicroVolt FullScale
@@ -94,13 +95,13 @@ struct Ads1115 {
         static constexpr auto       Period = std::chrono::milliseconds{100};
         static constexpr std::array Steps{
           Ads1115Detail::start(0, Gain),
-          Step::read({.reg = 0x00, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0}),
           Ads1115Detail::start(1, Gain),
-          Step::read({.reg = 0x00, .count = 2, .offset = 2}),
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 2}),
           Ads1115Detail::start(2, Gain),
-          Step::read({.reg = 0x00, .count = 2, .offset = 4}),
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 4}),
           Ads1115Detail::start(3, Gain),
-          Step::read({.reg = 0x00, .count = 2, .offset = 6}),
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 6}),
         };
 
         struct Sample {
@@ -125,7 +126,7 @@ struct Ads1115 {
         }
     };
 
-    using Reads = List<Sweep>;
+    using Reads = Engine::List<Sweep>;
 };
 
 }   // namespace Kvasir::I2C::Chips

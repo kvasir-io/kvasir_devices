@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -90,7 +91,7 @@ struct Aled7709 {
     /// DEVID (00h): VERS_ID, bits 7:4, is 1h, "cut 1.x (hardwired)"; REV_ID below it is 3h on the
     /// parts of DS14214 rev 5 and is left open (ALED7709.md:1745..1766).
     static constexpr std::array Identity{
-      RegisterCheck{"devid", 0x00, 1, true, 0xF0, 0x10},
+      Engine::RegisterCheck{"devid", 0x00, 1, true, 0xF0, 0x10},
     };
 
     static constexpr std::uint8_t DimCfg = static_cast<std::uint8_t>(
@@ -101,9 +102,9 @@ struct Aled7709 {
     /// on and none tied together, the registers (not the PWMI pin) in control, user dimming at the
     /// frequency, curve and global / local mode of the template arguments.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"operating", 0x01, 1, true, 0x01,        0x01},
-      RegisterCheck{ "channels", 0x11, 1, true, 0x7F, ChannelMask},
-      RegisterCheck{  "dimming", 0x14, 1, true, 0xFF,      DimCfg},
+      Engine::RegisterCheck{"operating", 0x01, 1, true, 0x01,        0x01},
+      Engine::RegisterCheck{ "channels", 0x11, 1, true, 0x7F, ChannelMask},
+      Engine::RegisterCheck{  "dimming", 0x14, 1, true, 0xFF,      DimCfg},
     };
 
     static constexpr Address7 Address
@@ -138,16 +139,17 @@ struct Aled7709 {
     /// before its status means anything is not in the data sheet as a number; the first Status
     /// read a period later is what sees it.
     static constexpr std::array Init{
-      Step::write({.reg = 0x01, .payload = {0x00}}),   // standby: configuration first
-      Step::write({.reg = 0x14, .payload = {DimCfg}}),
-      Step::write({.reg = 0x11, .payload = {ChannelMask}}),
-      Step::write({.reg = 0x01, .payload = {0x81}, .delay = std::chrono::milliseconds{2}}),
+      Engine::Step::write({.reg = 0x01, .payload = {0x00}}),   // standby: configuration first
+      Engine::Step::write({.reg = 0x14, .payload = {DimCfg}}),
+      Engine::Step::write({.reg = 0x11, .payload = {ChannelMask}}),
+      Engine::Step::write({.reg = 0x01, .payload = {0x81}, .delay = std::chrono::milliseconds{2}}),
     };
 
     /// DEVSTA, CHSTA, INITSTA in one read.
     struct Status {
         static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{Step::read({.reg = 0x17, .count = 3, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x17, .count = 3, .offset = 0})};
 
         struct Sample {
             std::uint8_t device{};    ///< DEVSTA
@@ -209,13 +211,13 @@ struct Aled7709 {
         static constexpr std::size_t Items = Channels;
         static constexpr std::size_t Bytes = 3;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value.duty >> 8U);
             buffer[1] = static_cast<std::byte>(value.duty & 0xFFU);
             buffer[2] = static_cast<std::byte>(value.gain);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = static_cast<std::uint16_t>(0x02 + 3 * item), .offset = 0, .count = 3});
         }
     };
@@ -229,15 +231,15 @@ struct Aled7709 {
         static constexpr std::size_t Bytes     = 1;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{0x81};
-            return Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Status>;
-    using Writes = List<Level, ClearFaults>;
+    using Reads  = Engine::List<Status>;
+    using Writes = Engine::List<Level, ClearFaults>;
 };
 
 }   // namespace Kvasir::I2C::Chips

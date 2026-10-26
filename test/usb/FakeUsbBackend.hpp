@@ -84,7 +84,9 @@ struct FakeUsb {
         std::size_t            size{};
         std::size_t            sent{};
 
-        std::byte const* data() const { return inPlace != nullptr ? inPlace : copy.data(); }
+        [[nodiscard]] std::byte const* data() const {
+            return inPlace != nullptr ? inPlace : copy.data();
+        }
     };
 
     struct EndpointState {
@@ -198,7 +200,7 @@ struct FakeUsb {
             // As the SAM controller does it: every packet straight into the caller's memory, and
             // behind a short one its two CRC bytes, where they still fit the packet's 64 bytes.
             std::byte* const at = e.outInPlace + e.received.size();
-            std::copy(data.begin(), data.end(), at);
+            std::ranges::copy(data, at);
             for(std::size_t i = data.size(); i < std::min(data.size() + 2, MaxPacket); ++i) {
                 at[i] = std::byte{0xC5};
             }
@@ -236,9 +238,9 @@ struct FakeUsb {
 
     template<typename Clock, typename ConfigT>
     struct Backend {
-        static constexpr std::size_t MaxPacketSize = MaxPacket;
-        static constexpr std::size_t EndpointCount = Endpoints;
-        static constexpr bool        AsyncCancel   = Async;
+        static constexpr std::size_t maxPacketSize = MaxPacket;
+        static constexpr std::size_t endpointCount = Endpoints;
+        static constexpr bool        asyncCancel   = Async;
 
         /// No vector table on a host: the test calls Device::runInterrupt().
         template<auto Handler>
@@ -316,12 +318,12 @@ struct FakeUsb {
         struct Endpoint {
             static constexpr bool IsIn = Dir == Kvasir::USB::EndpointDirection::In;
 
-            static constexpr std::size_t QueueDepth  = IsIn && N != 0 ? Depth : 1;
-            static constexpr bool        AsyncCancel = Async;
+            static constexpr std::size_t queueDepth  = IsIn && N != 0 ? Depth : 1;
+            static constexpr bool        asyncCancel = Async;
             // Endpoint 0 stays at a packet, as on a real controller of this kind.
-            static constexpr std::size_t MaxTransfer = N != 0 ? Transfer : MaxPacket;
+            static constexpr std::size_t maxTransfer = N != 0 ? Transfer : MaxPacket;
 
-            using FreeBuffers = std::array<bool, QueueDepth>;
+            using FreeBuffers = std::array<bool, queueDepth>;
 
             static EndpointState& self() { return state(N, IsIn); }
 
@@ -332,7 +334,7 @@ struct FakeUsb {
             static FreeBuffers freeBuffers() {
                 FreeBuffers       free{};
                 std::size_t const armed = armedBuffers();
-                for(std::size_t i = 0; i != QueueDepth; ++i) { free[i] = i >= armed; }
+                for(std::size_t i = 0; i != queueDepth; ++i) { free[i] = i >= armed; }
                 return free;
             }
 
@@ -353,7 +355,7 @@ struct FakeUsb {
                 static_assert(IsIn);
                 auto& e = self();
                 if(!e.set || data.size() > MaxPacket) { ++violations; }
-                if(e.armedIn.size() >= QueueDepth || e.cancelPending) { return false; }
+                if(e.armedIn.size() >= queueDepth || e.cancelPending) { return false; }
                 e.armedIn.push_back(ArmedIn{
                   .copy = {data.begin(), data.end()},
                   .size = data.size()
@@ -369,8 +371,8 @@ struct FakeUsb {
             {
                 static_assert(IsIn);
                 auto& e = self();
-                if(!e.set || data.size() > MaxTransfer) { ++violations; }
-                if(e.armedIn.size() >= QueueDepth || e.cancelPending) { return false; }
+                if(!e.set || data.size() > maxTransfer) { ++violations; }
+                if(e.armedIn.size() >= queueDepth || e.cancelPending) { return false; }
                 e.armedIn.push_back(ArmedIn{.inPlace = data.data(), .size = data.size()});
                 return true;
             }
@@ -396,14 +398,14 @@ struct FakeUsb {
 
             // A whole transfer into the caller's memory, packet by packet as they come; only
             // where cancelling is done on return.
-            static constexpr std::size_t MaxReceive = Transfer;
+            static constexpr std::size_t maxReceive = Transfer;
 
             static bool armReceiveInto(std::span<std::byte> dest)
                 requires(InPlace && !Async && N != 0)
             {
                 static_assert(!IsIn);
                 auto& e = self();
-                if(!e.set || dest.empty() || dest.size() > MaxReceive
+                if(!e.set || dest.empty() || dest.size() > maxReceive
                    || dest.size() % MaxPacket != 0
                    || reinterpret_cast<std::uintptr_t>(dest.data()) % 4 != 0)
                 {

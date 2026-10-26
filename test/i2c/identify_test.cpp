@@ -28,10 +28,10 @@ template<typename Chip>
 constexpr bool decidesBeforeWriting() {
     if constexpr(Device<FakeBus, FakeClock, Chip>::HasIdentity) {
         return true;
-    } else if constexpr(requires { std::span<Step const>{Chip::Init}; }) {
+    } else if constexpr(requires { std::span<Kvasir::Engine::Step const>{Chip::Init}; }) {
         for(auto const& step : Chip::Init) {
-            if(step.kind == Step::Kind::identify) { return true; }
-            if(step.kind == Step::Kind::write) { return false; }
+            if(step.kind == Kvasir::Engine::Step::Kind::identify) { return true; }
+            if(step.kind == Kvasir::Engine::Step::Kind::write) { return false; }
         }
         return false;
     } else {
@@ -63,8 +63,8 @@ void foreignPartIsNotWrittenTo() {
         runFor(d, 3s);
         std::size_t writes = 0;
         for(auto const& t : FakeBus::log) { writes += t.isWrite() ? 1U : 0U; }
-        check(!d.identified() && !d.answering() && d.unidentified() >= 1, Chip::Name.data());
-        checkEq(writes, std::size_t{0}, Chip::Name.data());
+        check(!d.identified() && !d.answering() && d.unidentified() >= 1, Chip::Name);
+        checkEq(writes, std::size_t{0}, Chip::Name);
     }
 }
 
@@ -72,7 +72,7 @@ template<typename L>
 struct ForEach;
 
 template<typename... Cs>
-struct ForEach<List<Cs...>> {
+struct ForEach<Kvasir::Engine::List<Cs...>> {
     static void run() { (foreignPartIsNotWrittenTo<Cs>(), ...); }
 };
 

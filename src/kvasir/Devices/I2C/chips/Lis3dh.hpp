@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -38,7 +39,7 @@ struct Lis3dhX {
     static constexpr std::string_view Name = "LIS3DH";
     /// ST LIS3DH. LIS3DH.md:1059: WHO_AM_I (0Fh) is 33h.
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x33},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x33},
     };
     static constexpr Address7                Address = 0x18;
     static constexpr std::array<Address7, 2> Addresses{0x18, 0x19};
@@ -52,11 +53,11 @@ struct Lis3dhX {
     static constexpr std::uint8_t Ctrl4 = static_cast<std::uint8_t>(0x88U | (RangeCode << 4U));
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x20, .payload = {0x57}}),
-      Step::write({.reg = 0x23, .payload = {Ctrl4}}),
+      Engine::Step::write({.reg = 0x20, .payload = {0x57}}),
+      Engine::Step::write({.reg = 0x23, .payload = {Ctrl4}}),
     };
 
-    struct State : Groups::DeviceId {
+    struct State : Engine::Groups::DeviceId {
         std::uint8_t range{RangeCode};   ///< CTRL_REG4 FS as written now
     };
 
@@ -69,21 +70,32 @@ struct Lis3dhX {
     }
 
     struct Motion {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{Step::read({.reg = 0x80 | 0x28, .count = 6})};
+        static constexpr auto Period = std::chrono::milliseconds{20};
+        /// STATUS_REG (0x27) first, then the outputs: a frame is a sample only with ZYXDA (bit 3, "a new set of data is
+        /// available", LIS3DH datasheet 8.15 Table 40/41; the converted table merges two cells, the bit is the fifth
+        /// of eight from bit 7).
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x27, .count = 1, .offset = 6}),   // STATUS_REG
+          Engine::Step::read(
+            {.reg = 0x80 | 0x28, .count = 6, .offset = 0}),   // OUT_X_L.., auto-increment
+        };
+
+        static constexpr std::uint8_t Zyxda = 0x08U;
 
         struct Sample {
             MicroG x{}, y{}, z{};
         };
 
-        /// Left aligned: the twelve significant bits sit in 15:4.
-        [[nodiscard]] static constexpr Sample decode(Bytes        data,
-                                                     State const& state) {
+        /// Left aligned: the twelve significant bits sit in 15:4. A frame without ZYXDA - a poll before the first
+        /// conversion, whose outputs read 0, or one between two samples - is Outcome::unchanged().
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(6) & Zyxda) == 0) { return Engine::Outcome<Sample>::unchanged(); }
             auto const perDigit = Units::value(Lis3dhDetail::AccelPerDigit[state.range & 0x03U]);
             auto const axis     = [&](std::size_t i) {
                 return Units::microG(static_cast<std::int32_t>(data.s16le(2 * i) >> 4) * perDigit);
             };
-            return {axis(0), axis(1), axis(2)};
+            return Engine::Outcome<Sample>::ok({axis(0), axis(1), axis(2)});
         }
     };
 
@@ -93,10 +105,10 @@ struct Lis3dhX {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Range;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(0x88U | (static_cast<unsigned>(value) << 4U));
-            return Step::writeBuffer({.reg = 0x23, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x23, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -105,8 +117,8 @@ struct Lis3dhX {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<RangeSetting>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<RangeSetting>;
 };
 
 /// The part at +-2 g.

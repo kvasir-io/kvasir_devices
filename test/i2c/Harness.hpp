@@ -1,9 +1,11 @@
 #pragma once
 
 /// What every I2C test shares: the fake bus and clock, the checks, one loop turn, a run until a
-/// predicate holds or a duration is up, the transcript helpers, the responders most cases want
-/// and the device models a command-style chip needs. Include it first: it brings the log stubs
-/// in before any driver.
+/// predicate holds or a duration is up, the transcript helpers, a case object (I2cCase), the
+/// responders most cases want and the device models a command-style chip needs. The log stubs
+/// are forced into every test TU (test/cmake/KvasirDevicesTest.cmake).
+#include "FakeBus.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -13,20 +15,16 @@
 #include <cstdio>
 #include <functional>
 #include <initializer_list>
+#include <kd/Case.hpp>
+#include <kd/Check.hpp>
+#include <kd/ScopedHook.hpp>
+#include <kvasir/Devices/Bytes.hpp>
+#include <kvasir/Devices/I2C/Device.hpp>
+#include <kvasir/Devices/I2C/Quantities.hpp>
 #include <map>
 #include <span>
 #include <tuple>
 #include <vector>
-
-// clang-format off
-#include <support/LogStubs.hpp>
-#include "FakeBus.hpp"
-#include <support/Check.hpp>
-#include <support/ScopedHook.hpp>
-// clang-format on
-#include <kvasir/Devices/Bytes.hpp>
-#include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/Quantities.hpp>
 
 namespace Kvasir::Test {
 
@@ -47,12 +45,12 @@ namespace HarnessImpl {
     }
 }   // namespace HarnessImpl
 
-/// One loop turn: every handler, the bus (every tagged bus) completes what was submitted, a
+/// One loop turn: every turn, the bus (every tagged bus) completes what was submitted, a
 /// millisecond passes.
 template<typename... Tags,
          typename... Ds>
 void turn(Ds&... ds) {
-    (ds.handler(), ...);
+    (ds.turn(), ...);
     HarnessImpl::complete<Tags...>();
     FakeClock::current += 1ms;
 }
@@ -62,8 +60,8 @@ template<typename... Ds>
 struct All {
     std::tuple<Ds&...> devices;
 
-    void handler() {
-        std::apply([](auto&... d) { (d.handler(), ...); }, devices);
+    void turn() {
+        std::apply([](auto&... d) { (d.turn(), ...); }, devices);
     }
 };
 
@@ -171,11 +169,67 @@ void fresh() {
     Log::reset();
 }
 
-template<typename C, typename Cfg = Kvasir::I2C::DefaultConfig>
+namespace HarnessImpl {
+    /// Every tagged bus (or the untagged one) emptied: transcript, responder, counters. Calls into no device.
+    template<typename... Tags>
+    void reset() {
+        if constexpr(sizeof...(Tags) == 0) {
+            FakeBus::reset();
+        } else {
+            (FakeBusFor<Tags>::reset(), ...);
+        }
+    }
+
+    /// The transcript of every tagged bus (or of the untagged one).
+    template<typename... Tags>
+    void dumpAll() {
+        if constexpr(sizeof...(Tags) == 0) {
+            dump();
+        } else {
+            (dump<Tags>(), ...);
+        }
+    }
+}   // namespace HarnessImpl
+
+/// An I2C case: fresh() at the start, the transcript on failure, the bus emptied at the end (its responder, which may
+/// capture the case's locals, included). Declare it FIRST in the case, before the models and devices: the fake bus's
+/// reset() calls no callback (FakeBus.hpp), so it may run after they are gone.
+///
+///     I2cCase const testcase{"INA219"};
+///     ...
+///     testcase.step("INA219: a lost calibration");   // goes on with the same devices
+///     testcase.next("INA219: another part");         // a case of its own: dump if the part before failed, fresh()
+///
+/// `I2cCaseOn<I2c0, I2c1>` does the same for the tagged buses.
+template<typename... Tags>
+class I2cCaseOn : public Case {
+public:
+    explicit I2cCaseOn(char const* name) : Case{name} { fresh<Tags...>(); }
+
+    ~I2cCaseOn() {
+        if(failed()) { HarnessImpl::dumpAll<Tags...>(); }
+        HarnessImpl::reset<Tags...>();
+    }
+
+    /// Ends this part (its transcript if it failed) and starts an independent one in the same function: what a
+    /// `testCase(); fresh();` pair in the middle of a function did.
+    void next(char const* name) {
+        if(failed()) { HarnessImpl::dumpAll<Tags...>(); }
+        restart(name);
+        fresh<Tags...>();
+    }
+
+    I2cCaseOn(I2cCaseOn const&)            = delete;
+    I2cCaseOn& operator=(I2cCaseOn const&) = delete;
+};
+
+using I2cCase = I2cCaseOn<>;
+
+template<typename C, typename Cfg = Kvasir::Engine::DefaultConfig>
 using Dev = Kvasir::I2C::Device<FakeBus, FakeClock, C, Cfg>;
 
 /// A device on the bus tagged `Tag`.
-template<typename Tag, typename C, typename Cfg = Kvasir::I2C::DefaultConfig>
+template<typename Tag, typename C, typename Cfg = Kvasir::Engine::DefaultConfig>
 using DevOn = Kvasir::I2C::Device<FakeBusFor<Tag>, FakeClock, C, Cfg>;
 
 // -- compile-time decode checks -----------------------------------------------------------
@@ -199,23 +253,23 @@ frame(B... b) {
 
 /// What a decode that returns an Outcome made of the frame.
 template<typename S>
-constexpr bool isOk(Kvasir::I2C::Outcome<S> const& o) {
-    return o.kind == Kvasir::I2C::Outcome<S>::Kind::ok;
+constexpr bool isOk(Kvasir::Engine::Outcome<S> const& o) {
+    return o.kind == Kvasir::Engine::DecodeKind::ok;
 }
 
 template<typename S>
-constexpr bool isReject(Kvasir::I2C::Outcome<S> const& o) {
-    return o.kind == Kvasir::I2C::Outcome<S>::Kind::reject;
+constexpr bool isReject(Kvasir::Engine::Outcome<S> const& o) {
+    return o.kind == Kvasir::Engine::DecodeKind::reject;
 }
 
 template<typename S>
-constexpr bool isRetry(Kvasir::I2C::Outcome<S> const& o) {
-    return o.kind == Kvasir::I2C::Outcome<S>::Kind::retry;
+constexpr bool isRetry(Kvasir::Engine::Outcome<S> const& o) {
+    return o.kind == Kvasir::Engine::DecodeKind::retry;
 }
 
 template<typename S>
-constexpr bool isUnchanged(Kvasir::I2C::Outcome<S> const& o) {
-    return o.kind == Kvasir::I2C::Outcome<S>::Kind::unchanged;
+constexpr bool isUnchanged(Kvasir::Engine::Outcome<S> const& o) {
+    return o.kind == Kvasir::Engine::DecodeKind::unchanged;
 }
 
 /// A temperature quantity back as the hundredths of a degree the checks are written in.
@@ -232,14 +286,14 @@ inline FakeBusResult zeros(std::uint8_t,
                            std::span<std::byte const>,
                            std::span<std::byte> recv) {
     for(auto& b : recv) { b = std::byte{0}; }
-    return FakeBusResult::succeeded;
+    return FakeBusResult::ok;
 }
 
 /// Nothing there: every request is NAKed.
 inline FakeBusResult alwaysNak(std::uint8_t,
                                std::span<std::byte const>,
                                std::span<std::byte>) {
-    return FakeBusResult::notAcknowledged;
+    return FakeBusResult::nack;
 }
 
 /// A broken wire: every request fails without a NAK.
@@ -257,7 +311,7 @@ inline FakeBusResult crcZeros(std::uint8_t,
     for(std::size_t i = 0; i < recv.size(); ++i) {
         recv[i] = std::byte{static_cast<std::uint8_t>(i % 3 == 2 ? 0x81 : 0x00)};
     }
-    return FakeBusResult::succeeded;
+    return FakeBusResult::ok;
 }
 
 /// The switches on the wire (TCA9548As at `switches`): each keeps its control byte and
@@ -271,13 +325,11 @@ struct SwitchWire {
     FakeBusResult operator()(std::uint8_t               addr,
                              std::span<std::byte const> sent,
                              std::span<std::byte>       recv) {
-        if(std::find(switches.begin(), switches.end(), addr) == switches.end()) {
-            return behind(addr, sent, recv);
-        }
+        if(std::ranges::find(switches, addr) == switches.end()) { return behind(addr, sent, recv); }
         auto& c = control[addr];
         if(!sent.empty()) { c = static_cast<std::uint8_t>(sent[0]); }
         for(auto& b : recv) { b = std::byte{c}; }
-        return FakeBusResult::succeeded;
+        return FakeBusResult::ok;
     }
 };
 
@@ -312,9 +364,9 @@ inline std::vector<std::uint8_t> words(std::initializer_list<std::uint16_t> ws) 
 /// command `cmd`; `onCommand` sees every command.
 struct CommandModel {
     std::uint8_t                                       address{};
-    std::map<std::uint16_t, std::vector<std::uint8_t>> replies{};
-    std::function<void(std::uint16_t)>                 onCommand{};
-    std::vector<std::uint16_t>                         commands{};
+    std::map<std::uint16_t, std::vector<std::uint8_t>> replies;
+    std::function<void(std::uint16_t)>                 onCommand;
+    std::vector<std::uint16_t>                         commands;
     std::uint16_t                                      last{};
 
     explicit CommandModel(std::uint8_t a) : address{a} {}
@@ -322,7 +374,7 @@ struct CommandModel {
     FakeBusResult operator()(std::uint8_t               addr,
                              std::span<std::byte const> sent,
                              std::span<std::byte>       recv) {
-        if(addr != address) { return FakeBusResult::notAcknowledged; }
+        if(addr != address) { return FakeBusResult::nack; }
         if(!sent.empty()) {
             last = sent.size() >= 2
                    ? static_cast<std::uint16_t>((static_cast<std::uint8_t>(sent[0]) << 8)
@@ -330,16 +382,14 @@ struct CommandModel {
                    : static_cast<std::uint8_t>(sent[0]);
             commands.push_back(last);
             if(onCommand) { onCommand(last); }
-            return FakeBusResult::succeeded;
+            return FakeBusResult::ok;
         }
         auto const it = replies.find(last);
-        if(it == replies.end() || it->second.size() != recv.size()) {
-            return FakeBusResult::notAcknowledged;
-        }
+        if(it == replies.end() || it->second.size() != recv.size()) { return FakeBusResult::nack; }
         for(std::size_t i = 0; i < recv.size(); ++i) {
             recv[i] = static_cast<std::byte>(it->second[i]);
         }
-        return FakeBusResult::succeeded;
+        return FakeBusResult::ok;
     }
 };
 

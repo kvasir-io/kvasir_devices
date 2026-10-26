@@ -1,6 +1,7 @@
 /// Parts behind a bridge that is not always active (Bridge.hpp): nothing is said to them while
 /// it is off, none of it counts against them, and they go on by themselves when it is back --
 /// brought up again where they lost their supply, carrying on where they did not.
+#include "EnabledFixtures.hpp"
 #include "Harness.hpp"
 
 #include <chrono>
@@ -46,13 +47,13 @@ struct Pin {
 };
 
 struct Cut : Pin<Cut> {
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
-    static constexpr auto Settle   = 20ms;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
+    static constexpr auto settle   = 20ms;
 };
 
 struct Split : Pin<Split> {
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::disconnected;
-    static constexpr auto Settle   = 5ms;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::disconnected;
+    static constexpr auto settle   = 5ms;
 };
 
 /// A port something else plugs and unplugs.
@@ -63,8 +64,8 @@ struct Plug {
 };
 
 struct Dock : Kvasir::I2C::SensedBridge<Plug> {
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
-    static constexpr auto Settle   = 50ms;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
+    static constexpr auto settle   = 50ms;
 };
 
 using CutLight   = BehindBridge<Cut, Dev<Chips::Bh1750>>;
@@ -113,7 +114,7 @@ void driven(bool unpowered) {
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(!B::isOn()) {
               talkedWhileOff = true;
-              return FakeBusResult::notAcknowledged;
+              return FakeBusResult::nack;
           }
           return zeros(a, s, r);
       }};
@@ -125,7 +126,7 @@ void driven(bool unpowered) {
     runFor(both, 5s);
     check(B::driven == std::vector<bool>{false}, "the pin is driven off once, and that is all");
     checkEq(transactionsTo(Light::Address), std::size_t{0}, "nothing is said to the part");
-    check(light.link() == Link::offline, "it says offline");
+    check(light.link() == Kvasir::Link::offline, "it says offline");
     check(!light.absent() && !light.valid(), "which is not absent, and not valid");
     checkEq(light.errors(), 0U, "no error is counted");
     checkEq(light.consecutiveNaks(), 0U, "and no NAK");
@@ -136,14 +137,14 @@ void driven(bool unpowered) {
     check(runUntil(both, [&] { return transactionsTo(Light::Address) != 0; }, 1s), "it talks");
     check(FakeClock::now() - onAt >= Line::Settle, "not before the bridge has settled");
     check(runUntil(both, [&] { return light.valid(); }, 2s), "and delivers");
-    check(light.link() == Link::answering, "answering");
+    check(light.link() == Kvasir::Link::answering, "answering");
     checkEq(light.bringUps(), 1U, "through one bring-up");
     checkEq(line.activations(), 1U, "one activation");
 
     testCase("Bridge: off, offline at once and silent");
     auto const samples = light.samples();
     line.off();
-    check(light.link() == Link::offline, "offline with the call, not a turn later");
+    check(light.link() == Kvasir::Link::offline, "offline with the call, not a turn later");
     runFor(both, 50ms);
     check(line.state() == BridgeState::off && !B::isOn(), "the pin followed");
     auto const mark = FakeBus::log.size();
@@ -166,14 +167,14 @@ void driven(bool unpowered) {
         checkEq(light.bringUps(), 1U, "no second bring-up");
         checkEq(powerOns(back), std::size_t{0}, "and no Init on the wire");
     }
-    check(light.link() == Link::answering, "answering");
+    check(light.link() == Kvasir::Link::answering, "answering");
 
     testCase("Bridge: off() while a transaction is on the wire does not cut it");
-    // A turn of the handlers without the bus completing, until a request is pending.
+    // Turns without the bus completing, until a request is pending.
     bool pendingSeen = false;
     for(int i = 0; i < 1000 && !pendingSeen; ++i) {
-        line.handler();
-        light.handler();
+        line.turn();
+        light.turn();
         pendingSeen = !FakeBus::pending.empty();
         if(!pendingSeen) {
             FakeBus::complete();
@@ -183,12 +184,12 @@ void driven(bool unpowered) {
     check(pendingSeen, "a transaction is on the wire");
     line.off();
     for(int i = 0; i < 5; ++i) {
-        line.handler();
-        light.handler();
+        line.turn();
+        light.turn();
         FakeClock::current += 1ms;
     }
     check(line.state() == BridgeState::closing && B::isOn(), "the bridge waits for it");
-    check(light.link() == Link::offline, "while the part is offline already");
+    check(light.link() == Kvasir::Link::offline, "while the part is offline already");
     FakeBus::complete();
     runFor(both, 10ms);
     check(line.state() == BridgeState::off && !B::isOn(), "and goes when the wire is free");
@@ -205,15 +206,17 @@ void sensed() {
     fresh();
     Plug::plugged = false;
     light.gate().bind(line);
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(!Plug::plugged) { return FakeBusResult::notAcknowledged; }
-        return zeros(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(!Plug::plugged) { return FakeBusResult::nack; }
+          return zeros(a, s, r);
+      }};
     auto both = all(line, light);
 
     testCase("Bridge (sensed): plugged in, the part comes up after Settle");
     runFor(both, 1s);
-    check(light.link() == Link::offline, "offline while nothing is plugged");
+    check(light.link() == Kvasir::Link::offline, "offline while nothing is plugged");
     Plug::plugged = true;
     runFor(both, 10ms);
     Plug::plugged = false;   // a bounce
@@ -227,8 +230,8 @@ void sensed() {
     testCase("Bridge (sensed): pulled in the middle of a transaction, and nothing is counted");
     bool pendingSeen = false;
     for(int i = 0; i < 1000 && !pendingSeen; ++i) {
-        line.handler();
-        light.handler();
+        line.turn();
+        light.turn();
         pendingSeen = !FakeBus::pending.empty();
         if(!pendingSeen) {
             FakeBus::complete();
@@ -238,7 +241,7 @@ void sensed() {
     check(pendingSeen, "a transaction is on the wire");
     Plug::plugged = false;
     runFor(both, 5s);   // the first turn completes it: a NAK
-    check(light.link() == Link::offline, "offline");
+    check(light.link() == Kvasir::Link::offline, "offline");
     checkEq(light.errors(), 0U, "the NAK is not the part's");
     checkEq(light.consecutiveNaks(), 0U, "and starts no streak");
     check(!light.absent(), "not absent");
@@ -277,14 +280,14 @@ void unbound() {
 
     testCase("Bridge: a device never bound to its line stays offline");
     runFor(light, 1s);
-    check(light.link() == Link::offline, "offline");
+    check(light.link() == Kvasir::Link::offline, "offline");
     checkEq(transactionsTo(CutLight::Address), std::size_t{0}, "silent");
 }
 
 // -- in a Bus ---------------------------------------------------------------------------------
 
 using Front    = Dev<Chips::Bh1750>;
-using FarLight = BehindBridge<Cut, Dev<Chips::Bh1750, At<0x5C>>>;
+using FarLight = BehindBridge<Cut, Dev<Chips::Bh1750, Kvasir::Engine::At<0x5C>>>;
 using Mixed    = Kvasir::I2C::Bus<FakeBus, FakeClock, Front, FarLight>;
 
 static_assert(Mixed::Bridges == 1 && Mixed::Switches == 0 && Mixed::Segments == 1);
@@ -304,10 +307,12 @@ void inABus() {
 
     fresh();
     Cut::clear();
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a == FarLight::Address && !Cut::isOn()) { return FakeBusResult::notAcknowledged; }
-        return zeros(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(a == FarLight::Address && !Cut::isOn()) { return FakeBusResult::nack; }
+          return zeros(a, s, r);
+      }};
 
     testCase("Bridge in a Bus: the Bus owns the line, and an offline part is nobody's problem");
     check(runUntil(
@@ -344,11 +349,20 @@ void inABus() {
 // -- a bridge and a switch --------------------------------------------------------------------
 
 using MuxDev = Dev<Chips::Tca9548a>;
-using Left   = Device<FakeBus, FakeClock, Chips::Sht3x, DefaultConfig, NoReset, MuxGate<MuxDev, 0>>;
-using Right  = BehindBridge<
-  Cut,
-  Device<FakeBus, FakeClock, Chips::Sht3x, DefaultConfig, NoReset, MuxGate<MuxDev, 3>>>;
-using Both = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, Left, Right>;
+using Left   = Device<FakeBus,
+                      FakeClock,
+                      Chips::Sht3x,
+                      Kvasir::Engine::DefaultConfig,
+                      Kvasir::NoReset,
+                      MuxGate<MuxDev, 0>>;
+using Right  = BehindBridge<Cut,
+                            Device<FakeBus,
+                                   FakeClock,
+                                   Chips::Sht3x,
+                                   Kvasir::Engine::DefaultConfig,
+                                   Kvasir::NoReset,
+                                   MuxGate<MuxDev, 3>>>;
+using Both   = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, Left, Right>;
 
 static_assert(Both::Switches == 1 && Both::Bridges == 1);
 static_assert(Both::segmentOf<Left>() == 1 && Both::segmentOf<Right>() == 4,
@@ -371,7 +385,7 @@ void behindAChannel() {
         if(control == 0x08) {
             if(!Cut::isOn()) {
                 ++whileOff;
-                return FakeBusResult::notAcknowledged;
+                return FakeBusResult::nack;
             }
         } else if(control != 0x01) {
             ++wrongChannel;
@@ -405,10 +419,14 @@ void behindAChannel() {
 
 /// The switch itself behind the bridge, and a part on one of its channels.
 using FarMux  = BehindBridge<Cut, Dev<Chips::Tca9548a>>;
-using FarPart = BehindBridge<
-  Cut,
-  Device<FakeBus, FakeClock, Chips::Sht3x, DefaultConfig, NoReset, MuxGate<FarMux, 1>>>;
-using FarBus = Kvasir::I2C::Bus<FakeBus, FakeClock, FarMux, FarPart>;
+using FarPart = BehindBridge<Cut,
+                             Device<FakeBus,
+                                    FakeClock,
+                                    Chips::Sht3x,
+                                    Kvasir::Engine::DefaultConfig,
+                                    Kvasir::NoReset,
+                                    MuxGate<FarMux, 1>>>;
+using FarBus  = Kvasir::I2C::Bus<FakeBus, FakeClock, FarMux, FarPart>;
 
 static_assert(FarBus::Switches == 1 && FarBus::Bridges == 1 && FarBus::segmentOf<FarPart>() == 2);
 
@@ -423,7 +441,7 @@ void switchBehindABridge() {
     wire.behind = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
         if(wire.control[0x70] != 0x02) {
             ++closed;
-            return FakeBusResult::notAcknowledged;
+            return FakeBusResult::nack;
         }
         return crcZeros(a, s, r);
     };
@@ -433,7 +451,7 @@ void switchBehindABridge() {
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(!Cut::isOn()) {
               talkedWhileOff = true;
-              return FakeBusResult::notAcknowledged;
+              return FakeBusResult::nack;
           }
           return wire(a, s, r);
       }};
@@ -459,8 +477,8 @@ using Expander = Dev<Chips::Pcf8574>;
 
 struct ViaPort
   : Kvasir::I2C::PartBridge<Expander, Chips::Pcf8574::Port, 0x10, BridgePolarity::activeLow> {
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
-    static constexpr auto Settle   = 10ms;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
+    static constexpr auto settle   = 10ms;
 };
 
 using PortLight = BehindBridge<ViaPort, Dev<Chips::Bh1750>>;
@@ -478,11 +496,11 @@ void throughAPart() {
           if(a == Expander::Address) {
               if(!s.empty()) { port = static_cast<std::uint8_t>(s[0]); }
               for(auto& b : r) { b = std::byte{port}; }
-              return FakeBusResult::succeeded;
+              return FakeBusResult::ok;
           }
           if((port & 0x10) != 0) {
               talkedShut = true;
-              return FakeBusResult::notAcknowledged;
+              return FakeBusResult::nack;
           }
           return zeros(a, s, r);
       }};
@@ -521,12 +539,12 @@ struct Slots {};
 
 struct SlotA : Pin<SlotA> {
     using ExclusiveGroup           = Slots;
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
 };
 
 struct SlotB : Pin<SlotB> {
     using ExclusiveGroup           = Slots;
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
 };
 
 using LightA  = BehindBridge<SlotA, Dev<Chips::Bh1750>>;
@@ -545,11 +563,13 @@ void oneAtATime() {
     fresh();
     SlotA::clear();
     SlotB::clear();
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(!SlotA::isOn() && !SlotB::isOn()) { return FakeBusResult::notAcknowledged; }
-        return zeros(a, s, r);
-    };
-    auto watched = [&](auto done, std::chrono::milliseconds within) {
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(!SlotA::isOn() && !SlotB::isOn()) { return FakeBusResult::nack; }
+          return zeros(a, s, r);
+      }};
+    auto const watched = [&](auto done, std::chrono::milliseconds within) {
         auto const until = FakeClock::now() + within;
         while(FakeClock::now() < until) {
             turn(bus);
@@ -579,29 +599,33 @@ struct Ports {};
 
 struct PortA : Pin<PortA> {
     using ExclusiveGroup           = Ports;
-    static constexpr auto Mode     = Kvasir::I2C::BridgeMode::switched;
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::disconnected;
-    static constexpr auto Settle   = 2ms;
+    static constexpr auto mode     = Kvasir::I2C::BridgeMode::switched;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::disconnected;
+    static constexpr auto settle   = 2ms;
 };
 
 struct PortB : Pin<PortB> {
     using ExclusiveGroup           = Ports;
-    static constexpr auto Mode     = Kvasir::I2C::BridgeMode::switched;
-    static constexpr auto WhileOff = Kvasir::I2C::WhileOff::disconnected;
-    static constexpr auto Settle   = 2ms;
+    static constexpr auto mode     = Kvasir::I2C::BridgeMode::switched;
+    static constexpr auto whileOff = Kvasir::Engine::WhileOff::disconnected;
+    static constexpr auto settle   = 2ms;
 };
 
 using OnA = BehindBridge<PortA, Dev<Chips::Bh1750>>;
 using OnB = BehindBridge<PortB, Dev<Chips::Bh1750>>;
 /// In front of both, and not to be heard behind them: it talks while both are off. At an
 /// address of its own -- it is on the wire all the time, whatever its gate.
-using Before
-  = Device<FakeBus, FakeClock, Chips::Bh1750, At<0x5C>, NoReset, BridgeFrontGate<PortA, PortB>>;
+using Before      = Device<FakeBus,
+                           FakeClock,
+                           Chips::Bh1750,
+                           Kvasir::Engine::At<0x5C>,
+                           Kvasir::NoReset,
+                           BridgeFrontGate<PortA, PortB>>;
 using BeforeAt23  = Device<FakeBus,
                            FakeClock,
                            Chips::Bh1750,
-                           DefaultConfig,
-                           NoReset,
+                           Kvasir::Engine::DefaultConfig,
+                           Kvasir::NoReset,
                            BridgeFrontGate<PortA, PortB>>;
 using SwitchedBus = Kvasir::I2C::Bus<FakeBus, FakeClock, Before, OnA, OnB>;
 
@@ -618,8 +642,8 @@ static_assert(!detail::addressesDistinct<Front,
 
 /// The application's word instead (BridgeAddresses::separate).
 struct Trusted : Pin<Trusted> {
-    static constexpr auto WhileOff  = Kvasir::I2C::WhileOff::unpowered;
-    static constexpr auto Addresses = Kvasir::I2C::BridgeAddresses::separate;
+    static constexpr auto whileOff  = Kvasir::Engine::WhileOff::unpowered;
+    static constexpr auto addresses = Kvasir::I2C::BridgeAddresses::separate;
 };
 
 using TrustedLight = BehindBridge<Trusted, Dev<Chips::Bh1750>>;
@@ -654,13 +678,13 @@ void asASwitch() {
           if(PortA::isOn() && PortB::isOn()) { ++bothOn; }
           if(a == Before::Address && (PortA::isOn() || PortB::isOn())) { ++overheard; }
           if(a != Before::Address && !PortA::isOn() && !PortB::isOn()) {
-              return FakeBusResult::notAcknowledged;   // nobody there with both bridges off
+              return FakeBusResult::nack;   // nobody there with both bridges off
           }
           std::uint8_t const who = a == Before::Address ? 0xF : PortA::isOn() ? 0xA : 0xB;
           for(auto& b : r) { b = std::byte{who}; }
-          return FakeBusResult::succeeded;
+          return FakeBusResult::ok;
       }};
-    auto watched = [&](auto done, std::chrono::milliseconds within) {
+    auto const watched = [&](auto done, std::chrono::milliseconds within) {
         auto const until = FakeClock::now() + within;
         while(FakeClock::now() < until) {
             turn(bus);
@@ -716,108 +740,21 @@ void asASwitch() {
 
 // -- disabled by the application (Config::enabled()) -------------------------------------------
 
-/// Whether the module the part sits on is fitted, as the application knows it.
-struct Fitted {
-    static inline bool yes{false};
-};
+// enabled() alone is enabled_test's; here only enabled() together with a bridge.
+using EnabledFixtures::Enabled;
+using EnabledFixtures::EnabledKeeping;
+using EnabledFixtures::Fitted;
 
-struct Enabled {
-    static constexpr std::uint8_t Address = 0x23;
-
-    static bool enabled() { return Fitted::yes; }
-};
-
-struct EnabledKeeping : Enabled {
-    static constexpr auto WhileDisabled = Kvasir::I2C::WhileOff::disconnected;
-};
-
-struct EnabledSwitch {
-    static bool enabled() { return Fitted::yes; }
-};
-
-using ModuleLight      = Dev<Chips::Bh1750, Enabled>;
-using KeptLight        = Dev<Chips::Bh1750, EnabledKeeping>;
-using ModuleSwitch     = Dev<Chips::Tca9548a, EnabledSwitch>;
 using CutModuleLight   = BehindBridge<Cut, Dev<Chips::Bh1750, Enabled>>;
 using CutKeptLight     = BehindBridge<Cut, Dev<Chips::Bh1750, EnabledKeeping>>;
 using SplitModuleLight = BehindBridge<Split, Dev<Chips::Bh1750, Enabled>>;
 
-static_assert(ModuleLight::Enableable && !ModuleLight::Bridged && ModuleLight::Switchable);
-static_assert(!Dev<Chips::Bh1750>::Switchable);
+static_assert(CutModuleLight::Bridged
+              && !Dev<Chips::Bh1750,
+                      Enabled>::Bridged);
 
 void disabled() {
-    testCase("enabled(): disabled from the start, the part is offline and left alone");
-    fresh();
-    Fitted::yes      = false;
-    FakeBus::respond = zeros;
-    {
-        ModuleLight light{};
-        runFor(light, 2s);
-        check(light.link() == Link::offline, "offline");
-        checkEq(transactionsTo(ModuleLight::Address), std::size_t{0}, "silent");
-        checkEq(light.errors(), 0U, "nothing counted");
-
-        testCase("enabled(): enabled, the part comes up");
-        Fitted::yes = true;
-        check(runUntil(light, [&] { return light.valid(); }, 2s), "delivers");
-        checkEq(light.bringUps(), 1U, "one bring-up");
-
-        testCase("enabled(): disabled mid-transaction, the transaction is waited for, not cut");
-        bool pendingSeen = false;
-        for(int i = 0; i < 1000 && !pendingSeen; ++i) {
-            light.handler();
-            pendingSeen = !FakeBus::pending.empty();
-            if(!pendingSeen) {
-                FakeBus::complete();
-                FakeClock::current += 1ms;
-            }
-        }
-        check(pendingSeen, "a transaction is on the wire");
-        Fitted::yes = false;
-        light.handler();
-        check(!FakeBus::pending.empty(), "still on the wire: not abandoned");
-        runFor(light, 1s);
-        check(light.link() == Link::offline, "offline");
-        checkEq(light.errors(), 0U, "nothing counted against the part");
-        check(!light.valid(), "and not valid");
-
-        testCase("enabled(): enabled again, brought up from the start (unpowered)");
-        Fitted::yes = true;
-        check(runUntil(light, [&] { return light.valid(); }, 2s), "back");
-        checkEq(light.bringUps(), 2U, "through a second bring-up");
-    }
-
-    testCase("enabled(): WhileDisabled = disconnected keeps the bring-up");
-    fresh();
-    Fitted::yes      = true;
-    FakeBus::respond = zeros;
-    {
-        KeptLight light{};
-        check(runUntil(light, [&] { return light.valid(); }, 2s), "up");
-        Fitted::yes = false;
-        runFor(light, 1s);
-        check(light.offline(), "offline");
-        Fitted::yes = true;
-        check(runUntil(light, [&] { return light.valid(); }, 2s), "back");
-        checkEq(light.bringUps(), 1U, "no second bring-up");
-    }
-
-    testCase("enabled(): what is set while disabled is sent when enabled");
-    fresh();
-    Fitted::yes      = false;
-    FakeBus::respond = zeros;
-    {
-        ModuleSwitch mux{};
-        mux.set<Chips::Tca9548a::Channels>(0x04);
-        runFor(mux, 1s);
-        checkEq(transactionsTo(ModuleSwitch::Address), std::size_t{0}, "nothing goes out");
-        Fitted::yes = true;
-        check(runUntil(mux, [&] { return !mux.pending<Chips::Tca9548a::Channels>(); }, 1s), "sent");
-        check(hasWrite({0x04}), "the control byte is on the wire");
-    }
-
-    testCase("enabled(): behind a bridge, offline while either says so");
-    fresh();
+    I2cCase testcase{"enabled(): behind a bridge, offline while either says so"};
     Cut::clear();
     Fitted::yes      = false;
     FakeBus::respond = zeros;
@@ -839,8 +776,7 @@ void disabled() {
         checkEq(light.errors(), 0U, "nothing counted");
     }
 
-    testCase("enabled(): disabled (kept), then the bridge cuts the power: a bring-up");
-    fresh();
+    testcase.next("enabled(): disabled (kept), then the bridge cuts the power: a bring-up");
     Cut::clear();
     Fitted::yes      = true;
     FakeBus::respond = zeros;
@@ -861,8 +797,7 @@ void disabled() {
         checkEq(light.bringUps(), 2U, "brought up again");
     }
 
-    testCase("enabled(): disabled (kept), the bridge off and on unseen: a bring-up");
-    fresh();
+    testcase.next("enabled(): disabled (kept), the bridge off and on unseen: a bring-up");
     Cut::clear();
     Fitted::yes      = true;
     FakeBus::respond = zeros;
@@ -884,8 +819,7 @@ void disabled() {
         checkEq(light.bringUps(), 2U, "brought up again");
     }
 
-    testCase("enabled(): disabled (kept) behind a bridge that stays on: no bring-up");
-    fresh();
+    testcase.next("enabled(): disabled (kept) behind a bridge that stays on: no bring-up");
     Cut::clear();
     Fitted::yes      = true;
     FakeBus::respond = zeros;
@@ -903,8 +837,7 @@ void disabled() {
         checkEq(light.bringUps(), 1U, "registers kept");
     }
 
-    testCase("enabled(): a disconnecting bridge off, then disabled (unpowered): a bring-up");
-    fresh();
+    testcase.next("enabled(): a disconnecting bridge off, then disabled (unpowered): a bring-up");
     Split::clear();
     Fitted::yes      = true;
     FakeBus::respond = zeros;
@@ -925,8 +858,7 @@ void disabled() {
         checkEq(light.bringUps(), 2U, "the module was out: brought up again");
     }
 
-    testCase("enabled(): each reason logs its own transitions");
-    fresh();
+    testcase.next("enabled(): each reason logs its own transitions");
     Cut::clear();
     Fitted::yes      = true;
     FakeBus::respond = zeros;
@@ -937,10 +869,10 @@ void disabled() {
         auto both = all(line, light);
         line.on();
         check(runUntil(both, [&] { return light.valid(); }, 2s), "up");
-        auto       before = Kvasir::Test::Log::infos;
+        auto       before = Kvasir::Test::Log::debugs;
         auto const lines  = [&] {
-            auto const n = Kvasir::Test::Log::infos - before;
-            before       = Kvasir::Test::Log::infos;
+            auto const n = Kvasir::Test::Log::debugs - before;
+            before       = Kvasir::Test::Log::debugs;
             return n;
         };
         Fitted::yes = false;

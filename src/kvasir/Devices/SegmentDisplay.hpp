@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Duration.hpp"
+#include "kvasir/Util/Config.hpp"
 #include "kvasir/Util/Periodic.hpp"
 
 #include <array>
@@ -27,7 +28,7 @@
 ///   glass (no decimal point, say) is `NotWired`. `frame()` and `scanFrame()` turn a row of
 ///   glyphs into the level of every output line.
 /// - **Backends** put those levels on the hardware: `I2C::Pca9956bSegments`,
-///   `I2C::ExpanderSegments` (I2C/SegmentBackends.hpp) and `GpioSegments`
+///   `I2C::ExpanderSegments` (I2C/Adapters/SegmentBackends.hpp) and `GpioSegments`
 ///   (SegmentDisplay/Gpio.hpp). `Display` ties a backend and a layout together and is what the
 ///   application talks to:
 ///
@@ -37,7 +38,7 @@
 ///     ...
 ///     digits.setNumber(234, 1);        // "23.4"
 ///     digits.update(Clock::now());     // once per loop turn
-///     leds.handler();                  // or the Bus's handler()
+///     leds.turn();                     // or the Bus's turn()
 ///
 /// Every check on a layout is at compile time: a line past the backend's outputs, one output
 /// wired to two segments, or a multiplexed layout on a backend that cannot scan does not build.
@@ -247,7 +248,7 @@ static_assert(hex<3>(0x3F,
 namespace LayoutDetail {
     // Declared and never defined: reaching one while building or checking a layout is not a
     // constant expression, so the layout fails to compile and the diagnostic names the problem.
-    void segment_display_line_index_is_0_to_255();
+    void segmentDisplayLineIndexIs0To255();
 }   // namespace LayoutDetail
 
 /// One output line of a backend: a PCA9956B channel, an expander pin, an entry of a pin list.
@@ -259,10 +260,10 @@ struct Line {
     constexpr Line() = default;
 
     template<std::integral T>
-    constexpr Line(T line)   // NOLINT(google-explicit-constructor): `.pattern = {2, 3, 5}`
+    constexpr Line(T line)   // implicit: `.pattern = {2, 3, 5}`
       : index{static_cast<std::uint8_t>(line)} {
         if(std::cmp_less(line, 0) || std::cmp_greater(line, 0xFF)) {
-            LayoutDetail::segment_display_line_index_is_0_to_255();
+            LayoutDetail::segmentDisplayLineIndexIs0To255();
         }
     }
 
@@ -301,10 +302,10 @@ struct PerDigit {
 };
 
 namespace LayoutDetail {
-    void segment_display_line_is_past_the_last_output_of_the_backend();
-    void segment_display_one_output_line_is_wired_twice();
-    void segment_display_every_digit_needs_a_select_line();
-    void segment_display_perDigit_line_does_not_fit_in_a_byte();
+    void segmentDisplayLineIsPastTheLastOutputOfTheBackend();
+    void segmentDisplayOneOutputLineIsWiredTwice();
+    void segmentDisplayEveryDigitNeedsASelectLine();
+    void segmentDisplayPerDigitLineDoesNotFitInAByte();
 
     template<typename L>
     struct Traits {
@@ -330,8 +331,8 @@ namespace LayoutDetail {
     constexpr void claim(std::bitset<Outputs>& used,
                          Line                  line) {
         if(line == NotWired) { return; }
-        if(line.index >= Outputs) { segment_display_line_is_past_the_last_output_of_the_backend(); }
-        if(used.test(line.index)) { segment_display_one_output_line_is_wired_twice(); }
+        if(line.index >= Outputs) { segmentDisplayLineIsPastTheLastOutputOfTheBackend(); }
+        if(used.test(line.index)) { segmentDisplayOneOutputLineIsWiredTwice(); }
         used.set(line.index);
     }
 
@@ -350,14 +351,14 @@ template<std::size_t N>
     for(std::size_t slot = 0; slot < N; ++slot) {
         std::size_t const position = p.first == FirstDigit::right ? N - 1 - slot : slot;
         for(std::size_t s = 0; s < Segments; ++s) {
-            Line const  in    = p.pattern[s];
-            std::size_t index = (slot * p.stride) + in.index;
+            Line const        in    = p.pattern[s];
+            std::size_t const index = (slot * p.stride) + in.index;
             if(in == NotWired) {
                 l.segment[position][s] = NotWired;
                 continue;
             }
             if(index >= NotWired.index) {
-                LayoutDetail::segment_display_perDigit_line_does_not_fit_in_a_byte();
+                LayoutDetail::segmentDisplayPerDigitLineDoesNotFitInAByte();
             }
             l.segment[position][s] = Line{index};
         }
@@ -383,7 +384,7 @@ template<std::size_t Outputs,
     std::bitset<Outputs> used{};
     for(auto const line : l.segment) { LayoutDetail::claim(used, line); }
     for(auto const line : l.select) {
-        if(line == NotWired) { LayoutDetail::segment_display_every_digit_needs_a_select_line(); }
+        if(line == NotWired) { LayoutDetail::segmentDisplayEveryDigitNeedsASelectLine(); }
         LayoutDetail::claim(used, line);
     }
     return used;
@@ -435,7 +436,7 @@ template<std::size_t Outputs,
 /// `show()` that puts a frame on them and says whether anything new went out. Optional, found
 /// by `requires`: `lines(used)` (told once which lines the glass uses), `update(now)` (its own
 /// housekeeping each loop turn), `light(Light)` (blink by dimming rather than a blank frame),
-/// `handler()`, and whatever else the Display forwards (`brightness`, `current`).
+/// `turn()`, and whatever else the Display forwards (`brightness`, `current`).
 template<typename B>
 concept Backend = requires(B& b, std::bitset<B::Outputs> const& bits) {
     typename B::TimePoint;
@@ -445,10 +446,10 @@ concept Backend = requires(B& b, std::bitset<B::Outputs> const& bits) {
 };
 
 /// The scan rate of a multiplexed display. Another rate is a type with its own
-/// `static constexpr std::chrono::microseconds DigitPeriod`.
+/// `static constexpr std::chrono::microseconds digitPeriod`.
 struct DefaultDisplayTiming {
     /// How long each digit is switched in: 2 ms, so four digits refresh at 125 Hz.
-    static constexpr std::chrono::microseconds DigitPeriod{2000};
+    static constexpr std::chrono::microseconds digitPeriod{2000};
 };
 
 /// N digits of a `LayoutV` on a `B`. The backend is built in place from the constructor's
@@ -456,7 +457,7 @@ struct DefaultDisplayTiming {
 ///
 /// Everything is handed over in `update(now)`, once per loop turn: a static layout sends the
 /// frame (and a backend skips what it already holds), a multiplexed layout switches to the next
-/// digit every `Timing::DigitPeriod`, first deselecting the last one so nothing ghosts.
+/// digit every `Timing::digitPeriod`, first deselecting the last one so nothing ghosts.
 template<Backend B, Layout auto LayoutV, typename Timing = DefaultDisplayTiming>
 class Display {
     using Traits = LayoutDetail::Traits<std::remove_cvref_t<decltype(LayoutV)>>;
@@ -484,13 +485,9 @@ public:
     static_assert(Used.count() <= Outputs,
                   "a display checks its layout whether or not its backend asks for the lines");
 
-    static constexpr std::chrono::microseconds DigitPeriod = [] {
-        if constexpr(requires { Timing::DigitPeriod; }) {
-            return Kvasir::asDuration<std::chrono::microseconds>(Timing::DigitPeriod);
-        } else {
-            return DefaultDisplayTiming::DigitPeriod;
-        }
-    }();
+    static constexpr std::chrono::microseconds DigitPeriod
+      = Kvasir::asDuration<std::chrono::microseconds>(
+        KVASIR_CONFIG_OR(Timing, digitPeriod, DefaultDisplayTiming::digitPeriod));
 
     /// How long a blinking display is lit, and dark, unless blink() is told otherwise.
     static constexpr auto BlinkOn  = std::chrono::milliseconds{400};
@@ -613,11 +610,11 @@ public:
         return changed;
     }
 
-    /// The backend's own handler (a device outside a Bus), where it has one.
-    void handler()
-        requires requires(B& b) { b.handler(); }
+    /// The backend's own turn (a device outside a Bus), where it has one.
+    void turn()
+        requires requires(B& b) { b.turn(); }
     {
-        backend_.handler();
+        backend_.turn();
     }
 
     /// Frames that put something new on the lines since construction.

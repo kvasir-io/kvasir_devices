@@ -1,26 +1,21 @@
 #pragma once
 
-// Must come before any driver header: the uc_log macros as counters.
-#include <support/LogStubs.hpp>
-//
 #include "FakeUsbBackend.hpp"
+#include "TestConfig.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <kd/Check.hpp>
 #include <optional>
 #include <span>
-#include <support/Check.hpp>
-#include <support/FakeClock.hpp>
 #include <vector>
 
 /// The host a test plays against a device on the fake controller: control transfers the way a
 /// host controller runs them (SETUP, the data stage in 64-byte packets until a short one, the
 /// status stage the other way), bulk reads and writes, enumeration. Every step runs the device's
 /// interrupt, so by the time a call returns the device has reacted.
-namespace Kvasir::Test {
-
-using Clock = FakeClock;
+namespace Kvasir::Test::Usb {
 
 template<typename Fake, typename Device>
 struct UsbHost {
@@ -51,8 +46,10 @@ struct UsbHost {
         pump();
     }
 
+    /// bRequest: a standard request (Setup::Request) or a class's or vendor's request enum.
+    template<typename Request>
     static Setup makeSetup(std::uint8_t  bmRequestType,
-                           std::uint8_t  bRequest,
+                           Request       bRequest,
                            std::uint16_t wValue,
                            std::uint16_t wIndex,
                            std::uint16_t wLength) {
@@ -69,10 +66,10 @@ struct UsbHost {
     struct ControlResult {
         bool                   stalled{false};
         bool                   timedOut{false};   // the device NAKed where it had to answer
-        std::vector<std::byte> data{};
-        std::vector<bool>      data1{};   // the PID of each data packet, for the toggle checks
+        std::vector<std::byte> data;
+        std::vector<bool>      data1;   // the PID of each data packet, for the toggle checks
 
-        bool ok() const { return !stalled && !timedOut; }
+        [[nodiscard]] bool ok() const { return !stalled && !timedOut; }
     };
 
     /// A control read: SETUP, IN packets until a short one or wLength bytes, a zero-length OUT.
@@ -123,7 +120,7 @@ struct UsbHost {
             data = data.subspan(chunk.size());
             pump();
         }
-        auto in = Fake::hostIn(0);
+        auto const in = Fake::hostIn(0);
         if(in.handshake == Handshake::stall) { r.stalled = true; }
         if(in.handshake == Handshake::nak) { r.timedOut = true; }
         if(in.handshake == Handshake::ack && !in.packet.data.empty()) { r.timedOut = true; }
@@ -133,43 +130,48 @@ struct UsbHost {
 
     // ---- the standard requests ----------------------------------------------------------------
 
-    static ControlResult getDescriptor(std::uint8_t  type,
-                                       std::uint8_t  index,
-                                       std::uint16_t length,
-                                       std::uint16_t language = 0) {
-        return controlIn(
-          makeSetup(0x80, 6, static_cast<std::uint16_t>((type << 8) | index), language, length));
+    static ControlResult getDescriptor(Kvasir::USB::DescriptorType type,
+                                       std::uint8_t                index,
+                                       std::uint16_t               length,
+                                       std::uint16_t               language = 0) {
+        return controlIn(makeSetup(fromDevice,
+                                   Setup::Request::getDescriptor,
+                                   descriptorValue(type, index),
+                                   language,
+                                   length));
     }
 
     static ControlResult setAddress(std::uint8_t address) {
-        return controlOut(makeSetup(0x00, 5, address, 0, 0));
+        return controlOut(makeSetup(toDevice, Setup::Request::setAddress, address, 0, 0));
     }
 
     static ControlResult setConfiguration(std::uint8_t value) {
-        return controlOut(makeSetup(0x00, 9, value, 0, 0));
+        return controlOut(makeSetup(toDevice, Setup::Request::setConfiguration, value, 0, 0));
     }
 
     static ControlResult clearHalt(std::uint8_t endpointAddress) {
-        return controlOut(makeSetup(0x02, 1, 0, endpointAddress, 0));
+        return controlOut(
+          makeSetup(toEndpoint, Setup::Request::clearFeature, 0, endpointAddress, 0));
     }
 
     static ControlResult setHalt(std::uint8_t endpointAddress) {
-        return controlOut(makeSetup(0x02, 3, 0, endpointAddress, 0));
+        return controlOut(makeSetup(toEndpoint, Setup::Request::setFeature, 0, endpointAddress, 0));
     }
 
     /// What a host does with a new device, as far as a test needs it.
     static bool enumerate(std::uint8_t address = 7) {
-        return getDescriptor(1, 0, 64).ok() && setAddress(address).ok()
-            && getDescriptor(1, 0, 18).ok() && getDescriptor(2, 0, 9).ok()
-            && setConfiguration(1).ok();
+        using Type = Kvasir::USB::DescriptorType;
+        return getDescriptor(Type::device, 0, 64).ok() && setAddress(address).ok()
+            && getDescriptor(Type::device, 0, 18).ok()
+            && getDescriptor(Type::configuration, 0, 9).ok() && setConfiguration(1).ok();
     }
 
     // ---- bulk ---------------------------------------------------------------------------------
 
     /// One IN transfer: packets until a short one, or until the device has nothing more armed.
     struct BulkResult {
-        std::vector<std::byte> data{};
-        std::vector<bool>      data1{};
+        std::vector<std::byte> data;
+        std::vector<bool>      data1;
         bool                   endedShort{false};
         bool                   stalled{false};
     };
@@ -216,4 +218,4 @@ inline std::vector<std::byte> pattern(std::size_t n,
     for(std::size_t i = 0; i != n; ++i) { v[i] = static_cast<std::byte>((i * 7 + seed) & 0xff); }
     return v;
 }
-}   // namespace Kvasir::Test
+}   // namespace Kvasir::Test::Usb

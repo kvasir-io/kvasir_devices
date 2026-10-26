@@ -1,19 +1,14 @@
 /// St7789::Panel over Display::SpiDcsBus over the queued SPI master, against a panel model that sees
 /// every byte with its D/C level; also on a narrow master (the SAM SERCOM) and the failure paths.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "../spi/FakeQueuedSpi.hpp"
-#include "../spi/FakeSpi.hpp"
-
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/Display/SpiDcsBus.hpp>
 #include <kvasir/Devices/Display/St7789.hpp>
+#include <spi/Harness.hpp>
+#include <string>
 #include <support/FakeClock.hpp>
 #include <vector>
 
@@ -30,10 +25,10 @@ using Dc = Spi::Pin<4>;
 struct PanelModel {
     struct Command {
         std::uint8_t              cmd{};
-        std::vector<std::uint8_t> params{};
+        std::vector<std::uint8_t> params;
     };
 
-    std::vector<Command> commands{};
+    std::vector<Command> commands;
     std::uint32_t        seenRises{};
     std::size_t          dataWithoutCommand{};
     /// The master stalls once this command byte has gone out: fails its data, nothing before it.
@@ -53,8 +48,9 @@ struct PanelModel {
         return 0x00;
     }
 
-    std::vector<std::uint8_t> order() const {
-        std::vector<std::uint8_t> o{};
+    [[nodiscard]] std::vector<std::uint8_t> order() const {
+        std::vector<std::uint8_t> o;
+        o.reserve(commands.size());
         for(auto const& c : commands) { o.push_back(c.cmd); }
         return o;
     }
@@ -73,15 +69,15 @@ using NarrowBase = QueuedSpi::Bus<NarrowTag>;
 
 struct NarrowBus {
     struct Hw : NarrowBase::Hw {
-        static constexpr bool          SupportsWide = false;
-        static constexpr std::uint32_t MaxFrames    = 300;
+        static constexpr bool          supportsWide = false;
+        static constexpr std::uint32_t maxFrames    = 300;
     };
 
     using Core    = Kvasir::SPI::QueueCore<Hw, FakeClock, 8, 16>;
     using Request = Core::RequestT;
     using Setup   = QueuedSpi::Setup;
 
-    static constexpr Setup setup(Kvasir::SPI::ClockMode mode,
+    static constexpr Setup setup(Kvasir::Hal::ClockMode mode,
                                  Kvasir::Units::Hertz   maxClock) {
         return NarrowBase::setup(mode, maxClock);
     }
@@ -99,9 +95,9 @@ struct NarrowBus {
         }
     }
 
-    static void handler() {
+    static void turn() {
         if(NarrowBase::autoComplete) { tick(); }
-        Core::handler();
+        Core::turn();
     }
 
     static void reset() {
@@ -110,14 +106,15 @@ struct NarrowBus {
     }
 };
 
-/// The Pico Display Pack's 1.14" 240 x 135 in landscape; offsets 40 / 53 from Pimoroni's library.
+/// A 1.14" 240 x 135 ST7789V module in landscape; window offsets 40 / 53 (the module vendor's
+/// driver values).
 struct PackConfig : D::DcsDefaults {
     static constexpr int          Width        = 240;
     static constexpr int          Height       = 135;
-    static constexpr int          ColumnOffset = 40;
-    static constexpr int          RowOffset    = 53;
-    static constexpr bool         Invert       = true;
-    static constexpr std::uint8_t Madctl = D::Dcs::Madctl::ColumnOrder | D::Dcs::Madctl::Exchange;
+    static constexpr int          columnOffset = 40;
+    static constexpr int          rowOffset    = 53;
+    static constexpr bool         invert       = true;
+    static constexpr std::uint8_t madctl = D::Dcs::Madctl::ColumnOrder | D::Dcs::Madctl::Exchange;
 };
 
 using Lcd   = D::SpiDcsBus<Bus, FakeClock, Spi::Cs, Dc>;
@@ -143,31 +140,24 @@ struct KnobsOf<NarrowBus> {
 template<typename B>
 void freshOn() {
     using K = typename KnobsOf<B>::type;
-    B::reset();
-    Pins::reset();
-    FakeClock::set(1s);
-    Log::reset();
+    // B's reset (the narrow wrapper's own), the knobs on the fake under it
+    Spi::Harness::fresh<B, K>([](std::uint8_t m) { return model.exchange(m); });
     model           = PanelModel{};
-    K::partSelected = [] { return !Pins::level[Spi::Cs::id]; };
-    K::exchange     = [](std::uint8_t m) { return model.exchange(m); };
-    K::autoComplete = true;   // writeCommand() waits for its frame on the master's handler
+    K::autoComplete = true;   // a frame completes at the master's next turn()
 }
 
 void fresh() { freshOn<Bus>(); }
+
+/// 1 ms turns, the clock first; the panel runs the master's turn() itself.
+constexpr Spi::Loop loop{.step = 1ms, .order = Spi::ClockOrder::first, .deviceRunsMaster = true};
 
 template<typename P,
          typename B,
          typename Pred>
 bool runUntilOn(Pred                      pred,
                 std::chrono::milliseconds limit) {
-    auto const end = FakeClock::now() + limit;
-    while(FakeClock::now() < end) {
-        FakeClock::advance(1ms);
-        P::handler();
-        B::tick();
-        if(pred()) { return true; }
-    }
-    return false;
+    auto panel = [] { P::turn(); };
+    return Spi::Harness::runUntil<B>(panel, pred, limit, loop);
 }
 
 template<typename Pred>
@@ -202,7 +192,7 @@ void bringUp() {
     auto const& ram = model.commands[7].params;
     checkEq(ram.size(), 240U * 135U * 2U, "the whole screen filled");
     bool black = true;
-    for(auto b : ram) { black = black && b == 0; }
+    for(auto const b : ram) { black = black && b == 0; }
     check(black, "black");
     checkEq(model.dataWithoutCommand, 0U, "no data byte before its command");
     bool mode = true;
@@ -329,7 +319,7 @@ void refusedStream() {
     static std::array<D::Rgb565, 4> px{};
     auto const                      rises = Pins::rises[Spi::Cs::id];
     Lcd::writePixels(std::as_bytes(std::span<D::Rgb565 const>{px}));
-    Lcd::handler();
+    Lcd::turn();
     check(Lcd::failed(), "failed");
     check(Lcd::idle(), "and idle again");
     check(Pins::level[Spi::Cs::id] && Pins::rises[Spi::Cs::id] == rises,
@@ -356,11 +346,119 @@ void failedStream() {
     Bus::stall          = false;
     Bus::pending        = false;
     auto const failures = Panel::failures();
-    check(runUntil([] { return Panel::ready(); }, 3s), "up again after RetryAfterMs");
+    check(runUntil([] { return Panel::ready(); }, 3s), "up again after retryAfter");
     checkEq(Panel::failures(), failures, "the failure was counted once, before");
     check(!Lcd::failed(), "the bus's error cleared by the retry");
 }
 
+/// A clock that moves 1 ms every time it is read: the bus's command deadline without the master's.
+struct TickClock {
+    using duration   = std::chrono::microseconds;
+    using rep        = duration::rep;
+    using period     = duration::period;
+    using time_point = std::chrono::time_point<TickClock, duration>;
+
+    static inline time_point current{};
+
+    static time_point now() {
+        current += 1ms;
+        return current;
+    }
+};
+
+using TickLcd = D::SpiDcsBus<Bus, TickClock, Spi::Cs, Dc>;
+
+/// Turns the bus until it is idle, completing one frame a turn; how many turns that took.
+template<typename L>
+int drain(int limit) {
+    int n = 0;
+    while(!L::idle() && n < limit) {
+        Bus::tick();
+        L::turn();
+        ++n;
+    }
+    return n;
+}
+
+void commandsQueue() {
+    testCase(
+      "commands queue without waiting, in order; short parameters are copied, a long block "
+      "is sent from the caller's memory, the slots bound them");
+    fresh();
+    Bus::autoComplete = false;   // nothing completes until the test ticks
+    using C           = D::Dcs::Cmd;
+    std::array<std::byte, 4> window{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+    check(Lcd::writeCommand(C::Caset, window), "CASET queued");
+    window.fill(std::byte{9});   // the copy went with the command
+    check(Lcd::writeCommand(C::Raset, window), "RASET queued");
+    static std::array<std::byte, 8> block{};
+    for(std::size_t i = 0; i < block.size(); ++i) { block[i] = std::byte(0x10 + i); }
+    check(Lcd::writeCommand(0xB0, block), "a command with eight parameter bytes queued");
+    check(!Lcd::idle(), "not idle while commands are queued");
+    checkEq(model.commands.size(), 1U, "only the first is on the wire yet");
+    int accepted = 3;
+    while(Lcd::writeCommand(C::Nop, {})) { ++accepted; }
+    checkEq(accepted,
+            static_cast<int>(D::SpiDcsBusDefaults::commandSlots),
+            "one per slot, then refused");
+    check(!Lcd::failed(), "a refusal is no failure");
+    auto const turns = drain<Lcd>(100);
+    check(Lcd::idle() && !Lcd::failed(), "idle once every command completed");
+    check(turns >= accepted && turns <= 2 * accepted, "a frame or two per command, no more");
+    auto const o = model.order();
+    check(o.size() == static_cast<std::size_t>(accepted) && o[0] == C::Caset && o[1] == C::Raset
+            && o[2] == 0xB0,
+          "on the wire in the order queued");
+    check(model.commands[0].params == std::vector<std::uint8_t>{1, 2, 3, 4},
+          "CASET's parameters as they were at the call");
+    check(model.commands[1].params == std::vector<std::uint8_t>{9, 9, 9, 9}, "RASET's too");
+    checkEq(model.commands[2].params.size(), 8U, "the long block whole");
+    check(model.commands[2].params.size() == 8U && model.commands[2].params[7] == 0x17,
+          "from the caller's memory");
+    check(Lcd::writeCommand(C::Nop, {}), "a slot is free again");
+    drain<Lcd>(10);
+
+    // a command lands inside no pixel stream: refused while one runs
+    static std::array<D::Rgb565, 4> px{};
+    Lcd::writePixels(std::as_bytes(std::span<D::Rgb565 const>{px}));
+    check(!Lcd::writeCommand(C::Nop, {}), "a command is refused while a pixel stream runs");
+    check(!Lcd::writeData(std::as_bytes(std::span<D::Rgb565 const>{px})), "and bare data too");
+    drain<Lcd>(10);
+    check(Lcd::idle() && !Lcd::failed(), "the stream completes");
+    Bus::reset();
+}
+
+void commandTimeout() {
+    testCase(
+      "a command that does not complete within commandTimeout latches failed(); its late "
+      "failure after clearError() is nobody's");
+    fresh();
+    Bus::stall = true;   // the frame goes out and does not complete
+    check(TickLcd::writeCommand(D::Dcs::Cmd::Swreset, {}), "queued, not waited for");
+    int turns = 0;
+    while(!TickLcd::failed() && turns < 200) {
+        TickLcd::turn();
+        ++turns;
+    }
+    check(TickLcd::failed(), "failed once the command ran past commandTimeout");
+    check(turns >= 50 && turns <= 52,
+          "after 50 ms without progress (" + std::to_string(turns) + ")");
+    TickLcd::clearError();
+    check(!TickLcd::idle(), "still waiting for the stuck frame");
+    Bus::stall       = false;
+    Bus::overrunNext = true;
+    Bus::tick();   // its late completion, failed
+    TickLcd::turn();
+    check(!TickLcd::failed(), "the late failure is not the next command's");
+    check(TickLcd::idle(), "and the slot is free");
+    check(TickLcd::writeCommand(D::Dcs::Cmd::Slpout, {}), "the next command goes");
+    Bus::tick();
+    TickLcd::turn();
+    check(!model.commands.empty() && model.commands.back().cmd == D::Dcs::Cmd::Slpout,
+          "SLPOUT on the wire");
+    check(TickLcd::idle() && !TickLcd::failed(), "and completes");
+    Bus::reset();
+}
 }   // namespace
 
 int main() {
@@ -370,5 +468,7 @@ int main() {
     chunkedStream();
     refusedStream();
     failedStream();
+    commandsQueue();
+    commandTimeout();
     return finish();
 }

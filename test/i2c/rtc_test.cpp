@@ -78,8 +78,8 @@ constexpr Cs at(int h,
 // Wed 2026-09-16 23:59:30.42 (weekday bit 3), V1F and V2F set by a power-on reset
 static_assert([] {
     using namespace std::chrono;
-    auto const got
-      = Rv::Clock::decode(Bytes{clockFrame(0x42, 0x30, 0x59, 0x23, 0x08, 0x16, 0x09, 0x26, 0x03)});
+    auto const got = Rv::Clock::decode(
+      Kvasir::Bytes{clockFrame(0x42, 0x30, 0x59, 0x23, 0x08, 0x16, 0x09, 0x26, 0x03)});
     auto const& t = got.value;
     return isOk(got) && t.date == 2026y / September / 16d && t.weekday == Wednesday
         && t.weekday == weekday{local_days{2026y / September / 16d}} && t.time == at(23, 59, 30, 42)
@@ -89,10 +89,10 @@ static_assert([] {
 // the same with the flags clear: valid, compensated; Sunday is bit 0, Saturday bit 6
 static_assert([] {
     using namespace std::chrono;
-    auto const sun
-      = Rv::Clock::decode(Bytes{clockFrame(0x00, 0x00, 0x00, 0x00, 0x01, 0x20, 0x09, 0x26, 0x00)});
-    auto const sat
-      = Rv::Clock::decode(Bytes{clockFrame(0x99, 0x59, 0x59, 0x23, 0x40, 0x31, 0x12, 0x99, 0x00)});
+    auto const sun = Rv::Clock::decode(
+      Kvasir::Bytes{clockFrame(0x00, 0x00, 0x00, 0x00, 0x01, 0x20, 0x09, 0x26, 0x00)});
+    auto const sat = Rv::Clock::decode(
+      Kvasir::Bytes{clockFrame(0x99, 0x59, 0x59, 0x23, 0x40, 0x31, 0x12, 0x99, 0x00)});
     return isOk(sun) && sun.value.valid && sun.value.compensated && sun.value.weekday == Sunday
         && sun.value.time == Cs{0} && isOk(sat) && sat.value.weekday == Saturday
         && sat.value.date == 2099y / December / 31d && sat.value.time == at(23, 59, 59, 99);
@@ -100,17 +100,18 @@ static_assert([] {
 
 // V2F alone: the time is not valid; V1F alone: valid but not compensated
 static_assert([] {
-    auto const v2
-      = Rv::Clock::decode(Bytes{clockFrame(0x00, 0x10, 0x00, 0x12, 0x02, 0x01, 0x01, 0x25, 0x02)});
-    auto const v1
-      = Rv::Clock::decode(Bytes{clockFrame(0x00, 0x10, 0x00, 0x12, 0x02, 0x01, 0x01, 0x25, 0x01)});
+    auto const v2 = Rv::Clock::decode(
+      Kvasir::Bytes{clockFrame(0x00, 0x10, 0x00, 0x12, 0x02, 0x01, 0x01, 0x25, 0x02)});
+    auto const v1 = Rv::Clock::decode(
+      Kvasir::Bytes{clockFrame(0x00, 0x10, 0x00, 0x12, 0x02, 0x01, 0x01, 0x25, 0x01)});
     return isOk(v2) && !v2.value.valid && v2.value.compensated && isOk(v1) && v1.value.valid
         && !v1.value.compensated;
 }());
 
 // not BCD, out of range, a date that does not exist, a weekday that is not one-hot: rejected
 static_assert([] {
-    auto const reject = [](Frame const& f) { return isReject(Rv::Clock::decode(Bytes{f})); };
+    auto const reject
+      = [](Frame const& f) { return isReject(Rv::Clock::decode(Kvasir::Bytes{f})); };
     return reject(clockFrame(0x00, 0x5A, 0x00, 0x12, 0x02, 0x01, 0x01, 0x25, 0x00))   // seconds 5A
         && reject(
              clockFrame(0xFF, 0x7F, 0x7F, 0x3F, 0x7F, 0x3F, 0x1F, 0xFF, 0x00))   // an absent part
@@ -128,7 +129,7 @@ static_assert([] {
 static_assert([] {
     auto f = clockFrame(0x99, 0x59, 0x59, 0x12, 0x02, 0x01, 0x01, 0x25, 0x00);
     f[15]  = std::byte{0x00};
-    return isRetry(Rv::Clock::decode(Bytes{f}));
+    return isRetry(Rv::Clock::decode(Kvasir::Bytes{f}));
 }());
 
 // the SetTime sequence: RESET, the seven registers from 11h, the voltage flags, RESET released
@@ -181,11 +182,11 @@ static_assert([] {
 // neither is unchanged; a first request without EVF has nothing to compare with
 static_assert([] {
     using Stamp        = Rv::Event::Sample;
-    auto const flagged = Rv::Event::decode(Bytes{frame(0x04, 0x25, 0x12)}, Stamp{});
-    auto const moved   = Rv::Event::decode(Bytes{frame(0x00, 0x50, 0x13)}, Stamp{Cs{1225}});
-    auto const same    = Rv::Event::decode(Bytes{frame(0x00, 0x25, 0x12)}, Stamp{Cs{1225}});
-    auto const first   = Rv::Event::decode(Bytes{frame(0x00, 0x25, 0x12)}, Stamp{});
-    auto const bad     = Rv::Event::decode(Bytes{frame(0x04, 0x2A, 0x12)}, Stamp{});
+    auto const flagged = Rv::Event::decode(Kvasir::Bytes{frame(0x04, 0x25, 0x12)}, Stamp{});
+    auto const moved   = Rv::Event::decode(Kvasir::Bytes{frame(0x00, 0x50, 0x13)}, Stamp{Cs{1225}});
+    auto const same    = Rv::Event::decode(Kvasir::Bytes{frame(0x00, 0x25, 0x12)}, Stamp{Cs{1225}});
+    auto const first   = Rv::Event::decode(Kvasir::Bytes{frame(0x00, 0x25, 0x12)}, Stamp{});
+    auto const bad     = Rv::Event::decode(Kvasir::Bytes{frame(0x04, 0x2A, 0x12)}, Stamp{});
     return isOk(flagged) && flagged.value.stamp == Cs{1225} && isOk(moved)
         && moved.value.stamp == Cs{1350} && isUnchanged(same) && isUnchanged(first)
         && isReject(bad);
@@ -194,8 +195,7 @@ static_assert([] {
 // -- the part on the wire ----------------------------------------------------------------------
 
 void rv8803() {
-    testCase("RV-8803: bring-up");
-    fresh();
+    I2cCase     testcase{"RV-8803: bring-up"};
     Rv8803Model m{};
     m.reg.set(0x10,
               {0x42, 0x30, 0x59, 0x23, 0x08, 0x16, 0x09, 0x26});   // Wed 2026-09-16 23:59:30.42
@@ -235,9 +235,8 @@ void rv8803() {
         check(!t.valid, "V2F still set: the time is not valid");
     }
 
-    testCase("RV-8803: V2F survives a second bring-up");
+    testcase.next("RV-8803: V2F survives a second bring-up");
     {
-        fresh();
         FakeBus::respond = std::ref(m);
         Dev<Rv> again{};
         check(runUntil(again, [&] { return again.samples<Rv::Clock>() == 1; }, 200ms), "read");
@@ -245,8 +244,7 @@ void rv8803() {
               "a bring-up does not make an undefined time valid");
     }
 
-    testCase("RV-8803: SetTime");
-    fresh();
+    testcase.next("RV-8803: SetTime");
     FakeBus::respond = std::ref(m);
     Dev<Rv> c{};
     check(runUntil(c, [&] { return c.samples<Rv::Clock>() == 1; }, 200ms), "up");
@@ -272,7 +270,7 @@ void rv8803() {
     runFor(c, 3s);
     checkEq(c.writes<Rv::SetTime>(), 1U, "a set time is not replayed");
 
-    testCase("RV-8803: offset, CLKOUT and the event stamp");
+    testcase.step("RV-8803: offset, CLKOUT and the event stamp");
     auto const mark = FakeBus::log.size();
     c.set<Rv::Offset>(std::int8_t{-21});
     check(runUntil(c, [&] { return c.writes<Rv::Offset>() == 1; }, 200ms), "offset written");
@@ -288,46 +286,44 @@ void rv8803() {
     auto const ticket = c.request<Rv::Event>();
     check(runUntil(
             c,
-            [&] { return c.answer<Rv::Event>(ticket) != Answer::pending; },
+            [&] { return c.answer<Rv::Event>(ticket) != Kvasir::Engine::Answer::pending; },
             200ms),
           "answered");
-    check(c.answer<Rv::Event>(ticket) == Answer::ok, "an event");
+    check(c.answer<Rv::Event>(ticket) == Kvasir::Engine::Answer::ok, "an event");
     checkEq(c.latest<Rv::Event>().stamp.count(), 1225, "its stamp");
     checkEq(m.reg.word(0x1E), 0x00U, "EVF cleared by the request");
     auto const quiet = c.request<Rv::Event>();
     check(runUntil(
             c,
-            [&] { return c.answer<Rv::Event>(quiet) != Answer::pending; },
+            [&] { return c.answer<Rv::Event>(quiet) != Kvasir::Engine::Answer::pending; },
             200ms),
           "answered");
-    check(c.answer<Rv::Event>(quiet) == Answer::unchanged, "no new event");
+    check(c.answer<Rv::Event>(quiet) == Kvasir::Engine::Answer::unchanged, "no new event");
 
-    testCase("RV-8803: a NAK in the update window is retried, not a fault");
+    testcase.next("RV-8803: a NAK in the update window is retried, not a fault");
     {
-        fresh();
-        int  nakEvery = 0;
-        auto inner    = std::ref(m);
-        FakeBus::respond
-          = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-                // every fifth transaction lands in the 61 us window once
-                if(++nakEvery % 5 == 0) { return FakeBus::Result::notAcknowledged; }
-                return inner(addr, sent, recv);
-            };
+        int              nakEvery = 0;
+        auto             inner    = std::ref(m);
+        ScopedHook const answering{
+          FakeBus::respond,
+          [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+              // every fifth transaction lands in the 61 us window once
+              if(++nakEvery % 5 == 0) { return FakeBus::Result::nack; }
+              return inner(addr, sent, recv);
+          }};
         Dev<Rv> w{};
         check(runUntil(w, [&] { return w.samples<Rv::Clock>() >= 3; }, 4s), "reads go on");
         checkEq(w.errors(), 0U, "no NAK counted as an error");
-        check(w.wakeRetries() >= 1, "they were retried instead");
+        check(w.wakeRetryCount() >= 1, "they were retried instead");
     }
 
-    testCase("RV-8803: not the part");
-    fresh();
+    testcase.next("RV-8803: not the part");
     Rv8803Model other{};
     other.reg.set(0x1E, {0xC0, 0x00});   // flag bits 7:6 read as 1
     FakeBus::respond = std::ref(other);
     Dev<Rv> o{};
     runFor(o, 100ms);
     check(!o.identified() && o.unidentified() >= 1, "refused");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -63,18 +64,18 @@ namespace Adt7420Detail {
 /// Setpoints are always the 13-bit format, left-aligned by three. 0x48..0x4B by A1 A0.
 /// `Timing::LimitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
 template<Adt7420Detail::Resolution Res = Adt7420Detail::Resolution::bits13,
-         typename Timing               = DefaultTiming>
+         typename Timing               = Engine::DefaultTiming>
 struct Adt7420 {
     static constexpr std::string_view Name = "ADT7420";
     /// Analog Devices ADT7420. ADT7420.md:592, :739: ID (0x0B) is 0xCB, the manufacturer in 7:3 and
     /// the silicon revision below it.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x0B, 1, true, 0xF8, 0xC8},
+      Engine::RegisterCheck{"id", 0x0B, 1, true, 0xF8, 0xC8},
     };
     static constexpr Address7    Address       = 0x48;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x48, 0x49, 0x4A, 0x4B};
+    static constexpr auto Addresses = addressRun<0x48, 4>();
 
     static constexpr auto StartupDelay = std::chrono::milliseconds{250};
 
@@ -96,7 +97,8 @@ struct Adt7420 {
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             CentiDegC temperature{};   ///< 0.01 degC
@@ -106,17 +108,17 @@ struct Adt7420 {
         /// 13-bit format it is no temperature (-1/16 degC with all three flag bits set, which
         /// the part cannot report together) and is rejected; in the 16-bit format it is
         /// -1/128 degC, a real reading, and is kept.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
             if(state.resolution == Resolution::bits13 && data.be16(0) == 0xFFFF) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             auto const raw = data.s16be(0);
             if(state.resolution == Resolution::bits16) {
-                return Outcome<Sample>::ok(
+                return Engine::Outcome<Sample>::ok(
                   {Units::centiDegC(static_cast<std::int32_t>(raw) * 25 / 32)});   // 1/128 degC
             }
-            return Outcome<Sample>::ok(
+            return Engine::Outcome<Sample>::ok(
               {Units::centiDegC(static_cast<std::int32_t>(raw >> 3) * 25 / 4)});   // 1/16 degC
         }
     };
@@ -131,8 +133,8 @@ struct Adt7420 {
         static constexpr bool  AlwaysWrite = true;
         static constexpr Value Initial{.resolution = Res};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             std::uint8_t raw = 0;
             if(value.resolution == Resolution::bits16) {
                 raw = static_cast<std::uint8_t>(raw | 0x80U);
@@ -149,7 +151,7 @@ struct Adt7420 {
             }
             raw       = static_cast<std::uint8_t>(raw | static_cast<unsigned>(value.faults));
             buffer[0] = static_cast<std::byte>(raw);
-            return Step::writeBuffer({.reg = 0x03, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x03, .offset = 0, .count = 1});
         }
 
         /// The resolution bit is what Temperature::decode scales by from now on.
@@ -160,16 +162,16 @@ struct Adt7420 {
     };
 
     /// THIGH, TLOW then TCRIT, always the 13-bit format (1/16 degC).
-    struct Limits : Groups::LimitsReadBack<Timing> {
+    struct Limits : Engine::Groups::LimitsReadBack<Timing> {
         using Value                        = CentiDegC;
         static constexpr std::size_t Items = 3;
         static constexpr std::size_t Bytes = 2;
 
         static constexpr std::array<std::uint8_t, 3> Registers{0x04, 0x06, 0x08};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         limit,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             // Clamped to the part's -55 .. +150 degC, as Linux adt7x10.c does: past +255.94 degC
             // the 13-bit register value would wrap to a negative setpoint.
             auto const raw        = Units::value(limit);
@@ -178,7 +180,7 @@ struct Adt7420 {
             putBe16(buffer,
                     0,
                     static_cast<std::uint16_t>(static_cast<std::uint16_t>(sixteenths) << 3));
-            return Step::writeBuffer({.reg = Registers[item], .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = Registers[item], .offset = 0, .count = 2});
         }
     };
 
@@ -188,12 +190,12 @@ struct Adt7420 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Units::degC(5);
 
-        [[nodiscard]] static constexpr Step encode(Value const&         hysteresis,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         hysteresis,
+                                                           std::span<std::byte> buffer) {
             auto const degrees = Units::value(hysteresis);
             auto const clamped = degrees > 15 ? 15 : degrees < 0 ? 0 : degrees;
             buffer[0]          = static_cast<std::byte>(clamped);
-            return Step::writeBuffer({.reg = 0x0A, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x0A, .offset = 0, .count = 1});
         }
     };
 
@@ -201,8 +203,8 @@ struct Adt7420 {
     static constexpr std::size_t Low      = 1;
     static constexpr std::size_t Critical = 2;
 
-    using Reads  = List<Temperature>;
-    using Writes = List<Config, Limits, Hysteresis>;
+    using Reads  = Engine::List<Temperature>;
+    using Writes = Engine::List<Config, Limits, Hysteresis>;
 };
 
 }   // namespace Kvasir::I2C::Chips

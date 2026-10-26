@@ -1,24 +1,24 @@
 /// The queued SPI master's chip-independent half (SPI/QueueCore.hpp) over a fake hardware policy.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/QueueCore.hpp>
+#include <kvasir/Devices/SPI/QueuedFront.hpp>
+#include <kvasir/Port/Extends.hpp>
 #include <span>
 #include <string>
 #include <support/FakeClock.hpp>
+#include <type_traits>
 #include <vector>
 
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
+using Kvasir::Bus::Outcome;
 using Kvasir::SPI::Lines;
 using Kvasir::SPI::Transfer;
-using Kvasir::SPI::TransferResult;
 
 namespace {
 
@@ -38,7 +38,7 @@ struct FakeHw {
         std::uint32_t marker{};
     };
 
-    static constexpr unsigned Instance = 0;
+    static constexpr unsigned instance = 0;
 
     static inline bool          masked{};
     static inline Transfer      last{};
@@ -70,12 +70,12 @@ struct FakeHw {
 
     static void abort() {
         ++aborts;
-        events.push_back("abort");
+        events.emplace_back("abort");
     }
 
     static void reinit() {
         ++reinits;
-        events.push_back("reinit");
+        events.emplace_back("reinit");
     }
 
     static Snapshot snapshot() { return {42}; }
@@ -95,7 +95,25 @@ struct FakeHw {
     }
 };
 
-using Core    = Kvasir::SPI::QueueCore<FakeHw, FakeClock, 4, 16>;
+// The contract is a concept (QueueHw.hpp): the fake meets it, a policy without abort() does not.
+struct NoAbortHw : FakeHw {
+    static void abort() = delete;
+};
+
+struct NoSnapshotHw : FakeHw {   // no Snapshot type to hand to log()
+    using Snapshot = void;
+};
+
+static_assert(Kvasir::SPI::QueueHw<FakeHw>);
+static_assert(!Kvasir::SPI::QueueHw<NoAbortHw>);
+static_assert(!Kvasir::SPI::QueueHw<NoSnapshotHw>);
+
+/// The default features with the counters on (off by default: a firmware that reads one turns them on).
+struct CountingTiming : Kvasir::SPI::QueueCoreDefaults {
+    static constexpr Kvasir::Bus::QueueFeatures queueFeatures{.counters = true};
+};
+
+using Core    = Kvasir::SPI::QueueCore<FakeHw, FakeClock, 4, 16, CountingTiming>;
 using Request = Core::RequestT;
 
 template<int Id>
@@ -120,10 +138,10 @@ struct Device {
 };
 
 /// What the callbacks saw, per request tag.
-inline std::vector<std::pair<int, TransferResult>> results{};
+inline std::vector<std::pair<int, Outcome>> results{};
 
 auto recordAs(int tag) {
-    return [tag](TransferResult r) { results.emplace_back(tag, r); };
+    return [tag](Outcome r) { results.emplace_back(tag, r); };
 }
 
 std::array<std::byte, 8> txBuf{};
@@ -149,7 +167,7 @@ void fresh() {
     static_cast<void>(Core::takeLatency());
 }
 
-int count(TransferResult r) {
+int count(Outcome r) {
     int n = 0;
     for(auto const& e : results) { n += e.second == r ? 1 : 0; }
     return n;
@@ -167,7 +185,7 @@ void oneCallbackEach() {
     FakeHw::finish();
     checkEq(results.size(), 2U, "two callbacks");
     check(results[0].first == 1 && results[1].first == 2, "in submit order");
-    checkEq(count(TransferResult::succeeded), 2, "both succeeded");
+    checkEq(count(Outcome::ok), 2, "both succeeded");
     check(!Core::busy(), "idle afterwards");
     checkEq(Core::transfers(), 2U, "two transfers counted");
     check(!FakeHw::masked, "the interrupt is unmasked again");
@@ -236,10 +254,10 @@ void holdTimeout() {
     Core::submit(write(Device<2>::lines, 2));
     FakeHw::finish();
     FakeClock::advance(49ms);
-    Core::handler();
+    Core::turn();
     check(Device<1>::low(), "still held before the timeout");
     FakeClock::advance(2ms);
-    Core::handler();
+    Core::turn();
     check(!Device<1>::low(), "released after it");
     checkEq(Core::holdTimeouts(), 1U, "counted");
     check(Device<2>::low(), "and the queue moves on");
@@ -267,21 +285,21 @@ void timeoutAndLateCompletion() {
     Core::submit(write(Device<2>::lines, 2));
     auto const lostGen = FakeHw::gen;
     FakeClock::advance(2000us);
-    Core::handler();
+    Core::turn();
     checkEq(Core::timeouts(), 0U, "not before twice the wire time plus the margin");
     FakeClock::advance(200us);
-    Core::handler();
+    Core::turn();
     checkEq(Core::timeouts(), 1U, "then it is lost");
     checkEq(FakeHw::aborts, 1, "the DMA aborted");
     check(!Device<1>::low(), "CS released");
-    check(results.size() == 1 && results[0].second == TransferResult::failed, "failed once");
+    check(results.size() == 1 && results[0].second == Outcome::failed, "failed once");
     check(Device<2>::low(), "the next one started");
     FakeHw::done(lostGen, false);   // the old DMA's completion, arriving late
     checkEq(Core::staleCompletions(), 1U, "a late completion is counted");
     check(Device<2>::low(), "and does not end the transfer that runs now");
     checkEq(results.size(), 1U, "nor gives anyone a second callback");
     FakeHw::finish();
-    checkEq(count(TransferResult::succeeded), 1, "the second completes normally");
+    checkEq(count(Outcome::ok), 1, "the second completes normally");
     checkEq(Core::lastTimeout().frames, 8U, "the snapshot has the lost transfer");
     checkEq(Core::lastTimeout().hw.marker, 42U, "and the hardware's own part");
     checkEq(Core::lastTimeout().queued, 1U, "and what waited behind it");
@@ -294,7 +312,7 @@ void overrun() {
     Core::submit(write(Device<1>::lines, 1));
     FakeHw::finish(true);
     checkEq(Core::overruns(), 1U, "counted");
-    check(results.size() == 1 && results[0].second == TransferResult::failed, "failed");
+    check(results.size() == 1 && results[0].second == Outcome::failed, "failed");
     check(!Device<1>::low(), "CS released");
 }
 
@@ -313,7 +331,7 @@ void failureInAHold() {
     check(Core::submit(third), "a continuation behind the running one is taken");
     FakeHw::finish(true);   // the running one fails
     check(!Device<1>::low(), "CS released");
-    checkEq(count(TransferResult::failed), 2, "the failed one and the waiting continuation");
+    checkEq(count(Outcome::failed), 2, "the failed one and the waiting continuation");
     checkEq(results.size(), 3U, "every request one callback");
     check(!Core::busy(), "idle");
 }
@@ -326,7 +344,7 @@ void resetDrains() {
     auto const drainedBefore = Core::drainedRequests();
     Core::reset();
     checkEq(results.size(), 5U, "five callbacks, the refused one none");
-    checkEq(count(TransferResult::failed), 5, "all failed");
+    checkEq(count(Outcome::failed), 5, "all failed");
     checkEq(Core::drainedRequests() - drainedBefore, 4U, "four never went on the wire");
     checkEq(FakeHw::reinits, 1, "the block re-initialised");
     check(!Device<1>::low(), "CS released");
@@ -338,7 +356,7 @@ void submitFromACallbackDuringReset() {
     static bool resubmitted{};
     resubmitted = false;
     Request r   = write(Device<1>::lines, 1);
-    r.callback  = [](TransferResult) {
+    r.callback  = [](Outcome) {
         if(!resubmitted) {
             resubmitted = true;
             Core::submit(write(Device<2>::lines, 2));
@@ -358,13 +376,13 @@ void deadBus() {
         Core::submit(write(Device<1>::lines, 1));
         FakeHw::finish(true);
     }
-    Core::handler();
+    Core::turn();
     checkEq(Core::resuscitations(), 1U, "watchdog stepped in");
     checkEq(FakeHw::reinits, 1, "re-initialised");
     checkEq(Core::consecutiveFailures(), 0U, "streak restarted");
     Core::submit(write(Device<1>::lines, 1));
     FakeHw::finish();
-    Core::handler();
+    Core::turn();
     checkEq(Core::resuscitations(), 1U, "a success keeps it quiet");
 }
 
@@ -445,7 +463,7 @@ void commandPhase() {
     Lines l   = Device<1>::lines;
     l.between = [] {
         ++betweens;
-        events.push_back("between");
+        events.emplace_back("between");
     };
     std::array<std::byte, 1> cmd{std::byte{0x80}};
     Core::submit(Request{.lines    = l,
@@ -461,7 +479,7 @@ void commandPhase() {
     check(FakeHw::last.rx == rxBuf.data() && FakeHw::last.frames == 3, "the data into the buffer");
     check(results.empty(), "no callback yet");
     FakeHw::finish();
-    check(results.size() == 1 && results[0].second == TransferResult::succeeded, "one callback");
+    check(results.size() == 1 && results[0].second == Outcome::ok, "one callback");
     check(!Device<1>::low(), "CS released at the end");
     int selects = 0;
     for(auto const& e : events) { selects += e == "select 1" ? 1 : 0; }
@@ -470,8 +488,7 @@ void commandPhase() {
     Core::submit(Request{.lines = Device<1>::lines, .command = cmd, .callback = recordAs(2)});
     checkEq(FakeHw::last.frames, 1U, "a command alone");
     FakeHw::finish();
-    check(results.size() == 2 && results[1].second == TransferResult::succeeded
-            && !Device<1>::low(),
+    check(results.size() == 2 && results[1].second == Outcome::ok && !Device<1>::low(),
           "is the whole frame");
 
     Core::submit(Request{.lines    = l,
@@ -480,15 +497,15 @@ void commandPhase() {
                          .callback = recordAs(3)});
     auto const transfersBefore = FakeHw::gen;
     FakeHw::finish(true);   // the command phase fails
-    check(results.size() == 3 && results[2].second == TransferResult::failed, "fails the request");
+    check(results.size() == 3 && results[2].second == Outcome::failed, "fails the request");
     checkEq(FakeHw::gen, transfersBefore, "and no data phase goes out");
     checkEq(betweens, 1, "nor between()");
 }
 
-/// A block with no completion interrupt (the SAM DMAC): completions found by Hw::poll() in handler().
+/// A block with no completion interrupt (the SAM DMAC): completions found by Hw::poll() in turn().
 struct PolledHw : FakeHw {
-    static constexpr bool          SupportsWide = false;
-    static constexpr std::uint32_t MaxFrames    = 16;
+    static constexpr bool          supportsWide = false;
+    static constexpr std::uint32_t maxFrames    = 16;
     static inline bool             doneOnWire{};
 
     static void poll() {
@@ -499,22 +516,21 @@ struct PolledHw : FakeHw {
     }
 };
 
-using Polled = Kvasir::SPI::QueueCore<PolledHw, FakeClock, 4, 16>;
+using Polled = Kvasir::SPI::QueueCore<PolledHw, FakeClock, 4, 16, CountingTiming>;
 
 void polledCompletion() {
-    testCase("a polled block: completion found in handler(), its limits refused");
+    testCase("a polled block: completion found in turn(), its limits refused");
     fresh();
     Polled::reset();
     results.clear();
     Polled::submit(
       Polled::RequestT{.lines = Device<1>::lines, .tx = std::span{txBuf}, .callback = recordAs(1)});
-    Polled::handler();
+    Polled::turn();
     check(Device<1>::low() && results.empty(), "nothing done until the wire is");
     PolledHw::doneOnWire = true;
-    Polled::handler();
-    check(!Device<1>::low() && results.size() == 1
-            && results[0].second == TransferResult::succeeded,
-          "handler() finds the completion and releases CS");
+    Polled::turn();
+    check(!Device<1>::low() && results.size() == 1 && results[0].second == Outcome::ok,
+          "turn() finds the completion and releases CS");
     std::array<std::byte, 20> big{};
     check(!Polled::submit(
             Polled::RequestT{.lines = Device<1>::lines, .tx = std::span{txBuf}, .wide = true}),
@@ -534,7 +550,7 @@ void callbacksMaySubmit() {
     static bool maskedInside{};
     static int  captured{};
     Request     r = write(Device<1>::lines, 1);
-    r.callback    = [tag = 1](TransferResult) {
+    r.callback    = [tag = 1](Outcome) {
         Core::submit(write(Device<2>::lines, 2));
         startedInside = Device<2>::low();
         maskedInside  = FakeHw::masked;
@@ -551,17 +567,17 @@ void callbacksMaySubmit() {
     check(!FakeHw::masked, "unmasked once the completion is over");
     FakeHw::finish();
 
-    // from handler()'s timeout path (the main loop, under the mask)
+    // from turn()'s timeout path (the main loop, under the mask)
     fresh();
     startedInside = maskedInside = false;
     auto const timeoutsBefore    = Core::timeouts();
     Core::submit(r);
     FakeClock::advance(3000us);
-    Core::handler();
+    Core::turn();
     checkEq(Core::timeouts() - timeoutsBefore, 1U, "timed out");
     check(!startedInside && maskedInside, "same from the timeout path");
     check(Device<2>::low(), "the queued one started once the callback was over");
-    check(!FakeHw::masked, "and handler() unmasked at its end, not the nested submit");
+    check(!FakeHw::masked, "and turn() unmasked at its end, not the nested submit");
     FakeHw::finish();
 }
 
@@ -569,7 +585,7 @@ void resetAndReleaseHoldFromACallback() {
     testCase("reset() and releaseHold() from a callback");
     fresh();
     Request r  = write(Device<1>::lines, 1);
-    r.callback = [](TransferResult res) {
+    r.callback = [](Outcome res) {
         results.emplace_back(1, res);
         Core::reset();
     };
@@ -577,9 +593,9 @@ void resetAndReleaseHoldFromACallback() {
     Core::submit(write(Device<2>::lines, 2));
     FakeHw::finish();
     checkEq(results.size(), 2U, "the finished request once, the queued one drained once");
-    check(results[0].first == 1 && results[0].second == TransferResult::succeeded,
+    check(results[0].first == 1 && results[0].second == Outcome::ok,
           "the first succeeded and was not failed again by its own reset");
-    check(results[1].first == 2 && results[1].second == TransferResult::failed,
+    check(results[1].first == 2 && results[1].second == Outcome::failed,
           "the queued one was drained");
     checkEq(FakeHw::reinits, 1, "re-initialised once");
     check(!FakeHw::masked && !Core::busy(), "idle and unmasked afterwards");
@@ -587,7 +603,7 @@ void resetAndReleaseHoldFromACallback() {
     fresh();
     Request held  = write(Device<1>::lines, 1);
     held.hold     = true;
-    held.callback = [](TransferResult) { Core::releaseHold(Device<1>::lines); };
+    held.callback = [](Outcome) { Core::releaseHold(Device<1>::lines); };
     Core::submit(held);
     Core::submit(write(Device<2>::lines, 2));
     FakeHw::finish();
@@ -611,12 +627,12 @@ void holdNeedsASelect() {
 
 namespace {
 
-/// Every optional part off (QueueCoreFeatures): what is left must still move frames and time
+/// Every optional part off (Bus::QueueFeatures): what is left must still move frames and time
 /// a lost one out.
 struct BareTiming : Kvasir::SPI::QueueCoreDefaults {
-    static constexpr Kvasir::SPI::QueueCoreFeatures QueueFeatures{.latency         = false,
-                                                                  .counters        = false,
-                                                                  .timeoutSnapshot = false};
+    static constexpr Kvasir::Bus::QueueFeatures queueFeatures{.latency         = false,
+                                                              .counters        = false,
+                                                              .timeoutSnapshot = false};
 };
 
 using Bare = Kvasir::SPI::QueueCore<FakeHw, FakeClock, 4, 16, BareTiming>;
@@ -643,29 +659,30 @@ void bareQueue() {
     check(Bare::submit(write(Device<1>::lines, 1, 8)), "accepted");
     check(Bare::submit(write(Device<2>::lines, 2)), "second accepted");
     FakeClock::advance(2200us);
-    Bare::handler();
+    Bare::turn();
     checkEq(FakeHw::aborts, 1, "aborted after twice the wire time plus the margin");
-    check(results.size() == 1 && results[0].second == TransferResult::failed, "failed once");
+    check(results.size() == 1 && results[0].second == Outcome::failed, "failed once");
     check(Device<2>::low(), "the next one started");
     FakeHw::finish();
-    checkEq(count(TransferResult::succeeded), 1, "and completed");
+    checkEq(count(Outcome::ok), 1, "and completed");
     Bare::reset();
 }
 
-// A queue with tickets and deadlines (QueueCoreFeatures::cancel / ::deadlines)
+// A queue with tickets and deadlines (Bus::QueueFeatures::cancel / ::deadlines)
 
 struct TrackedTiming : Kvasir::SPI::QueueCoreDefaults {
-    static constexpr Kvasir::SPI::QueueCoreFeatures QueueFeatures{.cancel    = true,
-                                                                  .deadlines = true};
+    static constexpr Kvasir::Bus::QueueFeatures queueFeatures{.counters  = true,
+                                                              .cancel    = true,
+                                                              .deadlines = true};
 };
 
 using TCore    = Kvasir::SPI::QueueCore<FakeHw, FakeClock, 4, 16, TrackedTiming>;
 using TRequest = TCore::RequestT;
-using Tracked  = Kvasir::SPI::TransferResultTracked;
+using Tracked  = Kvasir::Bus::TrackedOutcome;
 using Kvasir::Bus::Cancel;
 
 static_assert(std::is_same_v<Core::Result,
-                             TransferResult>,
+                             Outcome>,
               "features off: the old result type");
 static_assert(std::is_same_v<Core::RequestT,
                              Kvasir::SPI::Request<FakeHw::Setup,
@@ -707,7 +724,7 @@ void cancelQueued() {
     FakeHw::finish();
     check(!Device<2>::low(), "B never selected");
     checkEq(TCore::transfers(), 1U, "only A on the wire");
-    check(tresults.size() == 2 && tresults[1].second == Tracked::succeeded, "A succeeded");
+    check(tresults.size() == 2 && tresults[1].second == Tracked::ok, "A succeeded");
     for(int i = 0; i != 4; ++i) {
         check(TCore::submitTracked(twrite(Device<1>::lines, 10 + i)).valid(), "slots");
     }
@@ -731,7 +748,7 @@ void cancelActive() {
     checkEq(TCore::staleCompletions(), 1U, "the old completion counted stale");
     checkEq(TCore::consecutiveFailures(), failures, "a cancel is not a bus failure");
     FakeHw::finish();
-    check(tresults.size() == 2 && tresults[1].second == Tracked::succeeded, "B succeeded");
+    check(tresults.size() == 2 && tresults[1].second == Tracked::ok, "B succeeded");
 }
 
 void notAbortable() {
@@ -743,7 +760,7 @@ void notAbortable() {
     check(TCore::cancel(a) == Cancel::tooLate, "too late");
     checkEq(FakeHw::aborts, 0, "not aborted");
     FakeHw::finish();
-    check(tresults.size() == 1 && tresults[0].second == Tracked::succeeded, "completed");
+    check(tresults.size() == 1 && tresults[0].second == Tracked::ok, "completed");
 }
 
 void cancelContinuation() {
@@ -771,7 +788,7 @@ void deadlines() {
     late.deadline = FakeClock::now() + 500us;
     TCore::submitTracked(late);
     FakeClock::advance(600us);
-    TCore::handler();
+    TCore::turn();
     check(tresults.size() == 1 && tresults[0].first == 2 && tresults[0].second == Tracked::timedOut,
           "B timed out in the queue");
     FakeHw::finish();
@@ -780,7 +797,7 @@ void deadlines() {
     slow.deadline = FakeClock::now() + 10us;
     TCore::submitTracked(slow);
     FakeClock::advance(20us);
-    TCore::handler();
+    TCore::turn();
     checkEq(FakeHw::aborts, 1, "the active one past its deadline is aborted");
     check(tresults.back().first == 3 && tresults.back().second == Tracked::timedOut, "timedOut");
     check(!Device<1>::low(), "CS up");
@@ -791,6 +808,117 @@ void deadlines() {
             && !Device<2>::low(),
           "out of time before it started: timedOut, never selected");
 }
+
+// The chips' public face (SPI/QueuedFront.hpp): one line each into the core, no state of its own.
+
+using Front  = Kvasir::SPI::QueuedFront<Core>;
+using TFront = Kvasir::SPI::QueuedFront<TCore>;
+
+static_assert(std::is_same_v<Front::Request,
+                             Core::RequestT>
+              && std::is_same_v<Front::Result,
+                                Core::Result>);
+static_assert(std::is_same_v<TFront::Result,
+                             Tracked>);
+static_assert(std::is_same_v<Front::Extends,
+                             Kvasir::Startup::Extend<Kvasir::Hook::MainLoop,
+                                                     &Front::turn>>,
+              "the main-loop hook names the front's own turn()");
+static_assert(std::is_empty_v<Front>,
+              "the front holds nothing");
+// tickets and cancel only where the core has them
+template<typename F>
+concept HasTickets = requires(typename F::Request const& r, Kvasir::Bus::Ticket t) {
+    { F::submitTracked(r) } -> std::same_as<Kvasir::Bus::Ticket>;
+    { F::cancel(t) } -> std::same_as<Cancel>;
+};
+static_assert(!HasTickets<Front>);
+static_assert(HasTickets<TFront>);
+// the counters, the snapshot and the latency on the master itself (Bus/QueuedFront.hpp + the SPI-only ones), and
+// a switched-off part has no accessor there either
+template<typename F>
+concept HasSpiCounters = requires {
+    F::overruns();
+    F::holdTimeouts();
+    F::staleCompletions();
+    F::refused();
+    F::resuscitations();
+    F::transfers();
+    F::drainedRequests();
+};
+static_assert(HasCounters<Front> && HasSpiCounters<Front> && HasLatency<Front>
+              && HasSnapshot<Front>);
+static_assert(!HasCounters<Kvasir::SPI::QueuedFront<Bare>>
+              && !HasSpiCounters<Kvasir::SPI::QueuedFront<Bare>>
+              && !HasLatency<Kvasir::SPI::QueuedFront<Bare>>
+              && !HasSnapshot<Kvasir::SPI::QueuedFront<Bare>>);
+
+void frontReachesTheCore() {
+    testCase(
+      "the front: submit, releaseHold, turn, reset, submitTracked and cancel are the core's");
+    fresh();
+    auto held = write(Device<1>::lines, 1, 1);
+    held.hold = true;
+    check(Front::submit(held), "submit accepted");
+    check(Device<1>::low() && Core::busy(), "the core runs it");
+    FakeHw::finish();
+    Front::releaseHold(Device<1>::lines);
+    check(!Device<1>::low(), "releaseHold() ended the core's hold");
+    auto const timeoutsBefore = Front::timeouts();
+    Front::submit(write(Device<2>::lines, 2, 8));
+    FakeClock::advance(1s);
+    Front::turn();
+    checkEq(FakeHw::aborts, 1, "turn() ran the core's timeout");
+    checkEq(Front::timeouts(), timeoutsBefore + 1U, "counted by the core, read on the front");
+    checkEq(Front::consecutiveFailures(), Core::consecutiveFailures(), "the streak is the core's");
+    Front::submit(write(Device<1>::lines, 3));
+    Front::reset();
+    check(!Core::busy() && !Device<1>::low(), "reset() drained the core");
+
+    tfresh();
+    TFront::submitTracked(twrite(Device<1>::lines, 1, 8));
+    auto const queued = TFront::submitTracked(twrite(Device<2>::lines, 2));
+    check(queued.valid(), "a ticket from the core");
+    check(TFront::cancel(queued) == Cancel::removed, "cancel(ticket) is the core's");
+    check(tresults.size() == 1 && tresults[0].first == 2
+            && tresults[0].second == Tracked::cancelled,
+          "the queued one cancelled");
+    FakeHw::finish();
+}
+
+// the chips' setup(): the mode's bits and a device's clock ceiling on the bus
+static_assert(Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode0).cpol == 0
+              && Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode0).cpha == 0);
+static_assert(Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode1).cpol == 0
+              && Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode1).cpha == 1);
+static_assert(Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode2).cpol == 1
+              && Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode2).cpha == 0);
+static_assert(Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode3).cpol == 1
+              && Kvasir::SPI::modeBits(Kvasir::Hal::ClockMode::mode3).cpha == 1);
+// the device's ceiling below the bus's, the bus's below the device's
+static_assert(Kvasir::SPI::ceilingHz(400'000,
+                                     8'000'000,
+                                     48'000'000,
+                                     512,
+                                     2)
+              == 400'000);
+static_assert(Kvasir::SPI::ceilingHz(20'000'000,
+                                     8'000'000,
+                                     48'000'000,
+                                     512,
+                                     2)
+              == 8'000'000);
+// exactly the slowest clock the block makes (48 MHz / 512) is still in reach
+static_assert(Kvasir::SPI::ceilingHz(93'750,
+                                     8'000'000,
+                                     48'000'000,
+                                     512,
+                                     2)
+              == 93'750);
+#ifdef QUEUE_CORE_FRONT_BELOW_REACH
+// one hertz under it is refused at compile time
+constexpr auto belowReach = Kvasir::SPI::ceilingHz(93'749, 8'000'000, 48'000'000, 512, 2);
+#endif
 }   // namespace
 
 int main() {
@@ -819,5 +947,6 @@ int main() {
     notAbortable();
     cancelContinuation();
     deadlines();
+    frontReachesTheCore();
     return finish();
 }

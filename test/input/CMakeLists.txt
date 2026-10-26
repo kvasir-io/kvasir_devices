@@ -1,10 +1,6 @@
-# Input devices without a bus: the quadrature decoder of the rotary encoders.
-#
-# cmake -S test/input -B build/input && cmake --build build/input --parallel && ctest --test-dir build/input
-cmake_minimum_required(VERSION 3.28)
-
-project(kvasir_devices_input_test LANGUAGES CXX)
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/KvasirDevicesTest.cmake)
+# Input devices without a bus: the quadrature decoder of the rotary encoders, the edge-counting RotaryEncoder,
+# PushButton in both modes.
 
 kvasir_devices_test(input_quadrature_test SOURCE quadrature_test.cpp)
+kvasir_devices_test(input_rotary_encoder_test SOURCE rotary_encoder_test.cpp)
+kvasir_devices_test(input_push_button_test SOURCE push_button_test.cpp)

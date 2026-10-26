@@ -1,0 +1,15 @@
+name: Rebuild chip images
+
+# The chip images (kvasirio/<chip>) clone kvasir_devices master at build time (Kvasir_SDK scripts/Dockerfile.chip),
+# and firmware CI builds against them. A push here rebuilds them: the chip list and the dispatch are
+# Kvasir_SDK/.github/workflows/dispatch-chip-images.yml, which the SDK's containers.yml calls too.
+on:
+    push:
+        branches: [master]
+    workflow_dispatch:
+
+jobs:
+    rebuild-chip-images:
+        uses: kvasir-io/Kvasir_SDK/.github/workflows/dispatch-chip-images.yml@master
+        secrets:
+            CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}

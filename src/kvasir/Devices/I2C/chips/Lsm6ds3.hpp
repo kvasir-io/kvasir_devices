@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -32,13 +33,13 @@ namespace Lsm6ds3Detail {
 
     /// The chip State: what the bring-up read, and the full scales the two CTRL registers
     /// hold now, which decode() scales by and a Config write changes (applied()).
-    struct State : Groups::DeviceId {
+    struct State : Engine::Groups::DeviceId {
         std::uint8_t accelFs{};   ///< CTRL1_XL FS_XL, 0..3 in ST's order
         std::uint8_t gyroFs{};    ///< CTRL2_G FS_G
     };
 }   // namespace Lsm6ds3Detail
 
-/// ST LSM6DS3 / LSM6DS3TR-C (DocID026899 / DocID029330). One-byte sub-address, auto-increment
+/// ST LSM6DS3 / LSM6DS3TR-C (DocID026899 / DocID030071). One-byte sub-address, auto-increment
 /// on by default (CTRL3_C.IF_INC). Bring-up: WHO_AM_I 0x0F = 0x69 (0x6A on the TR-C); CTRL3_C
 /// 0x12 = 0x44 (BDU so a burst never straddles an update, IF_INC kept); CTRL1_XL 0x10 = 0x40
 /// (104 Hz, 2 g: 0.061 mg/LSB); CTRL2_G 0x11 = 0x40 (104 Hz, 245 dps: 8.75 mdps/LSB), then
@@ -47,7 +48,7 @@ namespace Lsm6ds3Detail {
 ///
 /// The temperature scale differs between the two parts and is picked by WHO_AM_I: 16 LSB/degC
 /// on the LSM6DS3 (0x69), 256 LSB/degC on the LSM6DS3TR-C (0x6A) and the LSM6DSO (0x6C), 0 at
-/// 25 degC on all of them.
+/// 25 degC on all of them (TSen: LSM6DS3.md l.958, l.967; LSM6DS3TR-C.md Table 5, l.1103, l.1114).
 ///
 /// The template ranges are the Initial of the AccelConfig / GyroConfig write groups, so the
 /// application can change a full scale at run time and decode() follows from the write's
@@ -56,10 +57,10 @@ template<Lsm6ds3Detail::AccelRange Accel = Lsm6ds3Detail::AccelRange::g2,
          Lsm6ds3Detail::GyroRange  Gyro  = Lsm6ds3Detail::GyroRange::dps250>
 struct Lsm6ds3x {
     static constexpr std::string_view Name = "LSM6DS3";
-    /// ST LSM6DS3. LSM6DS3.md:2157: WHO_AM_I (0Fh) "fixed at 69h"; 6Ah is the LSM6DS3TR-C, whose data
-    /// sheet is not in the folder (Linux st_lsm6dsx_core.c: `.wai = 0x6a`).
+    /// ST LSM6DS3. LSM6DS3.md:2157: WHO_AM_I (0Fh) "fixed at 69h"; 6Ah is the LSM6DS3TR-C:
+    /// "Its value is fixed at 6Ah" (DocID030071 9.12, Table 49, LSM6DS3TR-C.md l.2469).
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x69, 0x6A},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x69, 0x6A},
     };
     static constexpr Address7                Address = 0x6A;
     static constexpr std::array<Address7, 2> Addresses{0x6A, 0x6B};
@@ -84,13 +85,14 @@ struct Lsm6ds3x {
     /// same): a warm part keeps what earlier firmware set -- the FIFO, interrupts, filters --
     /// through a bring-up otherwise.
     static constexpr std::array Init{
-      Step::write({.reg = 0x12, .payload = {0x01}, .delay = std::chrono::milliseconds{50}}),
-      Step::write({.reg = 0x12, .payload = {0x80}, .delay = std::chrono::milliseconds{50}}),
-      Step::write({.reg = 0x12, .payload = {Ctrl3C}}),    // BDU, IF_INC
-      Step::write({.reg = 0x10, .payload = {Ctrl1Xl}}),   // 104 Hz and the accelerometer's range
-      Step::write({.reg     = 0x11,
-                   .payload = {Ctrl2G},
-                   .delay   = GyroSettle}),   // 104 Hz and the gyro's, then its turn-on
+      Engine::Step::write({.reg = 0x12, .payload = {0x01}, .delay = std::chrono::milliseconds{50}}),
+      Engine::Step::write({.reg = 0x12, .payload = {0x80}, .delay = std::chrono::milliseconds{50}}),
+      Engine::Step::write({.reg = 0x12, .payload = {Ctrl3C}}),   // BDU, IF_INC
+      Engine::Step::write(
+        {.reg = 0x10, .payload = {Ctrl1Xl}}),   // 104 Hz and the accelerometer's range
+      Engine::Step::write({.reg     = 0x11,
+                           .payload = {Ctrl2G},
+                           .delay   = GyroSettle}),   // 104 Hz and the gyro's, then its turn-on
     };
 
     using State = Lsm6ds3Detail::State;
@@ -116,8 +118,16 @@ struct Lsm6ds3x {
     }
 
     struct Motion {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{Step::read({.reg = 0x20, .count = 14})};
+        static constexpr auto Period = std::chrono::milliseconds{20};
+        /// STATUS_REG (0x1E) first, then OUT_TEMP_L .. OUTZ_H_XL: a frame is a sample only with XLDA (bit 0) or GDA
+        /// (bit 1), "a new set of data is available" (LSM6DS3 datasheet 9.26, Table 81/82).
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x1E, .count = 1, .offset = 14}),   // STATUS_REG
+          Engine::Step::read({.reg = 0x20, .count = 14, .offset = 0}),   // OUT_TEMP_L .. OUTZ_H_XL
+        };
+
+        static constexpr std::uint8_t Xlda = 0x01U;
+        static constexpr std::uint8_t Gda  = 0x02U;
 
         struct Sample {
             std::array<MicroG, 3>         accel{};
@@ -126,9 +136,11 @@ struct Lsm6ds3x {
         };
 
         /// At the full scales the part holds now (a Config write changes them), and the
-        /// temperature scale of the part WHO_AM_I found.
-        [[nodiscard]] static constexpr Sample decode(Bytes        data,
-                                                     State const& state) {
+        /// temperature scale of the part WHO_AM_I found. A frame with neither XLDA nor GDA - a poll before the
+        /// first conversion, whose outputs read 0, or one between two samples - is Outcome::unchanged().
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(14) & (Xlda | Gda)) == 0) { return Engine::Outcome<Sample>::unchanged(); }
             Sample     sample{};
             auto const perCount = Units::value(Lsm6ds3Detail::AccelPerCount[state.accelFs & 0x03U]);
             auto const perRate  = Units::value(Lsm6ds3Detail::RatePerCount[state.gyroFs & 0x03U]);
@@ -141,7 +153,7 @@ struct Lsm6ds3x {
                 sample.accel[i]
                   = Units::microG(static_cast<std::int64_t>(data.s16le(8 + 2 * i)) * perCount);
             }
-            return sample;
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -152,10 +164,10 @@ struct Lsm6ds3x {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl1Xl;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x10, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x10, .offset = 0, .count = 1});
         }
 
         /// FS_XL is bits 3:2.
@@ -171,10 +183,10 @@ struct Lsm6ds3x {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl2G;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -183,8 +195,8 @@ struct Lsm6ds3x {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<AccelConfig, GyroConfig>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<AccelConfig, GyroConfig>;
 };
 
 /// ST LSM6DSO (DS12140), the LSM6DS3's successor. For what this description touches it is the
@@ -197,7 +209,7 @@ struct Lsm6dsoX : Lsm6ds3x<Accel, Gyro> {
     static constexpr std::string_view Name = "LSM6DSO";
     /// ST LSM6DSO. lsm6dso.md:2768: WHO_AM_I (0Fh) "fixed at 6Ch".
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x6C},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x6C},
     };
 };
 

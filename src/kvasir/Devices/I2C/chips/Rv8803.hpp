@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -227,13 +228,14 @@ struct Rv8803 {
       = static_cast<std::uint8_t>(UF | TF | AF | V2F | V1F);
 
     static constexpr std::array Init{
-      Step::read({.reg = 0x1E, .count = 2, .offset = 0}),   // flags, control: what the part held
-      Step::read({.reg = 0x2C, .count = 1, .offset = 2}),   // offset
-      Step::identify(),
-      Step::write(
+      Engine::Step::read(
+        {.reg = 0x1E, .count = 2, .offset = 0}),   // flags, control: what the part held
+      Engine::Step::read({.reg = 0x2C, .count = 1, .offset = 2}),   // offset
+      Engine::Step::identify(),
+      Engine::Step::write(
         {.reg     = 0x1E,
          .payload = {ClearEventFlags}}),   // UF TF AF EVF cleared, V1F V2F left as they are
-      Step::write(
+      Engine::Step::write(
         {.reg = 0x1F, .payload = {Control}}),   // RESET released, interrupts as configured
     };
 
@@ -263,24 +265,25 @@ struct Rv8803 {
     struct Clock {
         static constexpr auto Period = std::chrono::milliseconds{1000};
 
-        static constexpr std::array Steps{Step::read({.reg = 0x10, .count = 15, .offset = 0}),
-                                          Step::read({.reg = 0x11, .count = 1, .offset = 15})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x10, .count = 15, .offset = 0}),
+          Engine::Step::read({.reg = 0x11, .count = 1, .offset = 15})};
 
         using Sample = Time;
 
         /// Rejected: a digit that is not BCD, a field out of range, a date that does not exist,
         /// a weekday that is not one-hot. Retried: the seconds changed between the burst and
         /// the re-read (4.12.2).
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             using Rv8803Detail::bcdOk;
             if(data.u8(15) != data.u8(1)) {
-                return Outcome<Sample>::retry(std::chrono::milliseconds{1});
+                return Engine::Outcome<Sample>::retry(std::chrono::milliseconds{1});
             }
             if(!bcdOk(data.u8(0), 0xFF) || !bcdOk(data.u8(1), 0x7F) || !bcdOk(data.u8(2), 0x7F)
                || !bcdOk(data.u8(3), 0x3F) || !bcdOk(data.u8(5), 0x3F) || !bcdOk(data.u8(6), 0x1F)
                || !bcdOk(data.u8(7), 0xFF))
             {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             auto const                        weekday = Rv8803Detail::weekdayBit(data.u8(4));
             auto const                        cc      = data.bcd(0, 0xFF);
@@ -292,7 +295,7 @@ struct Rv8803 {
               std::chrono::month{data.bcd(6, 0x1F)},
               std::chrono::day{data.bcd(5, 0x3F)}};
             if(weekday > 6 || ss > 59 || mm > 59 || hh > 23 || !date.ok()) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             Sample t{};
             t.date           = date;
@@ -301,7 +304,7 @@ struct Rv8803 {
             auto const flags = data.u8(14);
             t.valid          = (flags & V2F) == 0;
             t.compensated    = (flags & V1F) == 0;
-            return Outcome<Sample>::ok(t);
+            return Engine::Outcome<Sample>::ok(t);
         }
     };
 
@@ -314,7 +317,7 @@ struct Rv8803 {
         static constexpr std::size_t Bytes     = 7;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   4>
         encode(Value const&         t,
                std::span<std::byte> buffer) {
@@ -332,12 +335,13 @@ struct Rv8803 {
             put(5, static_cast<unsigned>(t.date.month()));
             put(6, static_cast<unsigned>(digit));
             return {
-              Step::write({.reg = 0x1F, .payload = {static_cast<std::uint8_t>(Control | Reset)}}),
-              Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 7}),
-              Step::write(
+              Engine::Step::write(
+                {.reg = 0x1F, .payload = {static_cast<std::uint8_t>(Control | Reset)}}),
+              Engine::Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 7}),
+              Engine::Step::write(
                 {.reg     = 0x1E,
                  .payload = {ClearVoltageFlags}}),   // V2F and V1F: the time is valid again
-              Step::write(
+              Engine::Step::write(
                 {.reg = 0x1F, .payload = {Control}}),   // RESET released: the second starts now
             };
         }
@@ -363,10 +367,10 @@ struct Rv8803 {
             return v < -32 ? std::int8_t{-32} : (v > 31 ? std::int8_t{31} : v);
         }
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(static_cast<std::uint8_t>(clamp(value)) & 0x3FU);
-            return Step::writeBuffer({.reg = 0x2C, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x2C, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -382,10 +386,10 @@ struct Rv8803 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Fd;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(static_cast<unsigned>(value) << 2U);
-            return Step::writeBuffer({.reg = 0x1D, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x1D, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -400,13 +404,13 @@ struct Rv8803 {
         using Value                        = EventCapture;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0]
               = static_cast<std::byte>((value.capture == Rv8803Detail::Capture::on ? 0x80U : 0x00U)
                                        | (static_cast<unsigned>(value.level) << 6U)
                                        | (static_cast<unsigned>(value.filter) << 4U));
-            return Step::writeBuffer({.reg = 0x2F, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x2F, .offset = 0, .count = 1});
         }
     };
 
@@ -422,33 +426,33 @@ struct Rv8803 {
     /// request with EVF clear is unchanged.
     struct Event {
         static constexpr std::array Steps{
-          Step::read({.reg = 0x1E, .count = 1, .offset = 0}),
-          Step::write({.reg = 0x1E, .payload = {ClearEvfOnly}}),
-          Step::read({.reg = 0x20, .count = 2, .offset = 1}),
+          Engine::Step::read({.reg = 0x1E, .count = 1, .offset = 0}),
+          Engine::Step::write({.reg = 0x1E, .payload = {ClearEvfOnly}}),
+          Engine::Step::read({.reg = 0x20, .count = 2, .offset = 1}),
         };
 
         using Sample = Rv8803Detail::EventStamp;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes         data,
-                                                              Sample const& previous) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes         data,
+                                                                      Sample const& previous) {
             using Rv8803Detail::bcdOk;
             if(!bcdOk(data.u8(1), 0xFF) || !bcdOk(data.u8(2), 0x7F)) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             auto const cc = data.bcd(1, 0xFF);
             auto const ss = data.bcd(2, 0x7F);
-            if(ss > 59) { return Outcome<Sample>::reject(); }
+            if(ss > 59) { return Engine::Outcome<Sample>::reject(); }
             Sample const now{Centiseconds{ss * 100 + cc}};
             bool const   flagged = (data.u8(0) & EVF) != 0;
             bool const   moved
               = previous.stamp >= Centiseconds::zero() && now.stamp != previous.stamp;
-            if(flagged || moved) { return Outcome<Sample>::ok(now); }
-            return Outcome<Sample>::unchanged();
+            if(flagged || moved) { return Engine::Outcome<Sample>::ok(now); }
+            return Engine::Outcome<Sample>::unchanged();
         }
     };
 
-    using Reads   = List<Clock, Event>;
-    using Writes  = List<SetTime, Offset, ClockOut, EventControl>;
+    using Reads   = Engine::List<Clock, Event>;
+    using Writes  = Engine::List<SetTime, Offset, ClockOut, EventControl>;
     using Primary = Clock;
 };
 

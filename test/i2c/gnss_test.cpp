@@ -1,5 +1,5 @@
 /// The u-blox M8 on its DDC port (chips/SamM8q.hpp) against a model of the receiver's three
-/// registers and its stream, and the UBX framer (I2C/Ubx.hpp) over what the Stream group reads.
+/// registers and its stream, and the UBX framer (Gnss/Ubx.hpp) over what the Stream group reads.
 #include "Harness.hpp"
 
 #include <array>
@@ -9,8 +9,8 @@
 #include <cstdio>
 #include <deque>
 #include <functional>
+#include <kvasir/Devices/Gnss/Ubx.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/Ubx.hpp>
 #include <kvasir/Devices/I2C/chips/SamM8q.hpp>
 #include <span>
 #include <vector>
@@ -21,7 +21,8 @@ using namespace Kvasir::I2C;
 
 namespace {
 
-namespace M8 = Chips::UbloxM8Detail;
+namespace M8   = Kvasir::Gnss::Ublox;
+namespace Gnss = Kvasir::Gnss;
 
 /// The receiver's DDC port (protocol spec 11.5): a write of one byte sets the register pointer,
 /// a longer one is a message; a read walks 0xFD (the waiting count, high byte), 0xFE (low byte)
@@ -29,8 +30,8 @@ namespace M8 = Chips::UbloxM8Detail;
 struct M8Model {
     std::uint8_t                           address{0x42};
     std::uint8_t                           pointer{0xFF};
-    std::deque<std::uint8_t>               stream{};
-    std::vector<std::vector<std::uint8_t>> messages{};
+    std::deque<std::uint8_t>               stream;
+    std::vector<std::vector<std::uint8_t>> messages;
 
     void queue(std::span<std::uint8_t const> bytes) {
         for(auto const b : bytes) { stream.push_back(b); }
@@ -39,14 +40,14 @@ struct M8Model {
     FakeBusResult operator()(std::uint8_t               addr,
                              std::span<std::byte const> sent,
                              std::span<std::byte>       recv) {
-        if(addr != address) { return FakeBusResult::notAcknowledged; }
+        if(addr != address) { return FakeBusResult::nack; }
         if(sent.size() == 1) {
             pointer = static_cast<std::uint8_t>(sent[0]);
         } else if(sent.size() >= 2) {
             std::vector<std::uint8_t> m;
             for(auto const b : sent) { m.push_back(static_cast<std::uint8_t>(b)); }
             messages.push_back(m);
-            return FakeBusResult::succeeded;
+            return FakeBusResult::ok;
         }
         auto const count = static_cast<std::uint16_t>(stream.size());
         for(auto& b : recv) {
@@ -63,7 +64,7 @@ struct M8Model {
                 b = std::byte{0xFF};
             }
         }
-        return FakeBusResult::succeeded;
+        return FakeBusResult::ok;
     }
 };
 
@@ -167,8 +168,8 @@ reads(std::size_t from = 0) {
 }
 
 void bringUp() {
-    testCase("SAM-M8Q: bring-up is CFG-PRT (DDC, UBX only), CFG-MSG (NAV-PVT), CFG-RATE");
-    fresh();
+    I2cCase const testcase{
+      "SAM-M8Q: bring-up is CFG-PRT (DDC, UBX only), CFG-MSG (NAV-PVT), CFG-RATE"};
     M8Model m{};
     FakeBus::respond = std::ref(m);
     Dev<Chips::SamM8q<>> d{};
@@ -179,7 +180,7 @@ void bringUp() {
       "the three frames, in order, with their checksums");
     check(writes() == m.messages, "and nothing else was written");
 
-    testCase("SAM-M8Q: nothing waiting is the count alone, no stream read, no sample");
+    testcase.step("SAM-M8Q: nothing waiting is the count alone, no stream read, no sample");
     runFor(d, 500ms);
     auto const r = reads();
     check(r.size() >= 8, "polled every 50 ms");
@@ -190,9 +191,10 @@ void bringUp() {
     check(!d.valid(), "and not valid");
     checkEq(d.errors(), 0U, "nothing failed");
 
-    testCase("SAM-M8Q: Command sends a prebuilt frame once, and not again after a reset");
+    testcase.step("SAM-M8Q: Command sends a prebuilt frame once, and not again after a reset");
     m.messages.clear();
-    check(d.set<Chips::SamM8q<>::Command>(Chips::SamM8q<>::Frame::of(ubxFrame(0x0A, 0x04))), "set");
+    check(d.set<Chips::SamM8q<>::Command>(Chips::SamM8q<>::Frame::of(Gnss::ubxFrame(0x0A, 0x04))),
+          "set");
     check(runUntil(d, [&] { return !d.pending(); }, 100ms), "sent");
     check(m.messages
             == std::vector<std::vector<std::uint8_t>>{{0xB5, 0x62, 0x0A, 0x04, 0x00, 0x00, 0x0E, 0x34}},
@@ -206,12 +208,11 @@ void bringUp() {
       m.messages
         == std::vector<std::vector<std::uint8_t>>{vec(PortFrame), vec(MsgFrame), vec(RateFrame)},
       "the configuration again, the command not");
-    if(failures != 0) { dump(); }
 }
 
 void stream() {
-    testCase("SAM-M8Q: a stream read is the two-byte count, then that many bytes of 0xFF");
-    fresh();
+    I2cCase const testcase{
+      "SAM-M8Q: a stream read is the two-byte count, then that many bytes of 0xFF"};
     M8Model m{};
     FakeBus::respond = std::ref(m);
     Dev<Chips::SamM8q<>> d{};
@@ -234,27 +235,26 @@ void stream() {
     for(auto const& [reg, len] : reads(at)) {
         check(reg == 0xFD, "only counts once it is drained");
     }
-    if(failures != 0) { dump(); }
 }
 
 void navPvt() {
-    testCase("SAM-M8Q: a NAV-PVT split across two reads, reassembled by the framer and decoded");
-    fresh();
+    I2cCase const testcase{
+      "SAM-M8Q: a NAV-PVT split across two reads, reassembled by the framer and decoded"};
     M8Model m{};
     FakeBus::respond = std::ref(m);
     Dev<Chips::SamM8q<64>> d{};
     check(runUntil(d, [&] { return d.answering() && !d.pending(); }, 500ms), "configured");
 
-    Chips::Ubx ubx{};
-    int        pvts   = 0;
-    int        chunks = 0;
-    M8::NavPvt last{};
-    auto const pump = [&](int turns) {
+    Kvasir::Gnss::Ubx<> ubx{};
+    int                 pvts   = 0;
+    int                 chunks = 0;
+    M8::NavPvt          last{};
+    auto const          pump = [&](int turns) {
         for(int i = 0; i < turns; ++i) {
             turn(d);
             if(d.fresh()) {
                 ++chunks;
-                ubx.feed(d.latest().data(), [&](UbxMessage const& msg) {
+                ubx.feed(d.latest().data(), [&](Gnss::UbxMessage const& msg) {
                     if(msg.is(M8::NavPvtClass, M8::NavPvtId)) {
                         ++pvts;
                         last = M8::decodeNavPvt(msg.payload);
@@ -265,7 +265,7 @@ void navPvt() {
     };
     std::vector<std::uint8_t> nmea{'$', 'G', 'N', 'G', 'G', 'A', '*', '0', '0', '\r', '\n'};
     m.queue(nmea);   // what the part sent before the port was configured
-    m.queue(ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload()));
+    m.queue(Gnss::ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload()));
     pump(300);
     checkEq(chunks, 2, "64 + 47 bytes: two chunks");
     checkEq(pvts, 1, "one NAV-PVT");
@@ -274,26 +274,26 @@ void navPvt() {
     check(last.fixType == M8::FixType::fix3d && last.numSv == 11, "a 3-D fix on eleven");
     check(equal(last.lat, -47376900) && equal(last.lon, 8541700), "at the position");
 
-    testCase("UBX: a bad checksum is counted, not handed on, and the next frame still is");
-    auto broken = ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload());
+    testcase.step("UBX: a bad checksum is counted, not handed on, and the next frame still is");
+    auto broken = Gnss::ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload());
     broken[30] ^= 0x01U;   // a payload byte
     m.queue(broken);
-    m.queue(ubxFrame(0x05, 0x01, std::array<std::uint8_t, 2>{0x06, 0x08}));   // ACK-ACK CFG-RATE
+    m.queue(
+      Gnss::ubxFrame(0x05, 0x01, std::array<std::uint8_t, 2>{0x06, 0x08}));   // ACK-ACK CFG-RATE
     pump(300);
     checkEq(ubx.badChecksum, 1U, "one bad checksum");
     checkEq(pvts, 1, "not handed on");
     checkEq(ubx.frames, 2U, "the ACK after it was");
 
-    testCase("UBX: a frame longer than MaxPayload is counted and dropped");
-    Kvasir::I2C::Ubx<16> small{};
-    auto const           frame = ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload());
+    testcase.step("UBX: a frame longer than MaxPayload is counted and dropped");
+    Gnss::Ubx<16> small{};
+    auto const    frame = Gnss::ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload());
     std::array<std::byte, frame.size()> bytes{};
     for(std::size_t i = 0; i < frame.size(); ++i) { bytes[i] = std::byte{frame[i]}; }
     int handed = 0;
-    small.feed(bytes, [&](UbxMessage const&) { ++handed; });
+    small.feed(bytes, [&](Gnss::UbxMessage const&) { ++handed; });
     checkEq(small.oversize, 1U, "oversize");
     checkEq(handed, 0, "nothing handed on");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

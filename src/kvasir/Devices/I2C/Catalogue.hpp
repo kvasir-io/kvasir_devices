@@ -15,7 +15,7 @@ namespace Kvasir::I2C {
 /// ADS1115 / TMP102 / LM75 / INA219", and the drivers then tell which it is. Two forms of
 /// the answer, both built by the compiler: `hint(a)` is the one preformatted line of up to
 /// `Width` characters (a crowded address -- 0x48 has a dozen candidates -- outgrows a short
-/// one and ends in "~"), and `names(a)` the names one by one, never cut.
+/// one and ends in "~"), and `namesAt(a)` the names one by one, never cut.
 ///
 /// `Catalogue<Chips...>` is this at a Width of 160; `SizedCatalogue<Width, Chips...>` for
 /// another.
@@ -67,10 +67,24 @@ struct SizedCatalogue {
     /// read in constant expressions (Packed below is what goes into the image): 120 entries of
     /// Width + 5 bytes, mostly zeros, were 20 KB of flash in every firmware with a bus scan before
     /// Packed.
+    /// Which of the chips answers at each address, folded once over chips x addresses: the tables
+    /// below read it instead of folding again.
+    static constexpr std::array<std::array<bool, sizeof...(Cs)>, AddressCount> Answers = [] {
+        std::array<std::array<bool, sizeof...(Cs)>, AddressCount> t{};
+        for(std::size_t a = 0; a < AddressCount; ++a) {
+            std::size_t c = 0;
+            ((t[a][c++] = answersAt<Cs>(static_cast<std::uint8_t>(a))), ...);
+            static_cast<void>(c);
+        }
+        return t;
+    }();
+
     static constexpr std::array<Entry, AddressCount> Table = [] {
         std::array<Entry, AddressCount> t{};
         for(std::size_t a = 0; a < t.size(); ++a) {
-            ((answersAt<Cs>(static_cast<std::uint8_t>(a)) ? t[a].append(Cs::Name) : void()), ...);
+            std::size_t c = 0;
+            ((Answers[a][c++] ? t[a].append(Cs::Name) : void()), ...);
+            static_cast<void>(c);
         }
         return t;
     }();
@@ -103,8 +117,8 @@ struct SizedCatalogue {
     /// How many (address, chip) pairs there are in all: the size of the name table.
     static constexpr std::size_t EntryCount = [] {
         std::size_t n = 0;
-        for(std::size_t a = 0; a < AddressCount; ++a) {
-            ((answersAt<Cs>(static_cast<std::uint8_t>(a)) ? void(++n) : void()), ...);
+        for(auto const& at : Answers) {
+            for(bool const answers : at) { n += answers ? 1U : 0U; }
         }
         return n;
     }();
@@ -114,8 +128,9 @@ struct SizedCatalogue {
         std::array<std::string_view, EntryCount == 0 ? 1 : EntryCount> names{};
         std::size_t                                                    n = 0;
         for(std::size_t a = 0; a < AddressCount; ++a) {
-            ((answersAt<Cs>(static_cast<std::uint8_t>(a)) ? void(names[n++] = Cs::Name) : void()),
-             ...);
+            std::size_t c = 0;
+            ((Answers[a][c++] ? void(names[n++] = Cs::Name) : void()), ...);
+            static_cast<void>(c);
         }
         return names;
     }();
@@ -125,7 +140,9 @@ struct SizedCatalogue {
         std::uint16_t                               n = 0;
         for(std::size_t a = 0; a < AddressCount; ++a) {
             o[a] = n;
-            ((answersAt<Cs>(static_cast<std::uint8_t>(a)) ? void(++n) : void()), ...);
+            for(bool const answers : Answers[a]) {
+                n = static_cast<std::uint16_t>(n + (answers ? 1U : 0U));
+            }
         }
         o[AddressCount] = n;
         return o;
@@ -142,7 +159,7 @@ struct SizedCatalogue {
 
     /// The same, one name at a time and never truncated; empty for an address nothing
     /// in this build answers at.
-    [[nodiscard]] static constexpr std::span<std::string_view const> names(std::uint8_t address) {
+    [[nodiscard]] static constexpr std::span<std::string_view const> namesAt(std::uint8_t address) {
         if(address >= AddressCount) { return {}; }
         return std::span<std::string_view const>{Names}.subspan(
           Offsets[address],

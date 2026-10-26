@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <cstddef>
@@ -21,14 +22,13 @@ struct Ht16k33 {
     static constexpr Address7         Address       = 0x70;
     static constexpr std::size_t      RegisterBytes = 0;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77};
+    static constexpr auto Addresses = addressRun<0x70, 8>();
 
     static constexpr std::array Init{
-      Step::command({.payload = {0x21}, .delay = std::chrono::milliseconds{1}}),
-      Step::command({.payload = {0xA0}}),
-      Step::command({.payload = {0x81}}),
-      Step::command({.payload = {0xEF}}),
+      Engine::Step::command({.payload = {0x21}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {0xA0}}),
+      Engine::Step::command({.payload = {0x81}}),
+      Engine::Step::command({.payload = {0xEF}}),
     };
 
     static constexpr std::size_t RowCount = 8;
@@ -41,14 +41,14 @@ struct Ht16k33 {
         /// The RAM address byte, then two bytes a row.
         static constexpr std::size_t Bytes = 1 + 2 * RowCount;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{0x00};
             for(std::size_t i = 0; i < RowCount; ++i) {
                 buffer[1 + 2 * i] = static_cast<std::byte>(value[i] & 0xFF);
                 buffer[2 + 2 * i] = static_cast<std::byte>(value[i] >> 8);
             }
-            return Step::commandBuffer({.offset = 0, .count = Bytes});
+            return Engine::Step::commandBuffer({.offset = 0, .count = Bytes});
         }
     };
 
@@ -57,10 +57,10 @@ struct Ht16k33 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = 15;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(0xE0U | (static_cast<unsigned>(value) & 0x0FU));
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
@@ -74,14 +74,14 @@ struct Ht16k33 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = BlinkRate::off;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(0x81U | (static_cast<unsigned>(value) << 1));
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
-    using Writes = List<Display, Brightness, Blink>;
+    using Writes = Engine::List<Display, Brightness, Blink>;
 
     /// Seven-segment glyphs (a = bit 0 .. g = bit 6, dp = bit 7) for 0..9, A..F, the
     /// Adafruit 4-digit backpack's layout: digits in rows 0, 1, 3, 4; row 2 bit 1 is the

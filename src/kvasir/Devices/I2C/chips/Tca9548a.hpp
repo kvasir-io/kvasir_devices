@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -20,8 +21,7 @@ struct Tca9548a {
     static constexpr Address7         Address       = 0x70;
     static constexpr std::size_t      RegisterBytes = 0;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77};
+    static constexpr auto Addresses = addressRun<0x70, 8>();
 
     /// The control byte. Read back every `VerifyInterval` (the part returns it on a bare
     /// read, 7.5.4) and written again when it differs: a switch that browned out comes up
@@ -34,22 +34,22 @@ struct Tca9548a {
         static constexpr auto        VerifyDelay    = std::chrono::milliseconds{1};
         static constexpr auto        VerifyInterval = std::chrono::milliseconds{500};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{value};
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
     struct Selected {
-        static constexpr std::array Steps{Step::receive({.count = 1, .offset = 0})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 1, .offset = 0})};
         using Sample = std::uint8_t;
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
     };
 
-    using Reads  = List<Selected>;
-    using Writes = List<Channels>;
+    using Reads  = Engine::List<Selected>;
+    using Writes = Engine::List<Channels>;
 };
 
 }   // namespace Kvasir::I2C::Chips

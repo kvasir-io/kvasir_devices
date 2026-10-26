@@ -6,11 +6,26 @@ endif()
 
 # Small device drivers on the Kvasir SDK, header-only: sensors, converters, memories, displays and touch controllers on
 # I2C, SPI and 1-Wire. Link-layer drivers (W5500, CYW43, LAN8650) are not part of this library.
-add_library(kvasir_devices INTERFACE)
-target_include_directories(kvasir_devices INTERFACE src)
+#
+# Two targets on the same src/ directory, split by usage requirements: - kvasir::bus: the headers the chip drivers build
+# on, the ones Kvasir_SDK tools/layers.toml puts in layer "bus" (queued I2C/SPI cores, line recovery, the USB backend
+# contract, push button, rotary encoder, quadrature decoder, Log.hpp, BusTypes.hpp): kvasir::sdk only, no mp-units.
+# test/headers checks that each of them compiles with nothing more (kvasir_bus_headers, its list read from that table).
+# - kvasir::devices: kvasir::bus + mp-units, everything else (the part drivers, the USB device stack, Quantities.hpp,
+# SPIQueued's Units::Hertz).
+add_library(kvasir_bus INTERFACE)
+target_include_directories(kvasir_bus INTERFACE src)
 # The headers use C++26 (deducing this, concepts, designated initialisers). Declared here so a consumer that forgets to
 # set the standard gets it rather than a wall of parse errors.
-target_compile_features(kvasir_devices INTERFACE cxx_std_26)
+target_compile_features(kvasir_bus INTERFACE cxx_std_26)
+# The one way a chip header or a firmware's shared header asks "does this image link kvasir_devices?": `#if
+# defined(KVASIR_DEVICES)` (chip_rp_common/usb.hpp's includers, a board header serving images with and without it). Not
+# the include path: a header that is merely findable is no statement of the link.
+target_compile_definitions(kvasir_bus INTERFACE KVASIR_DEVICES=1)
+add_library(kvasir::bus ALIAS kvasir_bus)
+
+add_library(kvasir_devices INTERFACE)
+target_link_libraries(kvasir_devices INTERFACE kvasir_bus)
 add_library(kvasir::devices ALIAS kvasir_devices)
 
 # The SDK's headers (RateLimiter, Atomic, Io, ...) and, on a target, uc_log: kvasir::sdk. A firmware has it from
@@ -32,7 +47,7 @@ if(NOT TARGET kvasir::sdk)
     endif()
     include(${_kvasir_root}/cmake/kvasir_sdk_targets.cmake)
 endif()
-target_link_libraries(kvasir_devices INTERFACE kvasir::sdk)
+target_link_libraries(kvasir_bus INTERFACE kvasir::sdk)
 
 # ---- physical quantities ------------------------------------------------------------------------------------------
 #
@@ -47,8 +62,8 @@ target_link_libraries(kvasir_devices INTERFACE kvasir::sdk)
 # It is declared here rather than in each firmware so the dependency propagates with the headers that need it.
 #
 # Freestanding, because the target has no operating system: MP_UNITS_API_FREESTANDING drops everything that needs the
-# hosted library, and a freestanding build requires the contract checks to be off. The headers are attached as SYSTEM
-# includes below, so -Weverything -pedantic-errors applies to our code and not to the library.
+# hosted library, and a freestanding build requires the contract checks to be off. The headers are SYSTEM includes (the
+# declaration's SYSTEM), so -Weverything -pedantic-errors applies to our code and not to the library.
 include(FetchContent)
 set(MP_UNITS_API_FREESTANDING
     ON
@@ -70,20 +85,18 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/mpusz/mp-units.git
     GIT_TAG v2.5.0
     GIT_SHALLOW ON
-    SOURCE_SUBDIR src
+    SYSTEM SOURCE_SUBDIR src
     PATCH_COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/cmake/mp-units.patch || git apply
                   ${CMAKE_CURRENT_LIST_DIR}/cmake/mp-units.patch
     UPDATE_DISCONNECTED ON)
 FetchContent_MakeAvailable(mp-units)
 
-# mp-units is not written against -Weverything and its warnings are not ours to fix.
-foreach(_t mp-units-core mp-units-systems)
-    if(TARGET ${_t})
-        get_target_property(_dirs ${_t} INTERFACE_INCLUDE_DIRECTORIES)
-        if(_dirs)
-            target_include_directories(${_t} SYSTEM INTERFACE ${_dirs})
-        endif()
-    endif()
-endforeach()
+# kvasir::log_units: mp-units with remote_fmt's quantity formatter switched on (REMOTE_FMT_USE_MP_UNITS, one value per
+# image: remote_fmt/config.hpp). Set by the target that brings the quantities, not found by __has_include in each TU; an
+# image without kvasir::devices has no quantity to log and gets the formatter off.
+add_library(kvasir_log_units INTERFACE)
+target_link_libraries(kvasir_log_units INTERFACE mp-units::mp-units)
+target_compile_definitions(kvasir_log_units INTERFACE REMOTE_FMT_USE_MP_UNITS=1)
+add_library(kvasir::log_units ALIAS kvasir_log_units)
 
-target_link_libraries(kvasir_devices INTERFACE mp-units::mp-units)
+target_link_libraries(kvasir_devices INTERFACE kvasir::log_units)

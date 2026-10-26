@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <kvasir/Devices/I2C/Adapters/MonoPanel.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/MonoPanel.hpp>
 #include <kvasir/Devices/I2C/chips/All.hpp>
 #include <map>
 #include <memory>
@@ -24,21 +24,21 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
 void ht16k33() {
-    testCase("HT16K33");
-    fresh();
+    I2cCase const                          testcase{"HT16K33"};
     std::vector<std::vector<std::uint8_t>> sent;
     ScopedHook const                       answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
-          if(addr != 0x70) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x70) { return FakeBus::Result::nack; }
           std::vector<std::uint8_t> v;
           for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
           sent.push_back(v);
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Ht16k33> d{};
     check(runUntil(
@@ -59,21 +59,19 @@ void ht16k33() {
     d.set<Chips::Ht16k33::Brightness>(3);
     check(runUntil(d, [&] { return !d.pending(); }, 200ms), "brightness written");
     check(sent.back() == std::vector<std::uint8_t>{0xE3}, "dimming command");
-    if(failures != 0) { dump(); }
 }
 
 void lcd1602() {
-    testCase("LCD1602 (HD44780 behind a PCF8574)");
-    fresh();
+    I2cCase                                testcase{"LCD1602 (HD44780 behind a PCF8574)"};
     std::vector<std::vector<std::uint8_t>> sent;
     ScopedHook const                       answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
-          if(addr != 0x27) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x27) { return FakeBus::Result::nack; }
           std::vector<std::uint8_t> v;
           for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
           sent.push_back(v);
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Lcd1602> d{};
     check(runUntil(d, [&] { return d.answering() && !d.pending(); }, 1s), "bring-up completes");
@@ -92,19 +90,17 @@ void lcd1602() {
     // 'H' = 0x48 with RS: 0x4D 0x49 0x8D 0x89
     check(l[4] == 0x4D && l[5] == 0x49 && l[6] == 0x8D && l[7] == 0x89, "'H' as data nibbles");
     check(l[12] == 0x2D && l[14] == 0x0D, "padding spaces");
-    if(failures != 0) { dump(); }
 
-    testCase("LCD2004: twenty columns, rows 2 and 3 at DDRAM 0x14 and 0x54");
-    fresh();
+    testcase.next("LCD2004: twenty columns, rows 2 and 3 at DDRAM 0x14 and 0x54");
     sent.clear();
     ScopedHook const answeringAgain{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte>) {
-          if(addr != 0x27) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x27) { return FakeBus::Result::nack; }
           std::vector<std::uint8_t> v;
           for(auto const b : s) { v.push_back(static_cast<std::uint8_t>(b)); }
           sent.push_back(v);
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Lcd2004> w{};
     check(runUntil(w, [&] { return w.answering() && !w.pending(); }, 1s), "bring-up completes");
@@ -117,7 +113,6 @@ void lcd1602() {
     // '2' = 0x32 with RS: 0x3D 0x39 0x2D 0x29
     check(r[4] == 0x3D && r[5] == 0x39 && r[6] == 0x2D && r[7] == 0x29, "'2' as data nibbles");
     check(r[80] == 0x2D && r[82] == 0x0D, "padded to the last column");
-    if(failures != 0) { dump(); }
 }
 
 // -- the SSD1306 family ---------------------------------------------------------------------
@@ -126,16 +121,16 @@ namespace Oled {
     struct Wide : Chips::Ssd1306Detail::PanelDefaults {
         static constexpr int      Width   = 128;
         static constexpr int      Height  = 32;
-        static constexpr Address7 Address = 0x3C;
+        static constexpr Address7 address = 0x3C;
     };
 
     /// The 0.66" module: 64 x 48 on RAM columns 32..95.
     struct Small : Chips::Ssd1306Detail::PanelDefaults {
         static constexpr int          Width        = 64;
         static constexpr int          Height       = 48;
-        static constexpr Address7     Address      = 0x3D;
-        static constexpr int          ColumnOffset = 32;
-        static constexpr std::uint8_t ComPins      = 0x12;
+        static constexpr Address7     address      = 0x3D;
+        static constexpr int          columnOffset = 32;
+        static constexpr std::uint8_t comPins      = 0x12;
     };
 }   // namespace Oled
 
@@ -148,7 +143,7 @@ concept PanelContract = requires(P& p, std::uint32_t pages) {
     { P::Height } -> std::convertible_to<int>;
     { p.ready() } -> std::same_as<bool>;
     { p.failed() } -> std::same_as<bool>;
-    { p.handler() };
+    { p.turn() };
     { p.pageRam() };
     { p.pagesChanged(pages) };
 };
@@ -162,14 +157,16 @@ void ssd1306() {
     using Wire = std::vector<std::vector<std::uint8_t>>;
     using W    = Chips::Ssd1315<Oled::Wide>;
 
-    testCase("SSD1315 128 x 32: bring-up is the command batch, a blank frame, then the panel on");
-    fresh();
-    std::uint8_t seen = 0;
-    FakeBus::respond  = [&](std::uint8_t addr, std::span<std::byte const>, std::span<std::byte>) {
-        if(addr != 0x3C) { return FakeBus::Result::notAcknowledged; }
-        ++seen;
-        return FakeBus::Result::succeeded;
-    };
+    I2cCase testcase{
+      "SSD1315 128 x 32: bring-up is the command batch, a blank frame, then the panel on"};
+    std::uint8_t     seen = 0;
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const>, std::span<std::byte>) {
+          if(addr != 0x3C) { return FakeBus::Result::nack; }
+          ++seen;
+          return FakeBus::Result::ok;
+      }};
     Dev<W> d{};
     check(runUntil(
             d,
@@ -201,7 +198,7 @@ void ssd1306() {
     check(all.back() == std::vector<std::uint8_t>{0x00, 0xAF},
           "DISPLAYON last, so the random RAM a cold controller holds is never shown");
 
-    testCase("SSD1315: only a page that changed goes on the wire");
+    testcase.step("SSD1315: only a page that changed goes on the wire");
     auto                    base = FakeBus::log.size();
     typename W::Page::Value row{};
     row.fill(0xF0);
@@ -212,19 +209,20 @@ void ssd1306() {
     check(one[0] == std::vector<std::uint8_t>{0x00, 0xB2, 0x00, 0x10}, "page 2");
     check(one[1].size() == 129 && one[1][1] == 0xF0, "and its bytes");
 
-    testCase("SSD1315: contrast and inversion");
+    testcase.step("SSD1315: contrast and inversion");
     base = FakeBus::log.size();
     d.set<W::Contrast>(0x40);
     d.set<W::Invert>(W::Invert::Value::inverted);
     check(runUntil(d, [&] { return !d.pending(); }, 200ms), "written");
     check(writes(base) == Wire{{0x00, 0x81, 0x40}, {0x00, 0xA7}}, "81h then A7h");
 
-    testCase("SSD1315 64 x 48 at 0x3D: the column offset addresses RAM column 32");
-    fresh();
-    using S          = Chips::Ssd1315<Oled::Small>;
-    FakeBus::respond = [&](std::uint8_t addr, std::span<std::byte const>, std::span<std::byte>) {
-        return addr == 0x3D ? FakeBus::Result::succeeded : FakeBus::Result::notAcknowledged;
-    };
+    testcase.next("SSD1315 64 x 48 at 0x3D: the column offset addresses RAM column 32");
+    using S = Chips::Ssd1315<Oled::Small>;
+    ScopedHook const answeringThird{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const>, std::span<std::byte>) {
+          return addr == 0x3D ? FakeBus::Result::ok : FakeBus::Result::nack;
+      }};
     Dev<S> sm{};
     check(runUntil(sm, [&] { return sm.answering() && !sm.pending(); }, 500ms), "up");
     checkEq(std::size_t{S::Pages}, std::size_t{6}, "six pages");
@@ -232,15 +230,18 @@ void ssd1306() {
     check(hasWrite({0x00, 0xB0, 0x00, 0x12}), "page 0 at column 32: low nibble 0, high 2");
     check(hasWrite({0x00, 0xB5, 0x00, 0x12}), "and page 5, the last");
 
-    testCase("SSD1315: MonoPanel draws into the frame in place");
-    fresh();
-    FakeBus::respond = [&](std::uint8_t addr, std::span<std::byte const>, std::span<std::byte>) {
-        return addr == 0x3C ? FakeBus::Result::succeeded : FakeBus::Result::notAcknowledged;
-    };
+    testcase.next("SSD1315: MonoPanel draws into the frame in place");
+    ScopedHook const answeringFourth{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const>, std::span<std::byte>) {
+          return addr == 0x3C ? FakeBus::Result::ok : FakeBus::Result::nack;
+      }};
     // The device is a local and the panel points at it: nothing here has static storage.
     PanelDev panelDev{};
     Panel    panel{panelDev};
     check(runUntil(panelDev, [&] { return panel.ready(); }, 500ms), "ready once brought up");
+    check(panel.link() == panelDev.link() && panel.link() == Kvasir::Link::answering,
+          "link(): the device's own");
     checkEq(std::size_t{Panel::Pages}, std::size_t{4}, "four pages");
     base                  = FakeBus::log.size();
     panel.pageRam()[1][7] = 0x5A;   // a canvas would do this, one pixel at a time
@@ -252,7 +253,7 @@ void ssd1306() {
     check(drawn[1].size() == 129 && drawn[1][8] == 0x5A,
           "the byte the caller wrote went out with no copy in between");
 
-    testCase("SSD1315: MonoPanel sends a page drawn into only when its bytes changed");
+    testcase.step("SSD1315: MonoPanel sends a page drawn into only when its bytes changed");
     // A frame that clears and redraws touches every page; what goes on the wire is only the
     // pages that now read differently from what was sent last.
     base                  = FakeBus::log.size();
@@ -274,18 +275,17 @@ void ssd1306() {
     checkEq(changed.size(), std::size_t{2}, "a byte that changed sends its page");
     check(changed.size() == 2 && changed[1][8] == 0xA5, "with the new byte");
 
-    testCase("SSD1315: a failure mid-page retries the page from its window command");
-    fresh();
+    testcase.next("SSD1315: a failure mid-page retries the page from its window command");
     int              nak = 1;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte>) {
-          if(addr != 0x3C) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x3C) { return FakeBus::Result::nack; }
           if(!sent.empty() && static_cast<std::uint8_t>(sent[0]) == 0x40 && nak > 0) {
               --nak;
-              return FakeBus::Result::notAcknowledged;
+              return FakeBus::Result::nack;
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<W> f{};
     check(runUntil(
@@ -301,14 +301,12 @@ void ssd1306() {
     checkEq(windows, std::size_t{2}, "page 0's window went out twice: the whole page again");
     checkEq(f.errors(), 1U, "one error");
     check(hasWrite({0x00, 0xAF}), "and the panel still came on");
-    if(failures != 0) { dump(); }
 }
 
-// -- the Waveshare RP2350-Touch-AMOLED-1.75's other three I2C parts ------------------------
+// -- an AMOLED board's other three I2C parts: QMI8658, AXP2101, PCF85063A ------------------
 
 void amoledBoard() {
-    testCase("QMI8658: bring-up, and twelve data bytes out of one read");
-    fresh();
+    I2cCase          testcase{"QMI8658: bring-up, and twelve data bytes out of one read"};
     RegisterModel<1> imu{0x6A};
     imu.set(0x00, {0x05});   // WHO_AM_I
     imu.set(0x2E, {0x03});   // STATUS0: accelerometer and gyroscope data available
@@ -338,14 +336,13 @@ void amoledBoard() {
           .deviceId   = 0x05,
           .accelRange = static_cast<std::uint8_t>(QD::AccelRange::g8),
           .gyroRange  = static_cast<std::uint8_t>(QD::GyroRange::dps1024)};
-        auto const got = Chips::Qmi8658<>::Motion::decode(Bytes{f}, st);
+        auto const got = Chips::Qmi8658<>::Motion::decode(Kvasir::Bytes{f}, st);
         return isOk(got) && equal(got.value.accel[0], -500'000) && equal(got.value.accel[1], 0)
             && equal(got.value.accel[2], 1'000'000) && equal(got.value.gyro[0], 0)
             && equal(got.value.gyro[1], 100'000) && equal(got.value.gyro[2], 0);
     }());
 
-    testCase("QMI8658: a different range rescales without touching the decode");
-    fresh();
+    testcase.next("QMI8658: a different range rescales without touching the decode");
     RegisterModel<1> imu2{0x6A};
     imu2.set(0x00, {0x05});
     imu2.set(0x2E, {0x03});
@@ -364,12 +361,11 @@ void amoledBoard() {
           .deviceId   = 0x05,
           .accelRange = static_cast<std::uint8_t>(QD::AccelRange::g2),
           .gyroRange  = static_cast<std::uint8_t>(QD::GyroRange::dps1024)};
-        auto const got = Chips::Qmi8658<QD::AccelRange::g2>::Motion::decode(Bytes{f}, st);
+        auto const got = Chips::Qmi8658<QD::AccelRange::g2>::Motion::decode(Kvasir::Bytes{f}, st);
         return isOk(got) && equal(got.value.accel[0], 1'000'000);
     }());
 
-    testCase("AXP2101: status bits, the ADC block, and the fuel gauge");
-    fresh();
+    testcase.next("AXP2101: status bits, the ADC block, and the fuel gauge");
     RegisterModel<1> pmu{0x34};
     pmu.set(0x03, {0x4A});   // IC type
     // STATUS1 bit 3 battery present, bit 5 VBUS good; STATUS2 bits 7..5 = 001 charging,
@@ -397,7 +393,7 @@ void amoledBoard() {
     static_assert([] {
         auto const f
           = frame(0x28, 0x23, 0x0F, 0x3C, 0x00, 0x00, 0x13, 0xBA, 0x10, 0x68, 0x1B, 0xA2);
-        auto const p = Chips::Axp2101::Power::decode(Bytes{f});
+        auto const p = Chips::Axp2101::Power::decode(Kvasir::Bytes{f});
         return equal(p.battery, 3900) && equal(p.vbus, 5050) && equal(p.system, 4200)
             && equal(p.dieTemperature, Units::centiDegC(3200))          // 32.00 degC
             && p.batteryPresent() && p.vbusPresent() && !p.inVindpm()   // not current-limited
@@ -409,12 +405,12 @@ void amoledBoard() {
     static_assert([] {
         auto const good = frame(77);
         auto const none = frame(0xFF);
-        auto const g    = Chips::Axp2101::Gauge::decode(Bytes{good});
+        auto const g    = Chips::Axp2101::Gauge::decode(Kvasir::Bytes{good});
         return isOk(g) && equal(g.value, 77)
-            && isReject(Chips::Axp2101::Gauge::decode(Bytes{none}));
+            && isReject(Chips::Axp2101::Gauge::decode(Kvasir::Bytes{none}));
     }());
 
-    testCase("AXP2101: the gauge rejects its own no-estimate reading");
+    testcase.step("AXP2101: the gauge rejects its own no-estimate reading");
     auto const rejectedBefore = a.rejected<Chips::Axp2101::Gauge>();
     auto const goodBefore     = a.samples<Chips::Axp2101::Gauge>();
     pmu.set(0xA4, {0xFF});
@@ -426,8 +422,7 @@ void amoledBoard() {
     checkEq(a.samples<Chips::Axp2101::Gauge>(), goodBefore, "and is not a sample");
     checkEq(a.latest<Chips::Axp2101::Gauge>(), 77, "the last good percentage stands");
 
-    testCase("PCF85063A: BCD time, the stop flag, and setting the clock");
-    fresh();
+    testcase.next("PCF85063A: BCD time, the stop flag, and setting the clock");
     RegisterModel<1> rtc{0x51};
     rtc.set(0x04, {0x45, 0x59, 0x23, 0x31, 0x02, 0x12, 0x24});
     FakeBus::respond = std::ref(rtc);
@@ -439,7 +434,7 @@ void amoledBoard() {
     // Tue 2024-12-31 23:59:45 in BCD, the oscillator running
     static_assert([] {
         auto const f = frame(0x45, 0x59, 0x23, 0x31, 0x02, 0x12, 0x24);
-        auto const t = Chips::Pcf85063a<>::Time::decode(Bytes{f});
+        auto const t = Chips::Pcf85063a<>::Time::decode(Kvasir::Bytes{f});
         return t.second == 45 && t.minute == 59 && t.hour == 23 && t.day == 31 && t.weekday == 2
             && t.month == 12 && t.year == 2024 && t.integrity;
     }());
@@ -456,7 +451,7 @@ void amoledBoard() {
     // seconds bit 7 set: the stop flag, and 0xC5 masked to 45
     static_assert([] {
         auto const f = frame(0xC5, 0x59, 0x23, 0x31, 0x02, 0x12, 0x24);
-        auto const t = Chips::Pcf85063a<>::Time::decode(Bytes{f});
+        auto const t = Chips::Pcf85063a<>::Time::decode(Kvasir::Bytes{f});
         return !t.integrity && t.second == 45;
     }());
 
@@ -477,7 +472,6 @@ void amoledBoard() {
         check(stop < time && time < start && start < FakeBus::log.size(),
               "STOP set, the time, STOP released");
     }
-    if(failures != 0) { dump(); }
 }
 
 // -- the ES8311 codec, the board's fourth I2C part -----------------------------------------
@@ -539,8 +533,7 @@ namespace Es8311Test {
 void es8311() {
     using namespace Es8311Test;
 
-    testCase("ES8311: identified, and brought up in the vendor's order");
-    fresh();
+    I2cCase          testcase{"ES8311: identified, and brought up in the vendor's order"};
     RegisterModel<1> codec{0x18};
     codec.set(0xFD, {0x83, 0x11});
     FakeBus::respond = std::ref(codec);
@@ -572,11 +565,11 @@ void es8311() {
     checkEq(codec.word(0x0D), 0x01U, "analogue reference and bias up, VMID charging");
     checkEq(codec.word(0x13), 0x10U, "HPSW: the headphone driver, not the line-out default");
 
-    testCase("ES8311: it comes up muted and quiet, not at the vendor's -3 dB");
+    testcase.step("ES8311: it comes up muted and quiet, not at the vendor's -3 dB");
     checkEq(codec.word(0x31), 0x60U, "DSM and DEM mutes both set");
     checkEq(codec.word(0x32), 0x83U, "-30 dB");
 
-    testCase("ES8311: volume, mute and fade are write groups");
+    testcase.step("ES8311: volume, mute and fade are write groups");
     c.set<Master::Volume>(ED::volumeForDb(-12.0));
     c.set<Master::Mute>(Master::Mute::Value::playing);
     c.set<Master::Fade>(4);
@@ -585,8 +578,7 @@ void es8311() {
     checkEq(codec.word(0x31), 0x00U, "unmuted");
     checkEq(codec.word(0x37), 0x48U, "fade 4, DAC equaliser still bypassed");
 
-    testCase("ES8311: slave mode differs by exactly one bit");
-    fresh();
+    testcase.next("ES8311: slave mode differs by exactly one bit");
     RegisterModel<1> slaveCodec{0x18};
     slaveCodec.set(0xFD, {0x83, 0x11});
     FakeBus::respond = std::ref(slaveCodec);
@@ -595,7 +587,7 @@ void es8311() {
     checkEq(slaveCodec.word(0x00), 0x80U, "CSM on, MSC clear: the host drives BCLK and LRCK");
     checkEq(slaveCodec.word(0x09), 0x0CU, "and the serial port is configured the same either way");
 
-    testCase("ES8311: the Status read-back, ten one-byte reads each at its own buffer offset");
+    testcase.step("ES8311: the Status read-back, ten one-byte reads each at its own buffer offset");
     {
         // A distinct byte in every register the group reads, fixed against writes, so a read
         // step that landed at another offset shows up as another register's value.
@@ -625,8 +617,7 @@ void es8311() {
         checkEq(st.reg37, std::uint8_t{0xA9}, "0x37 at offset 9");
     }
 
-    testCase("ES8311: a part that is not one is not adopted, and asked again a second later");
-    fresh();
+    testcase.next("ES8311: a part that is not one is not adopted, and asked again a second later");
     RegisterModel<1> wrong{0x18};
     wrong.set(0xFD, {0x83, 0x22});   // ES8388's second ID byte
     FakeBus::respond = std::ref(wrong);
@@ -636,8 +627,10 @@ void es8311() {
             [&] { return w.unidentified() == 1; },
             2s),
           "the bring-up read the id and turned it down");
-    check(!w.identified() && w.link() == Link::starting, "not an ES8311: starting, not answering");
-    checkEq(Log::warnings, 1, "said once");
+    check(!w.identified() && !w.identityMatched() && w.link() == Kvasir::Link::starting,
+          "not an ES8311 (its Identity, CHIP_ID2): starting, not answering");
+    // Once, in two lines: which Identity register read what, and that the part is not the chip.
+    checkEq(Log::warnings, 2, "said once");
     {
         // Nothing else goes to it: no read group, and none of the write groups' Initial.
         auto const reads  = wrong.reads;
@@ -651,7 +644,7 @@ void es8311() {
                 300ms),
               "the bring-up is tried again a second after the last");
         check(runUntil(w, [&] { return w.unidentified() == 2; }, 2s), "and turned down again");
-        checkEq(Log::warnings, 1, "without a second line");
+        checkEq(Log::warnings, 2, "without a second time");
     }
     // A part that gets its id right on a later bring-up -- it was still booting -- comes up.
     wrong.set(0xFD, {0x83, 0x11});
@@ -659,7 +652,6 @@ void es8311() {
     check(w.identified(), "identified");
     checkEq(wrong.word(0x00), 0xC0U, "and configured: CSM on, master");
     checkEq(w.unidentified(), 2U, "after two bring-ups that were turned down");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

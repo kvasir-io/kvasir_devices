@@ -18,13 +18,16 @@
 //   (QueueCore.hpp) that polls SDO as a GPIO with CS held low and reads 4 bytes when it is low.
 //   The LTC2401 must be ALONE on its bus (CS stays low between frames, so its SDO drives MISO).
 // - The constants below are what a firmware needs to do the same by hand.
-#include "../../Link.hpp"
+#include "../../Bytes.hpp"
 #include "../../Log.hpp"
 #include "../../Quantities.hpp"
+#include "../../SampleSlot.hpp"
+#include "../Client.hpp"
 #include "../QueueCore.hpp"
+#include "kvasir/Hal/Spi.hpp"
+#include "kvasir/Util/Link.hpp"
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -40,7 +43,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     /// SCK idles LOW and the result is latched on the rising edge, shifted out on the falling one
     /// (md:457, :590): mode 0. SCK must also be LOW at power-up and at every CS falling edge, or
     /// the part enters INTERNAL SCK mode and drives SCK itself (md:542, :640).
-    inline constexpr ClockMode Mode = ClockMode::_0;
+    inline constexpr Hal::ClockMode Mode = Hal::ClockMode::mode0;
     /// fESCK at most 2000 kHz (md:188), tLESCK / tHESCK at least 250 ns (md:189-190).
     inline constexpr Units::Hertz  MaxClock     = Units::hertz(2'000'000);
     inline constexpr std::uint32_t SckLowMinNs  = 250;
@@ -180,9 +183,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     /// The four bytes as they came off the wire, MSB first.
     [[nodiscard]] constexpr std::uint32_t wordOf(std::span<std::byte const,
                                                            FrameBytes> b) {
-        return (std::to_integer<std::uint32_t>(b[0]) << 24U)
-             | (std::to_integer<std::uint32_t>(b[1]) << 16U)
-             | (std::to_integer<std::uint32_t>(b[2]) << 8U) | std::to_integer<std::uint32_t>(b[3]);
+        return Bytes{b}.be32(0);
     }
 
     // A driver on a queued SPI master
@@ -192,21 +193,21 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     struct Defaults {
         static constexpr Rejection    rejection = Rejection::hz50;
         static constexpr Part         part      = Part::ltc2401;
-        static constexpr Units::Hertz MaxClock  = Ltc2400::MaxClock;
+        static constexpr Units::Hertz maxClock  = Ltc2400::MaxClock;
         /// After the driver starts: the part's POR and a conversion that may already be running.
-        static constexpr auto StartupDelay = std::chrono::milliseconds{1};
+        static constexpr auto startupDelay = std::chrono::milliseconds{1};
         /// Failures in a row (a timeout, an impossible frame, SDO low after a frame) before link()
         /// says absent; it goes on trying regardless.
-        static constexpr std::uint8_t AbsentAfterFailures = 3;
+        static constexpr std::uint8_t absentAfterFailures = 3;
         /// CS stays high this long after a failure before the next try (a MISO stuck low would
         /// otherwise be a frame every loop turn).
-        static constexpr auto RetryDelay = std::chrono::milliseconds{10};
+        static constexpr auto retryDelay = std::chrono::milliseconds{10};
     };
 
     /// Polls an LTC2401/LTC2402 that is alone on its SPI bus (external SCK, CS held low between
-    /// frames - "CS may remain LOW and EOC monitored", md:592). Call handler() once a loop turn.
+    /// frames - "CS may remain LOW and EOC monitored", md:592). Call turn() once a loop turn.
     ///
-    /// - CS goes low in one handler() call and SDO is first read in a later one, which is far more
+    /// - CS goes low in one turn() call and SDO is first read in a later one, which is far more
     ///   than t1 (150 ns) apart on any main loop.
     /// - SDO low: one 4-byte read (MOSI clocks 0xFF, unconnected). On its completion SDO must be
     ///   HIGH again - the 32nd SCK falling edge starts the next conversion and SDO shows EOC = 1
@@ -227,23 +228,23 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
         static constexpr Part         PartSetting         = Config::part;
         static constexpr auto         Conversion          = conversionTime(Config::rejection);
         static constexpr auto         Timeout             = 2 * Conversion.max;
-        static constexpr std::uint8_t AbsentAfterFailures = Config::AbsentAfterFailures;
-        static constexpr auto         Setup               = Master::setup(Mode, Config::MaxClock);
+        static constexpr std::uint8_t AbsentAfterFailures = Config::absentAfterFailures;
+        static constexpr auto         Setup               = Master::setup(Mode, Config::maxClock);
 
-        static_assert(Config::MaxClock <= MaxClock,
+        static_assert(Config::maxClock <= MaxClock,
                       "fESCK is at most 2 MHz (LTC2401_LTC2402.md:188)");
 
-        Reader() : next_{Clock::now() + Config::StartupDelay} { apply(set(Cs{})); }
+        Reader() : next_{Clock::now() + Config::startupDelay} { ChipSelect<Cs, false>::release(); }
 
         Reader(Reader const&)            = delete;
         Reader& operator=(Reader const&) = delete;
 
         /// The last good reading; meaningful once valid().
-        [[nodiscard]] Sample const& latest() const { return latest_; }
+        [[nodiscard]] Sample const& latest() const { return slot_.latest(); }
 
-        [[nodiscard]] bool valid() const { return samples_ != 0; }
+        [[nodiscard]] bool valid() const { return slot_.samples() != 0; }
 
-        [[nodiscard]] std::uint32_t samples() const { return samples_; }
+        [[nodiscard]] std::uint32_t samples() const { return slot_.samples(); }
 
         /// Frames this part cannot send (Decoded::Kind::invalid / notReady after SDO was low).
         [[nodiscard]] std::uint32_t invalid() const { return invalid_; }
@@ -258,23 +259,21 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
         [[nodiscard]] std::uint32_t errors() const { return errors_; }
 
         [[nodiscard]] Link link() const {
-            if(failuresInRow_ == 0 && samples_ != 0) { return Link::answering; }
-            return failuresInRow_ >= AbsentAfterFailures ? Link::absent : Link::starting;
+            return failuresInRow_.link(failuresInRow_.n == 0 && slot_.samples() != 0);
         }
 
-        [[nodiscard]] bool inFlight() const { return running_.load(std::memory_order_acquire); }
+        [[nodiscard]] bool inFlight() const { return xfer_.running(); }
 
-        void handler() {
+        void turn() {
             auto const now = Clock::now();
-            if(running_.load(std::memory_order_acquire)) { return; }
-            if(failed_.exchange(false, std::memory_order_acq_rel)) {
+            switch(xfer_.take()) {
+            case Frame::Poll::running: return;
+            case Frame::Poll::failed:
                 ++errors_;
                 fail_(now);
                 return;
-            }
-            if(done_.exchange(false, std::memory_order_acq_rel)) {
-                finish_(now);
-                return;
+            case Frame::Poll::ok:   finish_(now); return;
+            case Frame::Poll::idle: break;
             }
             switch(state_) {
             case State::startup:
@@ -290,7 +289,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
                     start_();
                 } else if(now >= next_) {
                     ++timeouts_;
-                    if(failuresInRow_ == 0) {
+                    if(failuresInRow_.n == 0) {
                         UC_LOG_W("ltc2401: no result in {} ms", Timeout.count() / 1000);
                     }
                     fail_(now);
@@ -302,33 +301,23 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     private:
         enum class State : std::uint8_t { startup, released, waiting };
 
-        static void select_() { apply(clear(Cs{})); }
-
-        /// No deselect: CS stays low after the frame, SDO then shows EOC.
-        static constexpr Lines lines_{&select_, nullptr, nullptr, nullptr};
+        using Frame = OneFrame<Master>;
 
         void start_() {
             frame_ = {};
-            running_.store(true, std::memory_order_release);
-            if(!Master::submit(
-                 typename Master::Request{.setup = Setup,
-                                          .lines = lines_,
-                                          .rx    = std::span{frame_},
-                                          .callback =
-                                            [this](auto r) {
-                                                if(r == decltype(r)::succeeded) {
-                                                    // after the 32nd falling SCK edge SDO is EOC of the next conversion
-                                                    sdoHighAfter_ = apply(read(Sdo{}));
-                                                    done_.store(true, std::memory_order_relaxed);
-                                                } else {
-                                                    failed_.store(true, std::memory_order_relaxed);
-                                                }
-                                                running_.store(false, std::memory_order_release);
-                                            }}))
-            {
-                failed_.store(true, std::memory_order_relaxed);
-                running_.store(false, std::memory_order_release);
-            }
+            if(!xfer_.begin()) { return; }
+            // No deselect: CS stays low after the frame, SDO then shows EOC. The SDO read comes before
+            // complete()'s release store, so turn() sees it with the verdict.
+            typename Master::Request r{.setup = Setup,
+                                       .lines = ChipSelect<Cs, false>::lines,
+                                       .rx    = std::span{frame_}};
+            r.callback = [this](auto res) {
+                bool const ok = res == decltype(res)::ok;
+                // after the 32nd falling SCK edge SDO is EOC of the next conversion
+                if(ok) { sdoHighAfter_ = apply(read(Sdo{})); }
+                xfer_.complete(ok);
+            };
+            if(!Master::submit(r)) { xfer_.refuse(); }
         }
 
         void finish_(TimePoint now) {
@@ -336,7 +325,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
               = decode(wordOf(std::span<std::byte const, FrameBytes>{frame_}), PartSetting);
             if(!sdoHighAfter_) {
                 ++stuckLow_;
-                if(failuresInRow_ == 0) {
+                if(failuresInRow_.n == 0) {
                     UC_LOG_W("ltc2401: SDO still low after a frame - no part, or MISO stuck low");
                 }
                 fail_(now);
@@ -344,45 +333,41 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
             }
             if(got.kind != Decoded::Kind::ok) {
                 ++invalid_;
-                if(failuresInRow_ == 0) {
+                if(failuresInRow_.n == 0) {
                     UC_LOG_W("ltc2401: frame {:#010x} is not one this part sends",
                              wordOf(std::span<std::byte const, FrameBytes>{frame_}));
                 }
                 fail_(now);
                 return;
             }
-            latest_ = got.sample;
-            ++samples_;
-            if(failuresInRow_ != 0) { UC_LOG_I("ltc2401: answering"); }
-            failuresInRow_ = 0;
-            next_          = now + Timeout;
-            state_         = State::waiting;
+            slot_.publish(got.sample);
+            if(failuresInRow_.n != 0) { UC_LOG_I("ltc2401: answering"); }
+            failuresInRow_.cleared();
+            next_  = now + Timeout;
+            state_ = State::waiting;
         }
 
         void fail_(TimePoint now) {
-            if(failuresInRow_ != 0xFF) { ++failuresInRow_; }
-            if(failuresInRow_ == AbsentAfterFailures) {
-                UC_LOG_W("ltc2401: absent after {} failures in a row", failuresInRow_);
+            failuresInRow_.failed();
+            if(failuresInRow_.justAbsent()) {
+                UC_LOG_W("ltc2401: absent after {} failures in a row", failuresInRow_.n);
             }
             apply(set(Cs{}));   // aborts a data output in progress, starts a new conversion
-            next_  = now + Config::RetryDelay;
+            next_  = now + Config::retryDelay;
             state_ = State::released;
         }
 
-        TimePoint                         next_{};
-        std::array<std::byte, FrameBytes> frame_{};
-        std::atomic<bool>                 running_{false};
-        std::atomic<bool>                 done_{false};
-        std::atomic<bool>                 failed_{false};
-        bool                              sdoHighAfter_{};
-        State                             state_{State::startup};
-        std::uint8_t                      failuresInRow_{};
-        Sample                            latest_{};
-        std::uint32_t                     samples_{};
-        std::uint32_t                     invalid_{};
-        std::uint32_t                     timeouts_{};
-        std::uint32_t                     stuckLow_{};
-        std::uint32_t                     errors_{};
+        TimePoint                          next_{};
+        std::array<std::byte, FrameBytes>  frame_{};
+        Frame                              xfer_{};
+        bool                               sdoHighAfter_{};
+        State                              state_{State::startup};
+        FailureStreak<AbsentAfterFailures> failuresInRow_{};
+        SampleSlot<Sample>                 slot_{};
+        std::uint32_t                      invalid_{};
+        std::uint32_t                      timeouts_{};
+        std::uint32_t                      stuckLow_{};
+        std::uint32_t                      errors_{};
     };
 
 }}}   // namespace Kvasir::SPI::Ltc2400

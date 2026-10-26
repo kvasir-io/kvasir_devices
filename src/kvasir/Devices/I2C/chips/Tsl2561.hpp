@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -98,11 +99,11 @@ struct Tsl2561X {
       = Tsl2561Detail::IntegrationTimes[IntegrationCode];
 
     static constexpr std::array Init{
-      Step::write({.reg = Cmd | 0x00, .payload = {0x03}}),
-      Step::read({.reg = Cmd | 0x0A, .count = 1, .offset = 0}),
-      Step::write({.reg     = Cmd | 0x01,
-                   .payload = {Timing},
-                   .delay   = Integrating + std::chrono::milliseconds{10}}),
+      Engine::Step::write({.reg = Cmd | 0x00, .payload = {0x03}}),
+      Engine::Step::read({.reg = Cmd | 0x0A, .count = 1, .offset = 0}),
+      Engine::Step::write({.reg     = Cmd | 0x01,
+                           .payload = {Timing},
+                           .delay   = Integrating + std::chrono::milliseconds{10}}),
     };
 
     struct State {
@@ -125,8 +126,8 @@ struct Tsl2561X {
     struct Light {
         static constexpr auto       Period = std::chrono::milliseconds{500};
         static constexpr std::array Steps{
-          Step::read({.reg = Word | 0x0C, .count = 2, .offset = 0}),
-          Step::read({.reg = Word | 0x0E, .count = 2, .offset = 2})};
+          Engine::Step::read({.reg = Word | 0x0C, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = Word | 0x0E, .count = 2, .offset = 2})};
 
         struct Sample {
             std::uint16_t full{};          ///< channel 0: visible + infrared
@@ -177,10 +178,10 @@ struct Tsl2561X {
         /// groups off the wire meanwhile (Linux tsl2563.c waits the same): the ADC results
         /// only move at the end of a cycle, so a frame read sooner holds counts integrated
         /// under the old gain and time, which applied() has already replaced.
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg    = Cmd | 0x01,
                .offset = 0,
                .count  = 1,
@@ -195,8 +196,8 @@ struct Tsl2561X {
         }
     };
 
-    using Reads  = List<Light>;
-    using Writes = List<TimingSetting>;
+    using Reads  = Engine::List<Light>;
+    using Writes = Engine::List<TimingSetting>;
 };
 
 /// The part at 402 ms and gain 1x.

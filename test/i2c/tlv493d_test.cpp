@@ -19,6 +19,7 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
@@ -51,7 +52,7 @@ struct Tlv493dModel {
     std::uint8_t                             address{0x5E};
     std::array<std::uint8_t, 10>             reg{};
     std::array<std::uint8_t, 4>              mod{};
-    std::vector<std::array<std::uint8_t, 4>> written{};
+    std::vector<std::array<std::uint8_t, 4>> written;
     std::int16_t                             bx{};
     std::int16_t                             by{};
     std::int16_t                             bz{};
@@ -65,7 +66,7 @@ struct Tlv493dModel {
     /// simulation's 1 ms turns, so "the next transaction a turn after the one that started a
     /// conversion" is what landing inside it looks like.
     static constexpr std::chrono::microseconds Conversion{1500};
-    FakeClock::time_point                      busyUntil{};
+    FakeClock::time_point                      busyUntil;
     int insideConversion{};   ///< transactions while converting
 
     [[nodiscard]] bool masterControlled() const { return (mod[1] & 0x03U) == 0x03U; }
@@ -91,7 +92,7 @@ struct Tlv493dModel {
     FakeBus::Result operator()(std::uint8_t               addr,
                                std::span<std::byte const> sent,
                                std::span<std::byte>       recv) {
-        if(addr != address) { return FakeBus::Result::notAcknowledged; }
+        if(addr != address) { return FakeBus::Result::nack; }
         if(FakeClock::now() < busyUntil) { ++insideConversion; }
         if(!sent.empty()) {
             if(sent.size() > mod.size()) { return FakeBus::Result::failed; }
@@ -116,7 +117,7 @@ struct Tlv493dModel {
             // A readout starts the next conversion (Infineon: MASTERCONTROLLEDMODE).
             if(masterControlled()) { convert(); }
         }
-        return FakeBus::Result::succeeded;
+        return FakeBus::Result::ok;
     }
 };
 
@@ -163,9 +164,8 @@ void parity() {
 }
 
 void bringUp() {
-    testCase("TLV493D bring-up, configuration and decode");
-    fresh();
-    auto m           = part();
+    I2cCase const testcase{"TLV493D bring-up, configuration and decode"};
+    auto          m  = part();
     FakeBus::respond = std::ref(m);
     Sensor d{};
     check(runUntil(d, [&] { return m.masterControlled(); }, 3s), "configured");
@@ -195,7 +195,7 @@ void bringUp() {
     // Bx 0xF0F, By 0x7FF, Bz 0x800, T 0x154 (340), FRM 1, CH 0; the first frame, after nothing
     static_assert([] {
         auto const f   = frame(0xF0, 0x7F, 0x80, 0x14, 0xFF, 0x30, 0x54);
-        auto const got = Field::decode(Bytes{f}, Field::Sample{});
+        auto const got = Field::decode(Kvasir::Bytes{f}, Field::Sample{});
         return isOk(got)
             && equal(got.value.x, Units::nanoTesla(-241 * 98'000))     // Table 10: -23.6 mT
             && equal(got.value.y, Units::nanoTesla(2047 * 98'000))     // full scale positive
@@ -208,18 +208,21 @@ void bringUp() {
     // master-controlled readout: a frame all the same.
     static_assert([] {
         auto const f   = frame(0xF0, 0x7F, 0x80, 0x14, 0xFF, 0x20, 0x54);
-        auto const got = Field::decode(Bytes{f}, Field::Sample{});
+        auto const got = Field::decode(Kvasir::Bytes{f}, Field::Sample{});
         return isOk(got) && equal(got.value.x, Units::nanoTesla(-241 * 98'000))
             && equal(got.value.frame, 1);
     }());
     // What the part holds before it has converted anything: every count 0, which would be
     // -349 degC. Rejected, whatever PD says; and CH not 00 is still a frame to read again.
-    static_assert(!isOk(
-      Field::decode(Bytes{frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00)}, Field::Sample{})));
-    static_assert(!isOk(
-      Field::decode(Bytes{frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00)}, Field::Sample{})));
-    static_assert(!isOk(
-      Field::decode(Bytes{frame(0xF0, 0x7F, 0x80, 0x15, 0xFF, 0x30, 0x54)}, Field::Sample{})));
+    static_assert(
+      !isOk(Field::decode(Kvasir::Bytes{frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00)},
+                          Field::Sample{})));
+    static_assert(
+      !isOk(Field::decode(Kvasir::Bytes{frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00)},
+                          Field::Sample{})));
+    static_assert(
+      !isOk(Field::decode(Kvasir::Bytes{frame(0xF0, 0x7F, 0x80, 0x15, 0xFF, 0x30, 0x54)},
+                          Field::Sample{})));
 
     // The field is a readout alone: between two configuration runs nothing is written.
     auto const writesNow  = m.written.size();
@@ -242,7 +245,7 @@ void bringUp() {
     // Bx 0x00A, T 0x1B8 (440): 100 counts at 1.1 degC over 25 degC, 10 counts of field
     static_assert([] {
         auto const f   = frame(0x00, 0x7F, 0x80, 0x18, 0xAF, 0x30, 0xB8);
-        auto const got = Field::decode(Bytes{f}, Field::Sample{});
+        auto const got = Field::decode(Kvasir::Bytes{f}, Field::Sample{});
         return isOk(got) && equal(got.value.temperature, Units::milliDegC(135000))
             && equal(got.value.x, Units::nanoTesla(980'000));
     }());
@@ -253,13 +256,11 @@ void bringUp() {
             600ms),
           "configured again within half a second");
     check(!m.parityError, "still odd");
-    if(failures != 0) { dump(); }
 }
 
 void frames() {
-    testCase("TLV493D mid-conversion and stale frames");
-    fresh();
-    auto m           = part();
+    I2cCase const testcase{"TLV493D mid-conversion and stale frames"};
+    auto          m  = part();
     FakeBus::respond = std::ref(m);
     Sensor d{};
     check(configuredAndSampled(d, m, 2), "configured, then sampled");
@@ -281,12 +282,12 @@ void frames() {
         auto const noPd = frame(0xF0, 0x7F, 0x06, 0x14, 0xFF, 0x24, 0x54);
         auto const test = frame(0xF0, 0x7F, 0x06, 0x14, 0xFF, 0x74, 0x54);
         auto const done = frame(0xF0, 0x7F, 0x06, 0x14, 0xFF, 0x34, 0x54);
-        auto const r    = Field::decode(Bytes{busy}, Field::Sample{});
-        auto const rPd  = Field::decode(Bytes{noPd}, Field::Sample{});
-        auto const got  = Field::decode(Bytes{done}, Field::Sample{});
+        auto const r    = Field::decode(Kvasir::Bytes{busy}, Field::Sample{});
+        auto const rPd  = Field::decode(Kvasir::Bytes{noPd}, Field::Sample{});
+        auto const got  = Field::decode(Kvasir::Bytes{done}, Field::Sample{});
         // PD clear is not a reason to read again: a real A1B6 never sets it in this mode.
         return isRetry(r) && r.retryAfter == 1ms && isOk(rPd)
-            && isReject(Field::decode(Bytes{test}, Field::Sample{})) && isOk(got)
+            && isReject(Field::decode(Kvasir::Bytes{test}, Field::Sample{})) && isOk(got)
             && equal(got.value.z, Units::nanoTesla(9'800'000));
     }());
     checkEq(d.rejected<Field>(), rejectedBefore, "and not counted as a rejection");
@@ -313,9 +314,10 @@ void frames() {
     // the same field, temperature and FRM as the sample before it: a part that did not convert
     static_assert([] {
         auto const f    = frame(0xF0, 0x7F, 0x80, 0x14, 0xFF, 0x30, 0x54);
-        auto const prev = Field::decode(Bytes{f}, Field::Sample{}).value;
+        auto const prev = Field::decode(Kvasir::Bytes{f}, Field::Sample{}).value;
         auto const next = frame(0xF0, 0x7F, 0x80, 0x18, 0xFF, 0x30, 0x54);   // FRM 2
-        return isUnchanged(Field::decode(Bytes{f}, prev)) && isOk(Field::decode(Bytes{next}, prev));
+        return isUnchanged(Field::decode(Kvasir::Bytes{f}, prev))
+            && isOk(Field::decode(Kvasir::Bytes{next}, prev));
     }());
     check(runUntil(
             d,
@@ -335,16 +337,14 @@ void frames() {
     // By 0xFFB, -5 counts
     static_assert([] {
         auto const f   = frame(0xF0, 0xFF, 0x80, 0x14, 0xFB, 0x30, 0x54);
-        auto const got = Field::decode(Bytes{f}, Field::Sample{});
+        auto const got = Field::decode(Kvasir::Bytes{f}, Field::Sample{});
         return isOk(got) && equal(got.value.y, Units::nanoTesla(-490'000));
     }());
-    if(failures != 0) { dump(); }
 }
 
 void conversionGaps() {
-    testCase("TLV493D nothing lands inside a conversion");
-    fresh();
-    auto m           = part();
+    I2cCase const testcase{"TLV493D nothing lands inside a conversion"};
+    auto          m  = part();
     FakeBus::respond = std::ref(m);
     Sensor d{};
     check(configuredAndSampled(d, m, 2), "configured, then sampled");
@@ -357,13 +357,11 @@ void conversionGaps() {
             0,
             "no readout or write while the one before it has a conversion running: the "
             "Configure run's write after its readout, nor a readout after either");
-    if(failures != 0) { dump(); }
 }
 
 void corruptedFactoryRead() {
-    testCase("TLV493D a corrupted factory read is never written");
-    fresh();
-    auto m           = part();
+    I2cCase const testcase{"TLV493D a corrupted factory read is never written"};
+    auto          m  = part();
     FakeBus::respond = std::ref(m);
     Sensor d{};
     check(configuredAndSampled(d, m, 1), "configured, then sampled");
@@ -393,7 +391,6 @@ void corruptedFactoryRead() {
     }
     check(onlyGood, "every configuration written carries the real factory bits");
     check(!m.parityError, "and odd parity");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

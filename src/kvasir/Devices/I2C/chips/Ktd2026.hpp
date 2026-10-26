@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -55,28 +57,24 @@ namespace Ktd2026Detail {
 /// and more is clamped to 191.
 ///
 /// Which colour sits on which channel is board wiring, so it is the `Wiring` template
-/// parameter. `Timing::StartupDelay` is the wait after power before the first transaction: the
+/// parameter. `Timing::startupDelay` is the wait after power before the first transaction: the
 /// datasheet gives no figure and 500 ms is a conservative default. Address 0x30; the -B and -C variants are 0x31 and 0x32.
-template<Ktd2026Detail::Wiring Wire = Ktd2026Detail::DefaultWiring, typename Timing = DefaultTiming>
+template<Ktd2026Detail::Wiring Wire = Ktd2026Detail::DefaultWiring,
+         typename Timing            = Engine::DefaultTiming>
 struct Ktd2026 {
     static constexpr std::string_view Name          = "KTD2026";
     static constexpr Address7         Address       = 0x30;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 3> Addresses{0x30, 0x31, 0x32};
+    static constexpr auto Addresses = addressRun<0x30, 3>();
 
     static_assert(Wire.red < 3 && Wire.green < 3 && Wire.blue < 3,
                   "a colour is wired to D1, D2 or D3 (0, 1, 2)");
     static_assert(Wire.red != Wire.green && Wire.green != Wire.blue && Wire.red != Wire.blue,
                   "one colour per channel");
 
-    static constexpr std::chrono::milliseconds StartupDelay = [] {
-        if constexpr(requires { Timing::StartupDelay; }) {
-            return Kvasir::asDuration(Timing::StartupDelay);
-        } else {
-            return std::chrono::milliseconds{500};
-        }
-    }();
+    static constexpr std::chrono::milliseconds StartupDelay
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
     /// The highest current code: 24 mA. Higher codes are 24 mA too.
     static constexpr std::uint8_t MaxLevel = 0xBF;
@@ -84,12 +82,12 @@ struct Ktd2026 {
     using Rgb = Ktd2026Detail::Rgb;
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x00, .payload = {0x00}}),
-      Step::write({.reg     = 0x00,
-                   .payload = {0x07},
-                   .delay   = std::chrono::milliseconds{1},
-                   .mayNak  = true}),   // reset complete chip, 200 us
-      Step::write({.reg = 0x00, .payload = {0x1C}}),
+      Engine::Step::write({.reg = 0x00, .payload = {0x00}}),
+      Engine::Step::write({.reg     = 0x00,
+                           .payload = {0x07},
+                           .delay   = std::chrono::milliseconds{1},
+                           .mayNak  = true}),   // reset complete chip, 200 us
+      Engine::Step::write({.reg = 0x00, .payload = {0x1C}}),
     };
 
     /// The current register code for an application level: 0 stays off (the channel is
@@ -110,7 +108,7 @@ struct Ktd2026 {
         /// The ramp byte and the three currents, in the chip's D1 D2 D3 order, each from the
         /// colour `Wiring` puts there, then channel control last, so a channel is switched on
         /// at its new current.
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   5>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
@@ -125,15 +123,15 @@ struct Ktd2026 {
             }
             buffer[0] = std::byte{on};
             buffer[1] = std::byte{0x00};   // no ramp
-            return {Step::writeBuffer({.reg = 0x05, .offset = 1, .count = 1}),
-                    Step::writeBuffer({.reg = 0x06, .offset = 2, .count = 1}),
-                    Step::writeBuffer({.reg = 0x07, .offset = 3, .count = 1}),
-                    Step::writeBuffer({.reg = 0x08, .offset = 4, .count = 1}),
-                    Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 1})};
+            return {Engine::Step::writeBuffer({.reg = 0x05, .offset = 1, .count = 1}),
+                    Engine::Step::writeBuffer({.reg = 0x06, .offset = 2, .count = 1}),
+                    Engine::Step::writeBuffer({.reg = 0x07, .offset = 3, .count = 1}),
+                    Engine::Step::writeBuffer({.reg = 0x08, .offset = 4, .count = 1}),
+                    Engine::Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 1})};
         }
     };
 
-    using Writes = List<Colour>;
+    using Writes = Engine::List<Colour>;
 };
 
 }   // namespace Kvasir::I2C::Chips

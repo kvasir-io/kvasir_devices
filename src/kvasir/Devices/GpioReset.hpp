@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ResetLine.hpp"
-#include "kvasir/Io/Types.hpp"
+#include "kvasir/Io/Claims.hpp"
 
 namespace Kvasir {
 

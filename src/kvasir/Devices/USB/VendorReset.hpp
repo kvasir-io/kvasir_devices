@@ -20,6 +20,10 @@
 /// callbacks run first, from inside the USB interrupt - to let a log line drain, say.
 namespace Kvasir::USB::VendorReset {
 
+// The two requests (bRequest of a vendor request to the interface).
+inline constexpr SetupPacket::Request bootselRequest{0x01};
+inline constexpr SetupPacket::Request flashRequest{0x02};
+
 template<typename Clock,
          typename Config,
          typename Derived,
@@ -31,7 +35,7 @@ template<typename Clock,
 struct Mixin {
 private:
     friend Derived;
-    friend struct Kvasir::USB::detail::MixinTraits;   // Grants access to helper functions
+    friend struct Kvasir::USB::MixinTraits;   // Grants access to helper functions
 
     static constexpr std::size_t InterfaceCount = 1;
     static constexpr std::size_t EndpointCount  = 0;
@@ -45,25 +49,23 @@ private:
                                             .bInterfaceProtocol = 1};
 
     // Callbacks
-    static bool SetupPacketRequestCallback(SetupPacket const& pkt) {
+    static bool setupPacketRequestCallback(SetupPacket const& pkt) {
         if(pkt.type() == SetupPacket::Type::standard || pkt.wIndex != FirstInterfaceNumber
            || pkt.recipient() != SetupPacket::Recipient::interface)
         {
             return false;
         }
 
-        static constexpr SetupPacket::Request REQUEST_BOOTSEL{0x01};
-        static constexpr SetupPacket::Request REQUEST_FLASH{0x02};
-
-        if(pkt.bRequest == REQUEST_BOOTSEL) {
-            UC_LOG_I("USB: Rebooting to the bootloader");
+        if(pkt.bRequest == bootselRequest) {
+            UC_LOG_D("USB: Rebooting to the bootloader");
             if constexpr(!std::is_same_v<BeforeBootselCallback, void>) {
                 BeforeBootselCallback{}();
             }
             Actions::bootloader();
             return true;
-        } else if(pkt.bRequest == REQUEST_FLASH) {
-            UC_LOG_I("USB: Rebooting to flash");
+        }
+        if(pkt.bRequest == flashRequest) {
+            UC_LOG_D("USB: Rebooting to flash");
             if constexpr(!std::is_same_v<BeforeFlashCallback, void>) { BeforeFlashCallback{}(); }
             Actions::reboot();
             return true;

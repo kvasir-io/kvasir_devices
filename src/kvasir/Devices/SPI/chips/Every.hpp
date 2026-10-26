@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../I2C/Device.hpp"
+#include "../../Engine/Description.hpp"
 #include "Ad7124.hpp"
 #include "Bme280.hpp"
 #include "Max31865.hpp"
@@ -14,16 +14,16 @@
 namespace Kvasir::SPI::Chips {
 
 using Every
-  = I2C::List<Bme280,
-              Bmp280,
-              Mpu9250,
-              Max7219<1,
-                      0xFF,
-                      Max7219Defaults::ScanLimit,
-                      Max7219Defaults::Intensity,
-                      Max7219Defaults::RefreshPeriod.count()>,
-              Max31865<Max31865Defaults::Configuration,
-                       std::chrono::milliseconds{Max31865Defaults::RegisterCheck}.count()>,
-              Ad7124<Ad7124Defaults>>;
+  = Engine::List<Bme280,
+                 Bmp280,
+                 Mpu9250,
+                 Max7219<1,
+                         0xFF,
+                         Max7219Defaults::scanLimit,
+                         Max7219Defaults::intensity,
+                         Max7219Defaults::refreshPeriod.count()>,
+                 Max31865<Max31865Defaults::configuration,
+                          std::chrono::milliseconds{Max31865Defaults::registerCheck}.count()>,
+                 Ad7124<Ad7124Defaults>>;
 
 }   // namespace Kvasir::SPI::Chips

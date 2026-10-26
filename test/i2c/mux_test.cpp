@@ -4,7 +4,7 @@
 /// that takes the time 400 kHz takes, one transaction after another, and a main loop of a
 /// fixed length.
 ///
-/// The loop is a short turn for the bus and the device handlers, and every 25 ms a long one
+/// The loop is a short turn for the bus and the device turns, and every 25 ms a long one
 /// that also renders a frame.
 ///
 /// It compares the ShareChannel, HoldChannel and DrainChannel policies: whether the 100 Hz
@@ -23,6 +23,8 @@
 /// sits in the Bus makes no more than 1 % of difference to it. The window is 10 s after a
 /// second of warm-up: enough for the slowest part (10 s) to go once and for the rates to settle,
 /// and short enough for the nine runs to stay under twenty seconds with the sanitizers on.
+#include "FakeBus.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -31,21 +33,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <kd/Check.hpp>
+#include <kvasir/Devices/I2C/Bus.hpp>
+#include <kvasir/Devices/I2C/Device.hpp>
+#include <kvasir/Devices/I2C/Mux.hpp>
+#include <kvasir/Devices/I2C/chips/Tca9548a.hpp>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <type_traits>
-
-// clang-format off
-#include <support/LogStubs.hpp>
-#include "FakeBus.hpp"
-#include <support/Check.hpp>
-// clang-format on
-#include <kvasir/Devices/I2C/Bus.hpp>
-#include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/Mux.hpp>
-#include <kvasir/Devices/I2C/chips/Tca9548a.hpp>
 
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
@@ -158,13 +155,14 @@ struct Reg {
 
     struct Data {
         static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = N, .offset = 0})};
+        static constexpr std::array Steps{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = N, .offset = 0})};
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes b) { return b.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 /// A bare read of N bytes (BH1750, MCP3221, the easyC boards, MCP4018).
@@ -176,13 +174,13 @@ struct Recv {
 
     struct Data {
         static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{Step::receive({.count = N, .offset = 0})};
+        static constexpr std::array Steps{Kvasir::Engine::Step::receive({.count = N, .offset = 0})};
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes b) { return b.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 /// A measurement command, T::Wait of conversion, then N bytes (Sensirion, AHT20, HTU21D).
@@ -195,17 +193,17 @@ struct Cmd {
     struct Data {
         static constexpr auto       Period = T::Period;
         static constexpr std::array Steps{
-          Step::command({.payload = {0x24, 0x00}, .delay = T::Wait}
+          Kvasir::Engine::Step::command({.payload = {0x24, 0x00}, .delay = T::Wait}
           ),
-          Step::receive({             .count = N,      .offset = 0}
+          Kvasir::Engine::Step::receive({             .count = N,      .offset = 0}
           )
         };
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes b) { return b.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 /// An OLED page: the window command, then a transfer the size of the page's RAM write. It
@@ -219,17 +217,17 @@ struct Page {
     struct Data {
         static constexpr auto       Period = T::Period;
         static constexpr std::array Steps{
-          Step::command({.payload = {0x00, 0x21, 0x00, 0x7F, 0x22, 0x00, 0x07}}
+          Kvasir::Engine::Step::command({.payload = {0x00, 0x21, 0x00, 0x7F, 0x22, 0x00, 0x07}}
           ),
-          Step::receive({.count = N, .offset = 0}
+          Kvasir::Engine::Step::receive({.count = N, .offset = 0}
           )
         };
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes b) { return b.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 /// Four single-shot conversions, each a config write, T::Wait, and a 2-byte read (ADS1x15).
@@ -242,29 +240,29 @@ struct Sweep {
     struct Data {
         static constexpr auto       Period = T::Period;
         static constexpr std::array Steps{
-          Step::write({.reg = 0x01, .payload = {0xC3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xC3, 0x83}, .delay = T::Wait}
           ),
-          Step::read({.reg = 0x00,              .count = 2,      .offset = 0}
+          Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 0}
           ),
-          Step::write({.reg = 0x01, .payload = {0xD3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xD3, 0x83}, .delay = T::Wait}
           ),
-          Step::read({.reg = 0x00,              .count = 2,      .offset = 2}
+          Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 2}
           ),
-          Step::write({.reg = 0x01, .payload = {0xE3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xE3, 0x83}, .delay = T::Wait}
           ),
-          Step::read({.reg = 0x00,              .count = 2,      .offset = 4}
+          Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 4}
           ),
-          Step::write({.reg = 0x01, .payload = {0xF3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xF3, 0x83}, .delay = T::Wait}
           ),
-          Step::read({.reg = 0x00,              .count = 2,      .offset = 6}
+          Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 6}
           )
         };
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes b) { return b.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 /// The VL53L1X's shape: the status, 15 ms, the 17-byte result, the interrupt clear.
@@ -277,15 +275,15 @@ struct Ranging {
     struct Data {
         static constexpr auto       Period = T::Period;
         static constexpr std::array Steps{
-          Step::read({.reg = 0x0031, .count = 1, .offset = 0, .delay = 15ms}),
-          Step::read({.reg = 0x0089, .count = 17, .offset = 1}),
-          Step::write({.reg = 0x0086, .payload = {0x01}})};
+          Kvasir::Engine::Step::read({.reg = 0x0031, .count = 1, .offset = 0, .delay = 15ms}),
+          Kvasir::Engine::Step::read({.reg = 0x0089, .count = 17, .offset = 1}),
+          Kvasir::Engine::Step::write({.reg = 0x0086, .payload = {0x01}})};
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes b) { return b.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 /// The bus as the Bus sees it: 400 kHz and a queue deeper than the parts on it.
@@ -300,7 +298,12 @@ template<typename C>
 using Up = Device<Wire, FakeClock, C>;
 
 template<typename C, std::uint8_t Ch, typename Pol>
-using On = Device<Wire, FakeClock, C, DefaultConfig, NoReset, MuxGate<MuxDev, Ch, Pol>>;
+using On = Device<Wire,
+                  FakeClock,
+                  C,
+                  Kvasir::Engine::DefaultConfig,
+                  Kvasir::NoReset,
+                  MuxGate<MuxDev, Ch, Pol>>;
 
 // -- the parts, in declaration order ---------------------------------------------------------
 
@@ -422,7 +425,7 @@ std::chrono::microseconds wireTime(FakeBus::Request const& r) {
     return std::chrono::microseconds{1s} * bits / static_cast<std::int64_t>(Wire::BaudRate) + 100us;
 }
 
-/// A main-loop turn: `turn` for the handlers, plus `render` in the turn that draws a frame,
+/// A main-loop turn: `turn` for the turns, plus `render` in the turn that draws a frame,
 /// which one in every `renderEvery` does.
 struct Loop {
     std::chrono::microseconds turn{};
@@ -450,9 +453,9 @@ Outcome simulate(Loop const& loop) {
 
     // The gates were bound to the switch and to the Bus's own arbiter for it when the Bus was
     // made; the numbers below are read off that arbiter.
-    auto  bus     = std::make_unique<BusT>();
-    auto& arbiter = bus->template arbiter<0>();
-    auto& target  = bus->template get<Target>();
+    auto        bus     = std::make_unique<BusT>();
+    auto&       arbiter = bus->template arbiter<0>();
+    auto const& target  = bus->template get<Target>();
 
     Outcome                                  out{};
     std::array<std::uint32_t, BusT::Count>   base{};
@@ -477,7 +480,7 @@ Outcome simulate(Loop const& loop) {
             arbiterBase = arbiter;
         }
 
-        bus->handler();
+        bus->turn();
 
         if(measuring && target.samples() != lastSamples) {
             lastSamples = target.samples();
@@ -510,7 +513,7 @@ Outcome simulate(Loop const& loop) {
                 if(r.sendBytes() != 0) { control = static_cast<std::uint8_t>(r.sendByte(0)); }
                 for(auto& b : r.receiveData) { b = std::byte{control}; }
             }
-            FakeBus::complete(FakeBus::Result::succeeded);
+            FakeBus::complete(FakeBus::Result::ok);
         }
         FakeBus::log.clear();
     }
@@ -541,7 +544,8 @@ Outcome simulate(Loop const& loop) {
                                / std::chrono::duration<double>{Run}.count();
     }
     out.targetSamples
-      = target.samples() - base[detail::IndexOf<Target, typename BusT::Devices>::value];
+      = target.samples()
+      - base[Kvasir::Engine::detail::IndexOf<Target, typename BusT::Devices>::value];
     return out;
 }
 

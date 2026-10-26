@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -50,12 +51,11 @@ struct Tc74 {
     static_assert(Variant <= 7,
                   "the TC74 is ordered as A0..A7 (TC74.md:402-411)");
 
-    static constexpr std::string_view Name    = "TC74";
-    static constexpr Address7         Address = static_cast<Address7>(0x48 + Variant);
-    static constexpr std::array<Address7, 8>
-                                  Addresses{0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F};
-    static constexpr std::size_t  RegisterBytes = 1;
-    static constexpr Units::Hertz I2cMaxClock   = Units::hertz(100'000);
+    static constexpr std::string_view Name          = "TC74";
+    static constexpr Address7         Address       = static_cast<Address7>(0x48 + Variant);
+    static constexpr auto             Addresses     = addressRun<0x48, 8>();
+    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr Units::Hertz     I2cMaxClock   = Units::hertz(100'000);
 
     static constexpr std::uint8_t Rtr  = 0x00;   ///< read TEMP
     static constexpr std::uint8_t Rwcr = 0x01;   ///< read/write CONFIG
@@ -63,8 +63,8 @@ struct Tc74 {
     using Mode = Tc74Detail::Mode;
 
     static constexpr std::array Init{
-      Step::read({.reg = Rwcr, .count = 1, .offset = 0}),
-      Step::identify(),
+      Engine::Step::read({.reg = Rwcr, .count = 1, .offset = 0}),
+      Engine::Step::identify(),
     };
 
     struct State {
@@ -81,8 +81,8 @@ struct Tc74 {
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{250};
         static constexpr std::array Steps{
-          Step::read({.reg = Rwcr, .count = 1, .offset = 0}),   // CONFIG: DATA_RDY, SHDN
-          Step::read({.reg = Rtr, .count = 1, .offset = 1}),    // TEMP
+          Engine::Step::read({.reg = Rwcr, .count = 1, .offset = 0}),   // CONFIG: DATA_RDY, SHDN
+          Engine::Step::read({.reg = Rtr, .count = 1, .offset = 1}),    // TEMP
         };
 
         struct Sample {
@@ -91,14 +91,16 @@ struct Tc74 {
 
         /// Reserved bits set: not a TC74 answering (a floating bus reads FFh) - rejected. No
         /// DATA_RDY, or in standby (TEMP frozen, 3.1.1): nothing new.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const config = data.u8(0);
-            if((config & Tc74Detail::ConfigReserved) != 0) { return Outcome<Sample>::reject(); }
+            if((config & Tc74Detail::ConfigReserved) != 0) {
+                return Engine::Outcome<Sample>::reject();
+            }
             if((config & Tc74Detail::ConfigStandby) != 0 || (config & Tc74Detail::ConfigReady) == 0)
             {
-                return Outcome<Sample>::unchanged();
+                return Engine::Outcome<Sample>::unchanged();
             }
-            return Outcome<Sample>::ok({Tc74Detail::temperatureOf(data.u8(1))});
+            return Engine::Outcome<Sample>::ok({Tc74Detail::temperatureOf(data.u8(1))});
         }
     };
 
@@ -109,16 +111,16 @@ struct Tc74 {
         static constexpr std::size_t Bytes = 1;
         static constexpr Value       Initial{Mode::normal};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         mode,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         mode,
+                                                           std::span<std::byte> buffer) {
             buffer[0]
               = std::byte{mode == Mode::standby ? Tc74Detail::ConfigStandby : std::uint8_t{0}};
-            return Step::writeBuffer({.reg = Rwcr, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = Rwcr, .offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Temperature>;
-    using Writes = List<Power>;
+    using Reads  = Engine::List<Temperature>;
+    using Writes = Engine::List<Power>;
 };
 
 }   // namespace Kvasir::I2C::Chips

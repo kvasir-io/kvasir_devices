@@ -15,6 +15,7 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
@@ -92,9 +93,12 @@ struct Nau7802Model {
             auto& pu = reg.mem[0x00][0];
             pu       = static_cast<std::uint8_t>(converting ? (pu | 0x20U) : (pu & ~0x20U));
         }
-        if(!recv.empty() && ptr == 0x02 && busy > 0 && --busy == 0) {
-            reg.mem[0x02][0]
-              = static_cast<std::uint8_t>((reg.mem[0x02][0] & ~0x04U) | (calError ? 0x08U : 0U));
+        if(!recv.empty() && ptr == 0x02 && busy > 0) {
+            --busy;
+            if(busy == 0) {
+                reg.mem[0x02][0] = static_cast<std::uint8_t>((reg.mem[0x02][0] & ~0x04U)
+                                                             | (calError ? 0x08U : 0U));
+            }
         }
         auto const res = reg(addr, sent, recv);
         if(!recv.empty() && ptr == 0x12) { reg.mem[0x00][0] &= static_cast<std::uint8_t>(~0x20U); }
@@ -115,11 +119,11 @@ bool readOf(std::uint8_t reg,
 // -- pure decode ------------------------------------------------------------------------------
 
 static_assert([] {
-    Nau::State st{};   // 3.3 V LDO, x128, channel 1
-    auto const pos = Nau::Conversion::decode(Bytes{frame(0x20, 0x40, 0x00, 0x00)}, st);
-    auto const neg = Nau::Conversion::decode(Bytes{frame(0x20, 0xFF, 0xFF, 0xFF)}, st);
-    auto const top = Nau::Conversion::decode(Bytes{frame(0x20, 0x7F, 0xFF, 0xFF)}, st);
-    auto const low = Nau::Conversion::decode(Bytes{frame(0x20, 0x80, 0x00, 0x00)}, st);
+    Nau::State const st{};   // 3.3 V LDO, x128, channel 1
+    auto const pos = Nau::Conversion::decode(Kvasir::Bytes{frame(0x20, 0x40, 0x00, 0x00)}, st);
+    auto const neg = Nau::Conversion::decode(Kvasir::Bytes{frame(0x20, 0xFF, 0xFF, 0xFF)}, st);
+    auto const top = Nau::Conversion::decode(Kvasir::Bytes{frame(0x20, 0x7F, 0xFF, 0xFF)}, st);
+    auto const low = Nau::Conversion::decode(Kvasir::Bytes{frame(0x20, 0x80, 0x00, 0x00)}, st);
     return pos.code == 4'194'304 && neg.code == -1 && top.code == 8'388'607
         && low.code == -8'388'608 && equal(pos.voltage(), 6445)   // quarter scale: 3.3 V / 4 / 128
         && equal(top.voltage(), 12890)    // +0.5 x 3.3 V / 128, one code short
@@ -132,7 +136,7 @@ static_assert([] {
     st.config.gain    = NauD::Gain::x1;
     st.config.ldo     = NauD::Ldo::v4_5;
     st.config.channel = NauD::Channel::ch2;
-    auto const s      = Nau::Conversion::decode(Bytes{frame(0x20, 0x40, 0x00, 0x00)}, st);
+    auto const s      = Nau::Conversion::decode(Kvasir::Bytes{frame(0x20, 0x40, 0x00, 0x00)}, st);
     // quarter scale at x1 against 4.5 V: 4.5 V / 4 = 1.125 V
     return equal(s.voltage(), 1'125'000) && s.channel == NauD::Channel::ch2
         && equal(s.reference, 4500);
@@ -145,8 +149,8 @@ static_assert([] {
                                NauD::Channel::ch1,
                                NauD::FilterCap::absent,
                                Units::milliVolt(5000)>;
-    Ext::State st{};
-    auto const s = Ext::Conversion::decode(Bytes{frame(0x20, 0xC0, 0x00, 0x00)}, st);
+    Ext::State const st{};
+    auto const       s = Ext::Conversion::decode(Kvasir::Bytes{frame(0x20, 0xC0, 0x00, 0x00)}, st);
     // -2^22 at x2 against an external 5 V: -5 V / 8
     return equal(s.voltage(), -625'000) && Ext::Conversion::Period == 105ms
         && NauD::puCtrl(NauD::Ldo::external, NauD::Cycle::running) == 0x16
@@ -154,21 +158,21 @@ static_assert([] {
 }());
 
 static_assert([] {
-    auto const s = Nau::Calibration::decode(Bytes{frame(0x08,
-                                                        0xFF,
-                                                        0xFF,
-                                                        0xFB,
-                                                        0x00,
-                                                        0x81,
-                                                        0x23,
-                                                        0x45,
-                                                        0x00,
-                                                        0x01,
-                                                        0x23,
-                                                        0x00,
-                                                        0x80,
-                                                        0x00,
-                                                        0x00)});
+    auto const s = Nau::Calibration::decode(Kvasir::Bytes{frame(0x08,
+                                                                0xFF,
+                                                                0xFF,
+                                                                0xFB,
+                                                                0x00,
+                                                                0x81,
+                                                                0x23,
+                                                                0x45,
+                                                                0x00,
+                                                                0x01,
+                                                                0x23,
+                                                                0x00,
+                                                                0x80,
+                                                                0x00,
+                                                                0x00)});
     return s.calError && !s.calibrating && s.channels[0].offset == -5
         && s.channels[0].gain == 0x0081'2345U && s.channels[1].offset == 0x123
         && s.channels[1].gain == 0x0080'0000U;
@@ -195,9 +199,8 @@ static_assert(NauD::readPeriod(NauD::Rate::sps10) == 105ms
 static_assert(Nau::CalibrationWait == 204ms);
 
 void bringUp() {
-    testCase("NAU7802 bring-up");
-    fresh();
-    Nau7802Model m{};
+    I2cCase const testcase{"NAU7802 bring-up"};
+    Nau7802Model  m{};
     m.code(0x400000);
     FakeBus::respond = std::ref(m);
     Dev<Nau> d{};
@@ -219,7 +222,8 @@ void bringUp() {
     checkEq(m.calibrations, 1, "one calibration");
     // the calibration is given its time before CTRL2 is read back
     {
-        FakeClock::time_point calAt{}, readAt{};
+        FakeClock::time_point calAt{};
+        FakeClock::time_point readAt{};
         for(auto const& t : FakeBus::log) {
             if(t.sent == std::vector<std::uint8_t>{0x02, 0x34}) { calAt = t.at; }
             if(t.isRead() && t.sent == std::vector<std::uint8_t>{0x02}
@@ -240,13 +244,11 @@ void bringUp() {
     check(readOf(0x12, 3), "ADCO in one burst");
     checkEq(d.latest().code, 4'194'304, "the model's code reached the decode");
     checkEq(d.latest().voltage(), 6445, "quarter scale at x128 against 3.3 V");
-    if(failures != 0) { dump(); }
 }
 
 void rejects() {
-    testCase("NAU7802 rejects");
-    fresh();
-    Nau7802Model m{};
+    I2cCase const testcase{"NAU7802 rejects"};
+    Nau7802Model  m{};
     m.revision = 0x0E;
     m.reset();
     FakeBus::respond = std::ref(m);
@@ -267,13 +269,11 @@ void rejects() {
     check(e.calibrations >= 2, "and the next bring-up calibrates again");
     e.calError = false;
     check(runUntil(c, [&] { return c.valid(); }, 3s), "until one succeeds");
-    if(failures != 0) { dump(); }
 }
 
 void runtime() {
-    testCase("NAU7802 settings");
-    fresh();
-    Nau7802Model m{};
+    I2cCase const testcase{"NAU7802 settings"};
+    Nau7802Model  m{};
     m.code(0x400000);
     FakeBus::respond = std::ref(m);
     Dev<Nau> d{};
@@ -285,7 +285,8 @@ void runtime() {
     check(runUntil(d, [&] { return !d.pending(); }, 200ms), "written");
     {
         // six conversions at the new setting go by before the part is read again
-        FakeClock::time_point edge{}, next{};
+        FakeClock::time_point edge{};
+        FakeClock::time_point next{};
         for(std::size_t i = from; i < FakeBus::log.size(); ++i) {
             auto const& t = FakeBus::log[i];
             if(t.sent == std::vector<std::uint8_t>{0x00, 0x96}) { edge = t.at; }
@@ -328,13 +329,11 @@ void runtime() {
         check(perTwo >= 18 && perTwo <= 20, "about 19 in two seconds at 10 SPS");
     }
     check(d.latest().channel == NauD::Channel::ch2, "samples from channel 2");
-    if(failures != 0) { dump(); }
 }
 
 void notReady() {
-    testCase("NAU7802 not ready");
-    fresh();
-    Nau7802Model m{};
+    I2cCase const testcase{"NAU7802 not ready"};
+    Nau7802Model  m{};
     m.code(0x000100);
     FakeBus::respond = std::ref(m);
     Dev<Nau> d{};
@@ -359,13 +358,11 @@ void notReady() {
     m.code(0x000200);
     check(runUntil(d, [&] { return d.seq() > seq; }, 100ms), "CR again: samples again");
     checkEq(d.latest().code, 512, "the new code");
-    if(failures != 0) { dump(); }
 }
 
 void calibrate() {
-    testCase("NAU7802 calibration");
-    fresh();
-    Nau7802Model m{};
+    I2cCase const testcase{"NAU7802 calibration"};
+    Nau7802Model  m{};
     FakeBus::respond = std::ref(m);
     Dev<Nau> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first conversion");
@@ -394,7 +391,8 @@ void calibrate() {
     checkEq(m.calibrations - ran, 1, "one calibration ran");
     {
         // the read-back comes CalibrationWait after the write
-        FakeClock::time_point wrote{}, readBack{};
+        FakeClock::time_point wrote{};
+        FakeClock::time_point readBack{};
         for(std::size_t i = from; i < FakeBus::log.size(); ++i) {
             auto const& t = FakeBus::log[i];
             if(wrote == FakeClock::time_point{} && t.sent == std::vector<std::uint8_t>{0x02, 0x36})
@@ -414,10 +412,10 @@ void calibrate() {
     auto const ticket = d.request<Nau::Calibration>();
     check(runUntil(
             d,
-            [&] { return d.answer<Nau::Calibration>(ticket) != Answer::pending; },
+            [&] { return d.answer<Nau::Calibration>(ticket) != Kvasir::Engine::Answer::pending; },
             100ms),
           "answered");
-    check(d.answer<Nau::Calibration>(ticket) == Answer::ok, "ok");
+    check(d.answer<Nau::Calibration>(ticket) == Kvasir::Engine::Answer::ok, "ok");
     check(readOf(0x02, 15), "0x02..0x10 in one burst");
     auto const& saved = d.latest<Nau::Calibration>();
     checkEq(saved.channels[0].offset, 0x123, "channel 1's offset");
@@ -432,7 +430,6 @@ void calibrate() {
           "OCAL2 and GCAL2 in one burst");
     check(m.reg.word(0x0A) == 0xFF && m.reg.word(0x0C) == 0xFB && m.reg.word(0x0E) == 0x81,
           "in the part's registers");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

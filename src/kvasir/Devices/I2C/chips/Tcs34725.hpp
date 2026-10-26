@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -56,7 +57,7 @@ struct Tcs34725X {
     /// ams TCS3472x. TCS34725.md:848..858: ID (0x12) is 0x44 for the TCS34721/34725 and 0x4D for the
     /// TCS34723/34727. Through the command register: CMD, bit 7 (:632).
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x80 | 0x12, 1, true, 0xFF, 0x44, 0x4D},
+      Engine::RegisterCheck{"id", 0x80 | 0x12, 1, true, 0xFF, 0x44, 0x4D},
     };
     static constexpr Address7                Address = 0x29;
     static constexpr std::array<Address7, 1> Addresses{0x29};
@@ -71,13 +72,14 @@ struct Tcs34725X {
       = Tcs34725Detail::integrationTime(Atime);
 
     static constexpr std::array Init{
-      Step::write(
+      Engine::Step::write(
         {.reg = Cmd | 0x00, .payload = {0x01}, .delay = std::chrono::milliseconds{3}}),   // PON
-      Step::write({.reg = Cmd | 0x01, .payload = {Atime}}),
-      Step::write({.reg = Cmd | 0x0F, .payload = {Control}}),
-      Step::write({.reg     = Cmd | 0x00,
-                   .payload = {0x03},
-                   .delay   = IntegrationTime + std::chrono::milliseconds{10}}),   // PON | AEN
+      Engine::Step::write({.reg = Cmd | 0x01, .payload = {Atime}}),
+      Engine::Step::write({.reg = Cmd | 0x0F, .payload = {Control}}),
+      Engine::Step::write(
+        {.reg     = Cmd | 0x00,
+         .payload = {0x03},
+         .delay   = IntegrationTime + std::chrono::milliseconds{10}}),   // PON | AEN
     };
 
     struct State {
@@ -104,9 +106,9 @@ struct Tcs34725X {
     struct Colour {
         static constexpr auto       Period = readPeriod(Atime);
         static constexpr std::array Steps{
-          Step::read({.reg = CmdAuto | 0x13, .count = 9})};   // STATUS, then the channels
+          Engine::Step::read({.reg = CmdAuto | 0x13, .count = 9})};   // STATUS, then the channels
 
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return readPeriod(state.atime);
         }
 
@@ -116,10 +118,10 @@ struct Tcs34725X {
             std::uint8_t  gain{};    ///< AGAIN, 0..3
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(0) & 0x01U) == 0) { return Outcome<Sample>::reject(); }   // AVALID
-            return Outcome<Sample>::ok(
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(0) & 0x01U) == 0) { return Engine::Outcome<Sample>::reject(); }   // AVALID
+            return Engine::Outcome<Sample>::ok(
               {data.le16(1), data.le16(3), data.le16(5), data.le16(7), state.atime, state.gain});
         }
     };
@@ -130,10 +132,10 @@ struct Tcs34725X {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Integration;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg    = Cmd | 0x01,
                .offset = 0,
                .count  = 1,
@@ -153,14 +155,15 @@ struct Tcs34725X {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Gain;
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return {Step::writeBuffer({.reg = Cmd | 0x0F, .offset = 0, .count = 1}),
-                    Step::write({.reg = Cmd | 0x00, .payload = {0x01}}),    // PON: RGBC stopped
-                    Step::write({.reg = Cmd | 0x00, .payload = {0x03}})};   // PON | AEN again
+            return {
+              Engine::Step::writeBuffer({.reg = Cmd | 0x0F, .offset = 0, .count = 1}),
+              Engine::Step::write({.reg = Cmd | 0x00, .payload = {0x01}}),    // PON: RGBC stopped
+              Engine::Step::write({.reg = Cmd | 0x00, .payload = {0x03}})};   // PON | AEN again
         }
 
         static constexpr void applied(Value const& value,
@@ -169,8 +172,8 @@ struct Tcs34725X {
         }
     };
 
-    using Reads  = List<Colour>;
-    using Writes = List<IntegrationSetting, GainSetting>;
+    using Reads  = Engine::List<Colour>;
+    using Writes = Engine::List<IntegrationSetting, GainSetting>;
 };
 
 /// The part at 101 ms and 4x gain.

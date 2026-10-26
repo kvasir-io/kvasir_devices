@@ -4,6 +4,7 @@
 #include "DcsPanel.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -12,8 +13,8 @@ namespace Kvasir { namespace Co5300 {
 
     namespace Dcs = Display::Dcs;
 
-    /// The Chipone CO5300 AMOLED controller (Co5300_Datasheet.md; confirmed on the
-    /// Waveshare RP2350-Touch-AMOLED-1.75, 466 x 466 at column offset +6):
+    /// The Chipone CO5300 AMOLED controller (Co5300_Datasheet.md; confirmed on a 466 x 466
+    /// module, whose panel sits at column offset +6):
     /// - command write 02h + {00h, CMD, 00h}, pixels 32h + {00h, 2Ch, 00h} on four lanes,
     ///   register read 03h + the same address with no dummy byte (5.2.1 - 5.2.3)
     /// - 50 MHz write ceiling (TSCYC >= 20 ns, 6.4.1), 10 MHz read ceiling
@@ -30,15 +31,18 @@ namespace Kvasir { namespace Co5300 {
         static constexpr int          WindowAlign     = 2;
         static constexpr int          MaxAddress      = 1024;
 
-        static constexpr unsigned long MaxWriteHz = 50'000'000;
-        static constexpr unsigned long MaxReadHz  = 10'000'000;
+        static constexpr Units::Hertz MaxWriteClock = Units::hertz(50'000'000);
+        static constexpr Units::Hertz MaxReadClock  = Units::hertz(10'000'000);
 
         // 3Ah: 55h sets both IFPF and VIPF to 16 bit (line 6156).
         static constexpr std::uint8_t Colmod565 = 0x55;
 
-        static constexpr unsigned ResetPulseMs     = 20;   // tRESW is 10 us; generous on purpose
-        static constexpr unsigned ResetToCommandMs = 10;   // T3 >= 10 ms, and note 5 wants 5 ms
-        static constexpr unsigned SleepOutMs = 120;        // covers T4 (60 ms SLPOUT to DISPON) too
+        /// tRESW is 10 us; generous on purpose
+        static constexpr std::chrono::milliseconds ResetPulse{20};
+        /// T3 >= 10 ms, and note 5 wants 5 ms
+        static constexpr std::chrono::milliseconds ResetToCommand{10};
+        /// covers T4 (60 ms SLPOUT to DISPON) too
+        static constexpr std::chrono::milliseconds SleepOut{120};
 
         // 53h: DBV[7:0] does nothing at all unless BCTRL (D5) is set (line 6481).
         static constexpr bool         Brightness  = true;
@@ -47,7 +51,7 @@ namespace Kvasir { namespace Co5300 {
         static constexpr std::uint8_t ExpectedId1 = 0x33;
 
         /// C4h D7 SPI_WRAM gates SPI writes into panel SRAM and resets *disabled* (line
-        /// 7529): without it every pixel write is dropped inside the panel. No TE pin is wired.
+        /// 7529): without it every pixel write is dropped inside the panel. 34h: TE output off.
         static constexpr std::array<std::uint8_t, 7> InitBytes{
           0xC4,
           1,

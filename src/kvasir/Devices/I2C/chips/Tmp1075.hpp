@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -51,24 +52,21 @@ namespace Tmp1075Detail {
 /// TMP1075N out: it has no device id register (Table 7-5 note). A2 is tied high or low, A1
 /// and A0 may also go to SDA or SCL, which gives the 32 addresses 0x40..0x5F of Table 7-2.
 /// `Timing::LimitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
-template<typename Timing = DefaultTiming>
+template<typename Timing = Engine::DefaultTiming>
 struct Tmp1075 {
     static constexpr std::string_view Name = "TMP1075";
     /// TI TMP1075. TMP1075.md:931: DIEID (0Fh) is 7500h (not on the TMP1075N, :935).
     static constexpr std::array Identity{
-      RegisterCheck{"die-id", 0x0F, 2, true, 0xFFFF, 0x7500},
+      Engine::RegisterCheck{"die-id", 0x0F, 2, true, 0xFFFF, 0x7500},
     };
     static constexpr Address7    Address       = 0x48;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 32> Addresses{
-      0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A,
-      0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55,
-      0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
+    static constexpr auto Addresses = addressRun<0x40, 32>();
 
     static constexpr auto StartupDelay = std::chrono::milliseconds{50};
 
-    using State = Groups::DeviceId;
+    using State = Engine::Groups::DeviceId;
 
     /// What the engine read of the Identity above, once it matched and before Init runs:
     /// `state().deviceId` is the part's own word, read once.
@@ -86,7 +84,8 @@ struct Tmp1075 {
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             CentiDegC temperature{};   ///< 0.01 degC
@@ -94,9 +93,9 @@ struct Tmp1075 {
 
         /// 12 bits left-aligned in a 16-bit word, 1/16 degC each; the low four bits always
         /// read zero, so 0xFFFF is a floating bus and not -0.0625 degC.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
-            if(data.be16(0) == 0xFFFF) { return Outcome<Sample>::reject(); }
-            return Outcome<Sample>::ok(
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
+            if(data.be16(0) == 0xFFFF) { return Engine::Outcome<Sample>::reject(); }
+            return Engine::Outcome<Sample>::ok(
               {Units::centiDegC(static_cast<std::int32_t>(data.s16be(0) >> 4) * 25 / 4)});
         }
     };
@@ -115,8 +114,8 @@ struct Tmp1075 {
         static constexpr bool  AlwaysWrite = true;
         static constexpr Value Initial{};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             std::uint16_t raw = 0;
             if(value.oneShot == OneShot::start) {
                 raw = static_cast<std::uint16_t>(raw | (1U << 15));
@@ -133,19 +132,19 @@ struct Tmp1075 {
                 raw = static_cast<std::uint16_t>(raw | (1U << 8));
             }
             putBe16(buffer, 0, raw);
-            return Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 2});
         }
     };
 
     /// TLOW then THIGH: set<Limits>(Tmp1075<>::Low, Units::centiDegC(7500)).
-    struct Limits : Groups::LimitsReadBack<Timing> {
+    struct Limits : Engine::Groups::LimitsReadBack<Timing> {
         using Value                        = CentiDegC;
         static constexpr std::size_t Items = 2;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         limit,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             // Clamped to the part's -55 .. +125 degC: the 12-bit register holds -128 .. +127.94
             // degC, and past that a setpoint would wrap to the other sign.
             auto const raw        = Units::value(limit);
@@ -154,7 +153,7 @@ struct Tmp1075 {
             putBe16(buffer,
                     0,
                     static_cast<std::uint16_t>(static_cast<std::uint16_t>(sixteenths) << 4));
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = static_cast<std::uint16_t>(0x02 + item), .offset = 0, .count = 2});
         }
     };
@@ -164,8 +163,8 @@ struct Tmp1075 {
     static constexpr std::size_t Low  = 0;
     static constexpr std::size_t High = 1;
 
-    using Reads  = List<Temperature>;
-    using Writes = List<Config, Limits>;
+    using Reads  = Engine::List<Temperature>;
+    using Writes = Engine::List<Config, Limits>;
 };
 
 }   // namespace Kvasir::I2C::Chips

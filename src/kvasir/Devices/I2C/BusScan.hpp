@@ -30,7 +30,7 @@
 ///                                          // for gates the application bound itself)
 ///     scan.start(Scan::Owned::probe);      // at boot, before the parts start: every address
 ///     ...
-///     scan.handler();                      // once per loop turn
+///     scan.turn();                         // once per loop turn
 ///     scan.start();                        // later, while they run: their addresses alone
 ///
 /// Switches in front of every part (none behind another switch's channel), and a bus queue one
@@ -53,7 +53,7 @@ template<typename BusT,
          typename Hints  = NoHints,
          typename Probe  = AddressProbe,
          typename Config = ScanDefaults>
-class BusScan {
+class BusScan : public ScanAddresses {
 public:
     using I2c   = typename BusT::I2cBus;
     using Clock = typename BusT::ClockT;
@@ -77,19 +77,15 @@ public:
                   "a bus scan's probe needs a queue slot of its own beside the Bus's devices: "
                   "raise the bus behavior's QueueDepth");
 
-    /// 0x00..0x07 and 0x78..0x7F are reserved by the I2C specification and never probed.
-    static constexpr std::uint8_t First = 0x08;
-    static constexpr std::uint8_t Last  = 0x77;
-
     /// How long the switches may take to be claimed and set for a segment before the scan
     /// decides one that is not set is not there, and leaves its channels out
-    /// (ScanDefaults::SelectTimeout), until selectTimeout(ms) says otherwise.
+    /// (ScanDefaults::selectTimeout), until setSelectTimeout(ms) says otherwise.
     static constexpr auto SelectTimeout = detail::selectTimeoutOf<Config>();
 
-    void selectTimeout(std::chrono::milliseconds t) { selectTimeout_ = t; }
+    void setSelectTimeout(std::chrono::milliseconds t) { selectTimeout_ = t; }
 
     /// Give up on a probe after `t` from now on.
-    void probeTimeout(std::chrono::milliseconds t) { slot_.timeout(t); }
+    void setProbeTimeout(std::chrono::milliseconds t) { slot_.setTimeout(t); }
 
     /// Whether the addresses the Bus's parts own are probed.
     enum class Owned : std::uint8_t {
@@ -142,8 +138,7 @@ public:
     /// answer too.
     [[nodiscard]] bool found(std::size_t  segment,
                              std::uint8_t address) const {
-        return segment < BusT::Segments && address < 0x80
-            && (found_[segment][address / 64] & (std::uint64_t{1} << (address % 64))) != 0;
+        return segment < BusT::Segments && found_[segment].contains(address);
     }
 
     /// Devices that answered and that no part of the Bus owns, in the last scan.
@@ -160,7 +155,7 @@ public:
     [[nodiscard]] std::uint32_t missingSwitches() const { return missing_; }
 
     /// Once per loop turn.
-    void handler() {
+    void turn() {
         switch(state_) {
         case State::idle: return;
         case State::probe:
@@ -193,9 +188,9 @@ private:
     /// or 0.
     static constexpr auto Owners = [] {
         std::array<std::array<std::uint8_t, 0x80>, BusT::Segments> owners{};
-        detail::forEach<typename BusT::Devices>([&](auto i) {
-            using D =
-              typename detail::Nth<typename BusT::Devices>::template type<decltype(i)::value>;
+        Engine::detail::forEach<typename BusT::Devices>([&](auto i) {
+            using D = typename Engine::detail::Nth<typename BusT::Devices>::template type<
+              decltype(i)::value>;
             owners[BusT::segmentOf(decltype(i)::value)][D::Address & 0x7FU]
               = static_cast<std::uint8_t>(decltype(i)::value + 1U);
         });
@@ -326,10 +321,10 @@ private:
         switch(outcome) {
         case Slot::Outcome::waiting: return;
         case Slot::Outcome::ack:
-            found_[segment_][addr_ / 64] |= std::uint64_t{1} << (addr_ % 64);
+            found_[segment_].insert(addr_);
             if(owner == 0) {
                 ++others_;
-                UC_LOG_I("bus scan {}: {:#04x} answers, and is not a part of the Bus: {}",
+                UC_LOG_D("bus scan {}: {:#04x} answers, and is not a part of the Bus: {}",
                          BusT::segmentName(segment_),
                          addr_,
                          Hints::hint(addr_));
@@ -366,7 +361,7 @@ private:
     void logPart_([[maybe_unused]] std::size_t      index,
                   [[maybe_unused]] std::string_view what) {
         bus_.visit(index, [&]([[maybe_unused]] auto const& d) {
-            UC_LOG_I("bus scan {}: {:#04x} {} {}",
+            UC_LOG_D("bus scan {}: {:#04x} {} {}",
                      BusT::segmentName(segment_),
                      std::remove_cvref_t<decltype(d)>::Address,
                      std::remove_cvref_t<decltype(d)>::Chip::Name,
@@ -409,7 +404,7 @@ private:
         releasePorts_();
         ++scans_;
         state_ = State::idle;
-        UC_LOG_I("bus scan #{}: {} part(s) answering, {} other device(s), {} bus fault(s){}",
+        UC_LOG_D("bus scan #{}: {} part(s) answering, {} other device(s), {} bus fault(s){}",
                  scans_,
                  owned_ == Owned::probe ? partsAnswered_ : bus_.answeringCount(),
                  others_,
@@ -423,22 +418,22 @@ private:
         forPorts_([](std::size_t, auto& port, auto const&) { port.release(); });
     }
 
-    BusT&                                                    bus_;
-    [[no_unique_address]] Ports                              ports_{};
-    Slot                                                     slot_{};
-    std::array<std::array<std::uint64_t, 2>, BusT::Segments> found_{};
-    typename Clock::time_point                               askedAt_{};
-    std::chrono::milliseconds                                selectTimeout_{SelectTimeout};
-    std::size_t                                              segment_{};
-    std::size_t                                              others_{};
-    std::size_t                                              faults_{};
-    std::size_t                                              partsAnswered_{};
-    std::uint32_t                                            scans_{};
-    std::uint32_t                                            missing_{};
-    State                                                    state_{State::idle};
-    Owned                                                    owned_{Owned::skip};
-    std::uint8_t                                             addr_{First};
-    bool                                                     asking_{};
+    BusT&                                  bus_;
+    [[no_unique_address]] Ports            ports_{};
+    Slot                                   slot_{};
+    std::array<AddressSet, BusT::Segments> found_{};
+    typename Clock::time_point             askedAt_{};
+    std::chrono::milliseconds              selectTimeout_{SelectTimeout};
+    std::size_t                            segment_{};
+    std::size_t                            others_{};
+    std::size_t                            faults_{};
+    std::size_t                            partsAnswered_{};
+    std::uint32_t                          scans_{};
+    std::uint32_t                          missing_{};
+    State                                  state_{State::idle};
+    Owned                                  owned_{Owned::skip};
+    std::uint8_t                           addr_{First};
+    bool                                   asking_{};
 };
 
 }   // namespace Kvasir::I2C

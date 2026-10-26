@@ -1,7 +1,9 @@
 #pragma once
 
+#include "../Features.hpp"
 #include "../Log.hpp"
 #include "Device.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <chrono>
 #include <concepts>
@@ -18,8 +20,8 @@
 /// Which bridge a part is behind is said once, in its type, and the engine does the rest:
 ///
 ///     struct ExtPort : Kvasir::I2C::GpioBridge<HW::Pin::extEnable> {       // BridgeGpio.hpp
-///         static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
-///         static constexpr auto Settle   = std::chrono::milliseconds{20};
+///         static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
+///         static constexpr auto settle   = std::chrono::milliseconds{20};
 ///     };
 ///     using Sht = Kvasir::I2C::BehindBridge<ExtPort, Kvasir::I2C::Device<I2c, Clock, Chips::Sht3x>>;
 ///     ...
@@ -29,24 +31,24 @@
 /// While its bridge is not `on` a device sends nothing, counts nothing, is not probed and says
 /// `Link::offline`; latest() keeps the last sample, valid() is false, what the application
 /// sets stays owed and a request<G>() stays pending. When the bridge is `on` again the device
-/// goes on by itself, the way the bridge's `WhileOff` says: brought up from the start
+/// goes on by itself, the way the bridge's `whileOff` says: brought up from the start
 /// (`unpowered`: StartupDelay, the identity, Init, every owned write group sent again,
 /// bringUps() steps) or carrying on where it was (`disconnected`).
 ///
 /// A bridge description is a type with static members:
 ///
-///   - `WhileOff` (Device.hpp), required: it is the one thing nobody can guess;
-///   - `Settle`: from switching on to the first transaction (default 1 ms), which is also the
+///   - `whileOff` (Device.hpp), required: it is the one thing nobody can guess;
+///   - `settle`: from switching on to the first transaction (default 1 ms), which is also the
 ///     debounce of a sensed bridge -- it starts again whenever the input goes away meanwhile;
-///   - `Start`: `BridgeStart::off` (default) or `on` at the first handler() turn;
+///   - `start`: `BridgeStart::off` (default) or `on` at the first turn();
 ///   - `Claims`, optional: the pin, for the Startup list;
-///   - `Mode`: `BridgeMode::manual` (default) or `switched` -- the bridge used as if it were a
+///   - `mode`: `BridgeMode::manual` (default) or `switched` -- the bridge used as if it were a
 ///     channel of a switch: the engine switches it on for the transactions of the parts behind
 ///     it, leaves it on while nobody else wants the wire, and switches it off for another
 ///     bridge of its ExclusiveGroup or for a part in front with a BridgeFrontGate. The parts are
 ///     not offline meanwhile, they wait. on() and off() enable and disable it (disabled: the
-///     parts are offline); it starts enabled. Needs WhileOff::disconnected;
-///   - `Addresses`: `BridgeAddresses::shared` (default) or `separate` -- the application
+///     parts are offline); it starts enabled. Needs whileOff = WhileOff::disconnected;
+///   - `addresses`: `BridgeAddresses::shared` (default) or `separate` -- the application
 ///     promises that this bridge and another one are never active together, and the Bus's
 ///     address check then lets a part behind this one share an address with a part behind the
 ///     other. It never does with a part behind no bridge: that one is always on the wire;
@@ -69,11 +71,11 @@
 /// it is gone -- and the transaction it took with it is dropped by the engine, not counted.
 ///
 /// A Bus owns the lines of the bridges its devices name and handles them (Bus.hpp). A device
-/// outside a Bus is bound by hand: `line.handler()` each turn before the device's, and once
+/// outside a Bus is bound by hand: `line.turn()` each turn before the device's, and once
 /// `device.gate().bind(line)`.
 namespace Kvasir::I2C {
 
-/// What a bridge is at the first handler() turn.
+/// What a bridge is at the first turn().
 enum class BridgeStart : std::uint8_t { off, on };
 
 /// Which level of its enable makes a bridge active.
@@ -97,7 +99,7 @@ enum class BridgeAddresses : std::uint8_t {
 
 enum class BridgeState : std::uint8_t {
     off,        ///< not active: the parts behind it are offline
-    settling,   ///< switched on, or sensed active: `Settle` runs, the parts are still offline
+    settling,   ///< switched on, or sensed active: `settle` runs, the parts are still offline
     on,         ///< active: the parts talk
     closing,    ///< asked to go off: nothing new starts, the pin moves when the wire is free
 };
@@ -120,39 +122,22 @@ namespace detail {
 
     template<typename B>
     [[nodiscard]] constexpr std::chrono::milliseconds bridgeSettle() {
-        if constexpr(requires { B::Settle; }) {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(B::Settle);
-        } else {
-            return std::chrono::milliseconds{1};
-        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+          KVASIR_CONFIG_OR(B, settle, std::chrono::milliseconds{1}));
     }
 
     template<typename B>
-    inline constexpr bool bridgeSwitched = [] {
-        if constexpr(requires { B::Mode; }) {
-            return B::Mode == BridgeMode::switched;
-        } else {
-            return false;
-        }
-    }();
+    inline constexpr bool bridgeSwitched
+      = KVASIR_CONFIG_OR(B, mode, BridgeMode::manual) == BridgeMode::switched;
 
     template<typename B>
-    inline constexpr bool bridgeSeparates = [] {
-        if constexpr(requires { B::Addresses; }) {
-            return B::Addresses == BridgeAddresses::separate;
-        } else {
-            return false;
-        }
-    }();
+    inline constexpr bool bridgeSeparates
+      = KVASIR_CONFIG_OR(B, addresses, BridgeAddresses::shared) == BridgeAddresses::separate;
 
     /// A switched bridge is there to be used, so it starts enabled unless it says otherwise.
     template<typename B>
     [[nodiscard]] constexpr BridgeStart bridgeStart() {
-        if constexpr(requires { B::Start; }) {
-            return B::Start;
-        } else {
-            return bridgeSwitched<B> ? BridgeStart::on : BridgeStart::off;
-        }
+        return KVASIR_CONFIG_OR(B, start, bridgeSwitched<B> ? BridgeStart::on : BridgeStart::off);
     }
 
     /// The device a PartBridge is switched through, and the bring-ups of it the line has seen.
@@ -168,16 +153,6 @@ namespace detail {
 
         PartT*        part{nullptr};
         std::uint16_t bringUps{};
-    };
-
-    /// The bridge's pin claim, if it has one, becomes the line's (as PowerRail's switch).
-    template<typename B>
-    struct BridgeClaims {};
-
-    template<typename B>
-        requires requires { typename B::Claims; }
-    struct BridgeClaims<B> {
-        using Claims = typename B::Claims;
     };
 }   // namespace detail
 
@@ -233,6 +208,27 @@ public:
     }
 
 protected:
+    // What BridgeLine's state machine drives; the parts behind the bridge see it through the
+    // public members above only.
+    void setState(BridgeState s) { state_ = s; }
+
+    void stepGeneration() { ++generation_; }
+
+    [[nodiscard]] std::uint8_t closedHolders() const { return closedHolders_; }
+
+    [[nodiscard]] bool requested() const { return requested_; }
+
+    [[nodiscard]] bool closeRequested() const { return closeRequested_; }
+
+    void clearRequest() { requested_ = false; }
+
+    void clearCloseRequest() { closeRequested_ = false; }
+
+    [[nodiscard]] bool enabled() const { return enabled_; }
+
+    void setEnabled(bool e) { enabled_ = e; }
+
+private:
     BridgeState   state_{BridgeState::off};
     std::uint32_t generation_{};
     std::uint8_t  holders_{};
@@ -247,11 +243,11 @@ protected:
 template<typename Clock, typename B>
 class BridgeLine
   : public BridgeLink<B>
-  , public detail::BridgeClaims<B> {
+  , public Kvasir::detail::ForwardClaims<B> {   // the bridge's pin claim becomes the line's
     static_assert(
-      requires { B::WhileOff; },
+      requires { B::whileOff; },
       "a bridge description says what its parts go through while it is off: "
-      "static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered; (or "
+      "static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered; (or "
       "::disconnected)");
     static_assert(detail::DrivenBridge<B> != detail::SensedBridge<B>,
                   "a bridge description has either drive(bool), for a bridge the firmware "
@@ -260,7 +256,7 @@ class BridgeLine
     static_assert(!detail::bridgeSwitched<B> || detail::DrivenBridge<B>,
                   "BridgeMode::switched is for a bridge the firmware switches: drive(bool) or a "
                   "PartBridge");
-    static_assert(!detail::bridgeSwitched<B> || B::WhileOff == WhileOff::disconnected,
+    static_assert(!detail::bridgeSwitched<B> || B::whileOff == Engine::WhileOff::disconnected,
                   "BridgeMode::switched switches the bridge off between the transactions of its "
                   "parts: they have to keep their registers meanwhile (WhileOff::disconnected)");
 
@@ -279,23 +275,23 @@ public:
         requires Driven
     {
         if constexpr(Switched) {
-            if(!this->enabled_) { ++this->generation_; }   // the parts are back from offline
+            if(!this->enabled()) { this->stepGeneration(); }   // the parts are back from offline
         }
-        this->enabled_ = true;
+        this->setEnabled(true);
     }
 
     /// Switch it off: the parts are offline from now on, the pin follows when the wire is free.
     void off()
         requires Driven
     {
-        this->enabled_ = false;
-        if(this->state_ == BridgeState::on) { this->state_ = BridgeState::closing; }
+        this->setEnabled(false);
+        if(this->state() == BridgeState::on) { this->setState(BridgeState::closing); }
     }
 
-    [[nodiscard]] bool wanted() const { return this->enabled_; }
+    [[nodiscard]] bool wanted() const { return this->enabled(); }
 
     /// Times the parts came back from offline (manual: times it became `on`), for a status page.
-    [[nodiscard]] std::uint32_t activations() const { return this->generation_; }
+    [[nodiscard]] std::uint32_t activations() const { return this->generation(); }
 
     /// Times a switched bridge was switched on.
     [[nodiscard]] std::uint32_t switchOns() const { return switchOns_; }
@@ -304,7 +300,7 @@ public:
     [[nodiscard]] TimePoint servedAt() const { return servedAt_; }
 
     /// The device the bridge is switched through (a PartBridge). Called once, before the first
-    /// handler() turn; a Bus does it.
+    /// turn(); a Bus does it.
     void bindPart(typename detail::BridgePart<B>::PartT& part)
         requires PartDriven
     {
@@ -315,8 +311,8 @@ public:
     /// is off from leaving `off`: how a Bus holds the members of an ExclusiveGroup apart.
     /// `contested` tells a switched bridge that another one of its group waits for the wire:
     /// it lets no new run start and goes off when the last one is over.
-    void handler(bool mayStart  = true,
-                 bool contested = false) {
+    void turn(bool mayStart  = true,
+              bool contested = false) {
         auto const now = Clock::now();
         if(!started_) {
             if constexpr(PartDriven) {
@@ -333,72 +329,72 @@ public:
                 drive_(false);   // a defined level, and an output, before anything else
             }
         }
-        if constexpr(!Driven) { this->enabled_ = B::active(); }
+        if constexpr(!Driven) { this->setEnabled(B::active()); }
         if constexpr(PartDriven) { partTurn_(); }
 
         // What the state machine follows. Manual: what is wanted of it. Switched: on for the
         // parts that ask, left on while nobody else wants the wire (switching costs a Settle),
         // off for another bridge of the group or a part in front that does.
-        bool wanted = this->enabled_;
+        bool wanted = this->enabled();
         if constexpr(Switched) {
-            bool const demand     = this->requested_ || this->holders_ != 0;
-            bool const closeAsked = this->closeRequested_ || this->closedHolders_ != 0;
-            this->requested_      = false;
-            this->closeRequested_ = false;
-            switch(this->state_) {
-            case BridgeState::off:      wanted = this->enabled_ && !closeAsked && demand; break;
-            case BridgeState::settling: wanted = this->enabled_ && !closeAsked; break;
-            case BridgeState::on:       wanted = this->enabled_ && !closeAsked && !contested; break;
-            case BridgeState::closing:  wanted = false; break;   // off first, then a clean start
+            bool const demand     = this->requested() || this->holders() != 0;
+            bool const closeAsked = this->closeRequested() || this->closedHolders() != 0;
+            this->clearRequest();
+            this->clearCloseRequest();
+            switch(this->state()) {
+            case BridgeState::off:      wanted = this->enabled() && !closeAsked && demand; break;
+            case BridgeState::settling: wanted = this->enabled() && !closeAsked; break;
+            case BridgeState::on:      wanted = this->enabled() && !closeAsked && !contested; break;
+            case BridgeState::closing: wanted = false; break;   // off first, then a clean start
             }
         } else {
-            mayStart              = mayStart && this->closedHolders_ == 0;
-            this->closeRequested_ = false;
+            mayStart = mayStart && this->closedHolders() == 0;
+            this->clearCloseRequest();
         }
 
-        switch(this->state_) {
+        switch(this->state()) {
         case BridgeState::off:
             if(wanted && mayStart) {
                 drive_(true);
-                until_       = now + Settle;
-                this->state_ = BridgeState::settling;
+                until_ = now + Settle;
+                this->setState(BridgeState::settling);
             }
             break;
         case BridgeState::settling:
             if(!wanted) {
                 drive_(false);
-                this->state_ = BridgeState::off;
+                this->setState(BridgeState::off);
             } else if(!driven_()) {
                 until_ = now + Settle;   // Settle runs from the enable reaching the bridge
             } else if(now > until_) {
-                this->state_ = BridgeState::on;
-                servedAt_    = now;
+                this->setState(BridgeState::on);
+                servedAt_ = now;
                 ++switchOns_;
                 if constexpr(!Switched) {
-                    ++this->generation_;
-                    UC_LOG_I("bridge: on");
+                    this->stepGeneration();
+                    UC_LOG_D("bridge: on");
                 }
             }
             break;
         case BridgeState::on:
             if(wanted) { break; }
             if constexpr(Driven) {
-                this->state_ = BridgeState::closing;
+                this->setState(BridgeState::closing);
             } else {
-                this->state_ = BridgeState::off;
-                UC_LOG_I("bridge: off");
+                this->setState(BridgeState::off);
+                UC_LOG_D("bridge: off");
             }
             break;
         case BridgeState::closing:
             if(wanted) {
                 // Nothing was cut. The parts of a manual bridge went offline when the closing
                 // began, so they come back as from a real one: what it costs is a bring-up.
-                this->state_ = BridgeState::on;
-                if constexpr(!Switched) { ++this->generation_; }
-            } else if(this->holders_ == 0) {
+                this->setState(BridgeState::on);
+                if constexpr(!Switched) { this->stepGeneration(); }
+            } else if(this->holders() == 0) {
                 drive_(false);
-                this->state_ = BridgeState::off;
-                if constexpr(!Switched) { UC_LOG_I("bridge: off"); }
+                this->setState(BridgeState::off);
+                if constexpr(!Switched) { UC_LOG_D("bridge: off"); }
             }
             break;
         }
@@ -438,13 +434,13 @@ private:
             return;
         }
         if(!part_.part->broughtUp(part_.bringUps)) { return; }
-        if(this->state_ == BridgeState::on || this->state_ == BridgeState::closing) {
+        if(this->state() == BridgeState::on || this->state() == BridgeState::closing) {
             UC_LOG_W("bridge: the part it is switched through started over");
-            if(this->enabled_) {
-                until_       = Clock::now() + Settle;
-                this->state_ = BridgeState::settling;
+            if(this->enabled()) {
+                until_ = Clock::now() + Settle;
+                this->setState(BridgeState::settling);
             } else {
-                this->state_ = BridgeState::off;
+                this->setState(BridgeState::off);
             }
         }
     }
@@ -476,7 +472,7 @@ namespace detail {
 /// Behind bridge `B`, as a gate. `Inner` is the gate the part would have without the bridge:
 /// NoGate, or the channel of a switch (Mux.hpp) when both are between the part and the
 /// controller. The bridge is asked first, so a part that is offline never takes a switch.
-template<typename B, typename Inner = NoGate>
+template<typename B, typename Inner = Engine::NoGate>
 struct BridgeGate : detail::InnerSwitch<Inner> {
     static constexpr bool Gated   = true;
     static constexpr bool Bridged = true;
@@ -621,8 +617,8 @@ using BehindBridge = Device<typename D::I2cBus,
 /// A bridge the firmware only senses, from a `Source` with `static bool active()`: a
 /// plug-detect pin, a power-good line, a flag another task keeps.
 ///     struct Dock : Kvasir::I2C::SensedBridge<DockDetect> {
-///         static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
-///         static constexpr auto Settle   = std::chrono::milliseconds{200};   // and debounce
+///         static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
+///         static constexpr auto settle   = std::chrono::milliseconds{200};   // and debounce
 ///     };
 template<typename Source>
 struct SensedBridge {
@@ -633,7 +629,7 @@ struct SensedBridge {
 /// expander, a bit of a load switch -- as a base for its description: `Mask` of write group `W`
 /// of device `PartT`, whose Value is an unsigned integer.
 ///     struct ExtPort : Kvasir::I2C::PartBridge<Expander, Chips::Pcf8574::Port, 0x10> {
-///         static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
+///         static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
 ///     };
 /// The write goes through the engine like any other, so the parts behind the bridge wait for
 /// it; and when the expander is brought up again the bridge counts as having been off.

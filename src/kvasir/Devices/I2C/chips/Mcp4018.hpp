@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -34,7 +35,7 @@ struct Mcp4018 {
 
     struct Wiper {
         static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{Step::receive({.count = 1, .offset = 0})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t tap{};
@@ -59,15 +60,15 @@ struct Mcp4018 {
         using Value                        = std::uint8_t;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value & MaxTap);
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Wiper>;
-    using Writes = List<Tap>;
+    using Reads  = Engine::List<Wiper>;
+    using Writes = Engine::List<Tap>;
 };
 
 }   // namespace Kvasir::I2C::Chips

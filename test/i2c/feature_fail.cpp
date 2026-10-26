@@ -9,7 +9,7 @@ namespace {
 
 /// A bus as a chip package's driver is: no Features member, so the defaults - switchable off.
 struct PlainBus : Kvasir::Test::FakeBus {
-    static constexpr Kvasir::I2C::EngineFeatures Features{};
+    static constexpr Kvasir::Engine::EngineFeatures Features{};
 };
 
 struct Switched {

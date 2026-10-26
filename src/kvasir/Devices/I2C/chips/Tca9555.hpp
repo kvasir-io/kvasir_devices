@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -23,16 +25,16 @@ struct Tca9555 {
     static constexpr Address7         Address       = 0x20;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27};
+    static constexpr auto Addresses = addressRun<0x20, 8>();
 
     static constexpr auto StartupDelay = std::chrono::milliseconds{50};
 
-    static constexpr std::array Init{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
     struct Pins {
         static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             std::uint16_t port{};   ///< port 0 | port 1 << 8
@@ -46,28 +48,15 @@ struct Tca9555 {
         [[nodiscard]] static constexpr Sample decode(Bytes data) { return {data.le16(0)}; }
     };
 
-    /// One 16-bit pair, with the reset value the chip powers up in: written again after
-    /// every bring-up. Same shape as Mcp23017::Pair.
-    template<std::uint16_t Reg, std::uint16_t Init>
-    struct Pair {
-        using Value                          = std::uint16_t;
-        static constexpr std::size_t Bytes   = 2;
-        static constexpr Value       Initial = Init;
+    /// One 16-bit pair each, port 0 in the low byte, with the reset value the chip powers up in:
+    /// written again after every bring-up.
+    using Direction = Engine::Groups::WordLe<0x06, 0xFFFF>;   ///< 1 = input
+    using Output    = Engine::Groups::WordLe<0x02, 0xFFFF>;
+    using Polarity  = Engine::Groups::WordLe<0x04, 0x0000>;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
-            putLe16(buffer, 0, value);
-            return Step::writeBuffer({.reg = Reg, .offset = 0, .count = 2});
-        }
-    };
-
-    using Direction = Pair<0x06, 0xFFFF>;   ///< 1 = input
-    using Output    = Pair<0x02, 0xFFFF>;
-    using Polarity  = Pair<0x04, 0x0000>;
-
-    using Reads = List<Pins>;
+    using Reads = Engine::List<Pins>;
     /// Output before Direction: the latches hold their value before a pin becomes an output.
-    using Writes = List<Output, Direction, Polarity>;
+    using Writes = Engine::List<Output, Direction, Polarity>;
 };
 
 }   // namespace Kvasir::I2C::Chips

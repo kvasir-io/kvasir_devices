@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,8 +29,7 @@ struct Cy15b064j {
     static constexpr Address7         Address       = 0x50;
     static constexpr std::size_t      RegisterBytes = 2;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57};
+    static constexpr auto Addresses = addressRun<0x50, 8>();
 
     static_assert(ChunkBytes >= 1 && ChunkBytes <= 128,
                   "a chunk is 1..128 bytes");
@@ -39,7 +39,7 @@ struct Cy15b064j {
 
     /// A one-byte read from address zero: the bring-up transaction, and the probe an absent
     /// part is looked for with.
-    static constexpr std::array Init{Step::read({.reg = 0x0000, .count = 1, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x0000, .count = 1, .offset = 0})};
 
     struct Block {
         struct Request {
@@ -49,7 +49,7 @@ struct Cy15b064j {
 
         /// The address goes at the front of the buffer and the data behind it.
         static constexpr std::array Steps{
-          Step::readIndirect({.regOffset = 0, .count = ChunkBytes, .offset = 2})};
+          Engine::Step::readIndirect({.regOffset = 0, .count = ChunkBytes, .offset = 2})};
 
         /// The address a request reads from: clamped to the last byte of the array.
         [[nodiscard]] static constexpr std::uint16_t start(Request const& r) {
@@ -110,13 +110,13 @@ struct Cy15b064j {
             return static_cast<std::uint8_t>(n);
         }
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             auto const n = fits(value);
             for(std::size_t i = 0; i < n; ++i) { buffer[i] = std::byte{value.data[i]}; }
-            return Step::writeBuffer({.reg    = value.address,
-                                      .offset = 0,
-                                      .count  = n});   // F-RAM: no write cycle to wait out
+            return Engine::Step::writeBuffer({.reg    = value.address,
+                                              .offset = 0,
+                                              .count  = n});   // F-RAM: no write cycle to wait out
         }
     };
 
@@ -127,8 +127,8 @@ struct Cy15b064j {
     static constexpr std::size_t WriteChunkBytes = ChunkBytes;
     static constexpr std::size_t WritePageBytes  = 0;
 
-    using Reads  = List<Block>;
-    using Writes = List<Store>;
+    using Reads  = Engine::List<Block>;
+    using Writes = Engine::List<Store>;
 };
 
 }   // namespace Kvasir::I2C::Chips

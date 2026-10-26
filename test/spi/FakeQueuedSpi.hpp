@@ -2,7 +2,9 @@
 
 /// A queued SPI master for host tests: the real QueueCore over a fake policy that hands every byte
 /// to the attached part model while its CS is low. A transfer completes at the next tick() unless
-/// `stall` holds it back. Every frame is recorded in `Bus::frames`.
+/// `stall` holds it back. Every frame is recorded in `Bus::frames`. `Timing` is the core's (QueueCoreDefaults' shape:
+/// a bus with cancel and deadlines names its features there); by default the counters are on (a firmware's bus turns
+/// them on itself) so the drivers' tests can read them.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -30,18 +32,26 @@ struct Frame {
     std::vector<std::uint8_t> miso{};
 };
 
-template<typename Tag>
+/// The default bus features with the counters on.
+struct CountingTiming : Kvasir::SPI::QueueCoreDefaults {
+    static constexpr Kvasir::Bus::QueueFeatures queueFeatures{.counters = true};
+};
+
+template<typename Tag, typename Timing = CountingTiming>
 struct Bus {
     struct Hw {
         struct Snapshot {};
 
         using Setup = QueuedSpi::Setup;
 
-        static constexpr unsigned Instance = 0;
+        static constexpr unsigned instance = 0;
 
-        static void mask() {}
+        static void mask() {
+            ++maskCalls;
+            masked = true;
+        }
 
-        static void unmask() {}
+        static void unmask() { masked = false; }
 
         static void configure(Setup const& s) { setup = s; }
 
@@ -89,7 +99,7 @@ struct Bus {
         static inline Setup setup{};
     };
 
-    using Core = Kvasir::SPI::QueueCore<Hw, FakeClock, 8, 16>;
+    using Core = Kvasir::SPI::QueueCore<Hw, FakeClock, 8, 16, Timing>;
 
     static inline std::vector<Frame>                        frames{};
     static inline std::function<std::uint8_t(std::uint8_t)> exchange{};
@@ -100,11 +110,14 @@ struct Bus {
     static inline bool                      pending{};
     static inline std::uint32_t             pendingGen{};
     static inline bool                      stall{};
-    /// handler() completes the transfer on the wire, for drivers that spin on it (SpiDcsBus).
+    /// turn() completes the transfer on the wire, for drivers that spin on it (SpiDcsBus).
     static inline bool autoComplete{};
     static inline bool overrunNext{};
     static inline int  aborts{};
     static inline int  reinits{};
+    /// Hw::mask() calls since reset(), and whether the line is masked now.
+    static inline int  maskCalls{};
+    static inline bool masked{};
 
     /// The transfer that is out completes now, as the RX DMA would.
     static void tick() {
@@ -127,13 +140,14 @@ struct Bus {
         stall        = false;
         autoComplete = false;
         overrunNext  = false;
-        aborts = reinits = 0;
+        aborts = reinits = maskCalls = 0;
+        masked                       = false;
     }
 
     using Request = typename Core::RequestT;
     using Setup   = QueuedSpi::Setup;
 
-    static constexpr Setup setup(Kvasir::SPI::ClockMode mode,
+    static constexpr Setup setup(Kvasir::Hal::ClockMode mode,
                                  Kvasir::Units::Hertz   maxClock) {
         auto const hz = maxClock.numerical_value_in(Kvasir::Units::si::hertz);
         return Setup{static_cast<std::uint8_t>(mode), hz, Kvasir::SPI::usPerBitQ10(hz)};
@@ -143,9 +157,9 @@ struct Bus {
 
     static void releaseHold(Kvasir::SPI::Lines const& l) { Core::releaseHold(l); }
 
-    static void handler() {
+    static void turn() {
         if(autoComplete) { tick(); }
-        Core::handler();
+        Core::turn();
     }
 };
 

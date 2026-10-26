@@ -1,17 +1,12 @@
 /// LTC2401/LTC2402: the decode of every status combination of LTC2401_LTC2402.md Tables 1 and 2, and
 /// the Reader over the queued master against a model of the part - EOC on SDO while CS is low, a
 /// 32-bit result clocked out on demand, SDO high again (a new conversion) after the 32nd bit.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/chips/Ltc2400.hpp>
 #include <support/FakeClock.hpp>
 
@@ -258,7 +253,7 @@ using Sdo = Spi::Drdy;
 struct Part {
     std::uint32_t             result{word(true, false, 0x80'0000)};
     bool                      present{true};
-    FakeClock::time_point     doneAt{};
+    FakeClock::time_point     doneAt;
     std::chrono::microseconds conversion{160'230};
     int                       bits{};   ///< of the frame being shifted out, 0 = not in data output
     int                       frames{};
@@ -307,30 +302,25 @@ std::uint8_t onByte(std::uint8_t mosi) { return part->exchange(mosi); }
 
 void fresh(Part&        p,
            std::uint8_t floating = 0xFF) {
-    Bus::reset();
-    Pins::reset();
-    FakeClock::set(1s);
-    Log::reset();
-    part              = &p;
-    p.doneAt          = FakeClock::now() + 100ms;   // a conversion running at start
-    Bus::floating     = floating;
-    Bus::partSelected = [] { return part->present && !Pins::level[Cs::id]; };
-    if(p.present) { Bus::exchange = onByte; }
+    // selected only while the part is there at all: an absent one leaves MISO floating
+    Spi::Harness::fresh<Bus>(p.present ? onByte : nullptr, 1s, [] {
+        return part->present && Spi::csLow();
+    });
+    part                 = &p;
+    p.doneAt             = FakeClock::now() + 100ms;   // a conversion running at start
+    Bus::floating        = floating;
     Pins::level[Sdo::id] = floating != 0;
 }
 
+/// 1 ms turns, the clock first, then the part drives SDO.
 template<typename R>
 void run(R&                        r,
          Part&                     p,
          std::chrono::milliseconds span) {
-    auto const until = FakeClock::now() + span;
-    while(FakeClock::now() < until) {
-        FakeClock::advance(1ms);
-        p.drive();
-        Bus::handler();
-        r.handler();
-        Bus::tick();
-    }
+    Spi::Harness::runFor<Bus>(r,
+                              span,
+                              Spi::Loop{.step = 1ms, .order = Spi::ClockOrder::first},
+                              [&p] { p.drive(); });
 }
 
 void reads() {

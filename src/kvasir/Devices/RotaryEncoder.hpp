@@ -1,11 +1,13 @@
 #pragma once
 
 #include "kvasir/Register/Register.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <type_traits>
 
 namespace Kvasir {
 
@@ -35,21 +37,11 @@ struct RotaryEncoder {
     };
 
     struct Config : UserConfig {
-        static constexpr auto useAcceleration = [] {
-            if constexpr(requires { UserConfig::useAcceleration; }) {
-                return UserConfig::useAcceleration;
-            } else {
-                return false;
-            }
-        }();
+        static constexpr auto useAcceleration
+          = KVASIR_CONFIG_OR(UserConfig, useAcceleration, false);
 
-        static constexpr auto acceleration = [] {
-            if constexpr(requires { UserConfig::acceleration; }) {
-                return UserConfig::acceleration;
-            } else {
-                return DefaultAcceleration;
-            }
-        }();
+        static constexpr auto acceleration
+          = KVASIR_CONFIG_OR(UserConfig, acceleration, DefaultAcceleration);
     };
 
     static void edgeCallback() {
@@ -69,7 +61,16 @@ struct RotaryEncoder {
             }
         }
 
-        if(Kvasir::Register::get<0>(pins) == Kvasir::Register::get<1>(pins)) {
+        bool const down = Kvasir::Register::get<0>(pins) == Kvasir::Register::get<1>(pins);
+        if constexpr(std::is_arithmetic_v<ValueType>) {
+            // what `cnt2 -= addValue` does, spelled out: the arithmetic in the common type of the
+            // two (std::size_t for a 32-bit counter: wraps, no signed overflow), then back to ValueType
+            using Wide = decltype(cnt2 + addValue);
+            cnt2       = down ? static_cast<ValueType>(static_cast<Wide>(cnt2) - addValue)
+                              : static_cast<ValueType>(static_cast<Wide>(cnt2) + addValue);
+        } else if(down) {
+            // a class type (SaturatingValue) has its own operators: they saturate at its bounds,
+            // which the spelled-out form would skip (5 - 20 would wrap and clamp to the maximum)
             cnt2 -= addValue;
         } else {
             cnt2 += addValue;

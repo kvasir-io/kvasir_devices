@@ -10,17 +10,15 @@
 #include <vector>
 
 using namespace Kvasir::Test;
+using namespace Kvasir::Test::Usb;
+using DT = Kvasir::USB::DescriptorType;
 
 namespace {
-struct Config {
-    static constexpr auto        ManufacturerString = "Kvasir host test";
-    static constexpr auto        ProductString      = "bulk";
-    static constexpr auto        SerialNumberString = "1";
-    static constexpr auto        ProductVersionBCD  = 0x0100;
-    static constexpr auto        VendorID           = 0x1209;
-    static constexpr auto        ProductID          = 0x0003;
-    static constexpr std::size_t SendBufferSize     = 256;
-    static constexpr std::size_t RecvBufferSize     = 256;
+struct Config : TestConfig {
+    static constexpr auto        productString  = "bulk";
+    static constexpr auto        productId      = 0x0003;
+    static constexpr std::size_t sendBufferSize = 256;
+    static constexpr std::size_t recvBufferSize = 256;
 };
 
 struct ResetActions {
@@ -54,13 +52,18 @@ void run(char const* name) {
     Host::plugIn();
     check(Host::enumerate(), "enumerated");
     {
-        auto const dev = Host::getDescriptor(1, 0, 18);
+        auto const dev = Host::getDescriptor(DT::device, 0, 18);
         check(dev.ok() && std::to_integer<int>(dev.data[2]) == 0x01
                 && std::to_integer<int>(dev.data[3]) == 0x02,
               "bcdUSB 0x0201");
-        auto const bos = Host::getDescriptor(0x0F, 0, 255);
+        auto const bos = Host::getDescriptor(DT::bos, 0, 255);
         check(bos.ok() && bos.data.size() > 5, "a BOS descriptor");
-        auto const msos = Host::controlIn(Host::makeSetup(0xC0, 0x57, 0, 7, 1024));
+        auto const msos
+          = Host::controlIn(Host::makeSetup(vendorFromDevice,
+                                            std::uint8_t{0x57},
+                                            0,
+                                            Kvasir::USB::WinUsb::MsOs20::DescriptorIndex,
+                                            1024));
         check(msos.ok() && msos.data.size() > 10, "the MS OS 2.0 descriptor set");
     }
 
@@ -92,12 +95,16 @@ void run(char const* name) {
     {
         check(Data::send(pattern(200, 4)), "a message in flight on interface 0");
         checkEq(Stream::write(pattern(100, 5)), 100U, "and stream bytes on interface 1");
-        check(Host::controlOut(Host::makeSetup(0x01, 11, 0, 1, 0)).ok(), "SET_INTERFACE(1, 0)");
+        check(Host::controlOut(Host::makeSetup(toInterface, Setup::Request::setInterface, 0, 1, 0))
+                .ok(),
+              "SET_INTERFACE(1, 0)");
         check(Host::bulkIn(2).data.empty(), "the stream's bytes are dropped");
         check(Host::bulkIn(1).data == pattern(200, 4), "the message is not");
-        check(Host::controlOut(Host::makeSetup(0x01, 11, 1, 1, 0)).stalled,
+        check(Host::controlOut(Host::makeSetup(toInterface, Setup::Request::setInterface, 1, 1, 0))
+                .stalled,
               "there is no alternate setting 1");
-        auto const alt = Host::controlIn(Host::makeSetup(0x81, 10, 0, 1, 1));
+        auto const alt
+          = Host::controlIn(Host::makeSetup(fromInterface, Setup::Request::getInterface, 0, 1, 1));
         check(alt.ok() && std::to_integer<int>(alt.data[0]) == 0, "GET_INTERFACE: 0");
     }
 
@@ -105,13 +112,16 @@ void run(char const* name) {
     {
         ResetActions::bootloaders = 0;
         ResetActions::reboots     = 0;
-        check(Host::controlOut(Host::makeSetup(0x01, 1, 0, 2, 0)).stalled,
+        check(Host::controlOut(Host::makeSetup(toInterface, Setup::Request::clearFeature, 0, 2, 0))
+                .stalled,
               "a standard request to it is not a reboot");
         checkEq(ResetActions::bootloaders + ResetActions::reboots, 0, "nothing ran");
-        Fake::hostSetup(Host::makeSetup(0x41, 0x01, 0, 2, 0));
+        Fake::hostSetup(
+          Host::makeSetup(vendorToInterface, Kvasir::USB::VendorReset::bootselRequest, 0, 2, 0));
         Host::pump();
         checkEq(ResetActions::bootloaders, 1, "request 1: the bootloader");
-        Fake::hostSetup(Host::makeSetup(0x41, 0x02, 0, 2, 0));
+        Fake::hostSetup(
+          Host::makeSetup(vendorToInterface, Kvasir::USB::VendorReset::flashRequest, 0, 2, 0));
         Host::pump();
         checkEq(ResetActions::reboots, 1, "request 2: a reboot");
     }
@@ -122,10 +132,10 @@ void run(char const* name) {
     auto readAll = [] {
         std::vector<std::byte> got;
         std::byte              b{};
-        while(Data::getRecvBuffer().pop_into(b)) { got.push_back(b); }
+        while(Data::getRecvBuffer().popInto(b)) { got.push_back(b); }
         return got;
     };
-    auto readWithin = [&](std::chrono::milliseconds time) {
+    auto const readWithin = [&](std::chrono::milliseconds time) {
         auto got = readAll();
         for(auto waited = std::chrono::milliseconds{0}; waited < time; ++waited) {
             Clock::advance(std::chrono::milliseconds{1});
@@ -215,7 +225,9 @@ void run(char const* name) {
     testCase("host to device: a reconfiguration drops what the controller still held");
     {
         checkEq(Host::bulkOut(1, pattern(64, 51)), 64U, "one full packet, acknowledged");
-        check(Host::controlOut(Host::makeSetup(0x00, 9, 1, 0, 0)).ok(), "SET_CONFIGURATION(1)");
+        check(Host::controlOut(Host::makeSetup(toDevice, Setup::Request::setConfiguration, 1, 0, 0))
+                .ok(),
+              "SET_CONFIGURATION(1)");
         check(readWithin(std::chrono::milliseconds{5}).empty(), "gone, like the queue");
         auto const after = pattern(30, 52);
         checkEq(Host::bulkOut(1, after), 30U, "new data is taken");

@@ -2,8 +2,8 @@
 // An SD card (SPI/SdCard.hpp) as the synchronous block device the fs library's FAT code takes (met by
 // shape, nothing here includes fs).
 //
-// Every call BLOCKS the main loop, running only the master's and the card's handlers, until its block
-// is done or `Config::Timeout` is up. A firmware that must keep a display, USB or a watchdog alive
+// Every call BLOCKS the main loop, running only the master's and the card's turns, until its block
+// is done or `Config::timeout` is up. A firmware that must keep a display, USB or a watchdog alive
 // through a format (a minute) needs the file system on another core.
 //
 // A read with a CRC error is tried again: the CRC16 covers the wire, not the flash. Writes are not.
@@ -18,8 +18,8 @@ namespace Kvasir { namespace SPI {
 
     struct SdBlockDeviceDefaults {
         /// Per block, the wait for the card to be ready included.
-        static constexpr std::chrono::milliseconds Timeout{2000};
-        static constexpr std::uint8_t              ReadRetries = 2;
+        static constexpr std::chrono::milliseconds timeout{2000};
+        static constexpr std::uint8_t              readRetries = 2;
     };
 
     template<typename Card,
@@ -50,7 +50,7 @@ namespace Kvasir { namespace SPI {
                     ++reads_;
                     return true;
                 }
-                if(r != SdResult::crcError || attempt >= Config::ReadRetries) {
+                if(r != SdResult::crcError || attempt >= Config::readRetries) {
                     ++failures_;
                     return false;
                 }
@@ -85,13 +85,13 @@ namespace Kvasir { namespace SPI {
         std::uint32_t failures_{};
 
         void pump_() {
-            Master::handler();
-            card_.handler();
+            Master::turn();
+            card_.turn();
         }
 
         template<typename Start>
         SdResult run_(Start start) {
-            auto const end = Clock::now() + Config::Timeout;
+            auto const end = Clock::now() + Config::timeout;
             while(!card_.ready()) {
                 pump_();
                 if(Clock::now() > end) { return SdResult::timeout; }

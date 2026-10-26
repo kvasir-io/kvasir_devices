@@ -1,18 +1,13 @@
 /// SPI/SdBlockDevice.hpp over the real SdCard driver and the card model (SdModel.hpp); with the fs library
 /// next to this checkout (FS_ROOT) also FAT32 formatted, mounted and used on top of it.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 #include "SdModel.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/SdBlockDevice.hpp>
 #include <span>
 #include <string>
@@ -27,7 +22,6 @@
 
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
-using Kvasir::Test::Spi::Pins;
 
 namespace {
 
@@ -56,18 +50,15 @@ using Model = SdModel<Card>;
 Model model{};
 
 void fresh(std::uint32_t cSize = 61'047) {
-    Bus::reset();
-    Pins::reset();
-    Log::reset();
-    model             = Model{};
-    model.cSize       = cSize;
-    Bus::partSelected = [] { return !Pins::level[Spi::Cs::id]; };
-    Bus::exchange     = [](std::uint8_t m) { return model.exchange(m); };
-    Bus::onFrame      = [](bool selected) {
+    // the clock stays where the case before left it
+    Spi::Harness::fresh<Bus>([](std::uint8_t m) { return model.exchange(m); }, std::nullopt);
+    model        = Model{};
+    model.cSize  = cSize;
+    Bus::onFrame = [](bool selected) {
         if(!selected) { model.deselected(); }
     };
     Bus::autoComplete
-      = true;   // the adapter runs the master's handler itself: a transfer completes there
+      = true;   // the adapter runs the master's turn itself: a transfer completes there
 }
 
 std::array<std::byte,
@@ -75,7 +66,7 @@ std::array<std::byte,
 pattern(std::uint32_t lba) {
     std::array<std::byte, 512> b{};
     for(std::size_t i = 0; i < b.size(); ++i) {
-        b[i] = std::byte{static_cast<std::uint8_t>(lba * 31U + i * 7U)};
+        b[i] = std::byte{static_cast<std::uint8_t>((std::size_t{lba} * 31U) + (i * 7U))};
     }
     return b;
 }
@@ -83,18 +74,18 @@ pattern(std::uint32_t lba) {
 void blocks() {
     testCase("blocks written and read back through the adapter");
     fresh();
-    Card c{};
-    Dev  d{c};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
+    Dev                      d{c};
     check(d.waitUp(2s), "the card comes up");
     checkEq(d.blockCount(), (61'047U + 1U) * 1024U, "blockCount from the CSD");
     for(std::uint32_t lba : {0U, 1U, 4096U, 62'000'000U}) {
         auto const out = pattern(lba);
-        check(d.writeBlock(lba, out), ("write " + std::to_string(lba)).c_str());
+        check(d.writeBlock(lba, out), "write " + std::to_string(lba));
     }
     for(std::uint32_t lba : {0U, 1U, 4096U, 62'000'000U}) {
         std::array<std::byte, 512> in{};
-        check(d.readBlock(lba, in) && in == pattern(lba),
-              ("read back " + std::to_string(lba)).c_str());
+        check(d.readBlock(lba, in) && in == pattern(lba), "read back " + std::to_string(lba));
     }
     checkEq(d.writes(), 4U, "4 writes counted");
     checkEq(d.reads(), 4U, "4 reads counted");
@@ -104,8 +95,9 @@ void blocks() {
 void faults() {
     testCase("a CRC error is read again; a rejected write and a lost data token are failures");
     fresh();
-    Card c{};
-    Dev  d{c};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
+    Dev                      d{c};
     check(d.waitUp(2s), "up");
     auto const out = pattern(7);
     check(d.writeBlock(7, out), "write");
@@ -127,8 +119,9 @@ void fat32() {
     testCase("FAT32 over the adapter, the driver and the card model");
     fresh(
       79);   // (79 + 1) x 512 KB = 40 MB: past fatgen's 66 600-sector floor for FAT32 (fatgen:526) after the 512 KB offset
-    Card c{};
-    Dev  d{c};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
+    Dev                      d{c};
     check(d.waitUp(2s), "up");
     auto const g = fs::fat::format(d, fs::fat::FormatOptions{.label = "HOSTTEST"});
     check(g.has_value(), "format");

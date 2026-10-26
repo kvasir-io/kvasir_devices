@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -113,7 +114,7 @@ struct Ktd2061 {
     static constexpr auto StartupDelay = std::chrono::milliseconds{500};
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x02, .payload = {ControlValue}}),
+      Engine::Step::write({.reg = 0x02, .payload = {ControlValue}}),
     };
 
     /// ID (00h) and Monitor (01h), once a second: the part answering, and what it reports about
@@ -121,7 +122,8 @@ struct Ktd2061 {
     /// UV/OT_STAT 0.
     struct Status {
         static constexpr auto       Period = std::chrono::seconds{1};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             std::uint8_t id{};
@@ -161,10 +163,10 @@ struct Ktd2061 {
         static constexpr std::size_t Bytes = 3 * Slots;
         static constexpr Value       Initial{};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             for(std::size_t i = 0; i < Bytes; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Step::writeBuffer({.reg = 0x03, .offset = 0, .count = Bytes});
+            return Engine::Step::writeBuffer({.reg = 0x03, .offset = 0, .count = Bytes});
         }
     };
 
@@ -175,15 +177,15 @@ struct Ktd2061 {
         static constexpr std::size_t Bytes = Leds / 2;
         static constexpr Value       Initial{};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             for(std::size_t i = 0; i < Bytes; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Step::writeBuffer({.reg = 0x09, .offset = 0, .count = Bytes});
+            return Engine::Step::writeBuffer({.reg = 0x09, .offset = 0, .count = Bytes});
         }
     };
 
     /// Control (02h), so the mode and the fade rate can be changed at run time.
-    using Control = Groups::InitialByte<0x02, ControlValue>;
+    using Control = Engine::Groups::InitialByte<0x02, ControlValue>;
 
     /// The select block with `module` set to `channels`, for
     /// `set<Select>(Ktd2061::with(current, Module::B3, channels))`.
@@ -205,8 +207,8 @@ struct Ktd2061 {
         return block;
     }
 
-    using Reads  = List<Status>;
-    using Writes = List<Control, Colour, Select>;
+    using Reads  = Engine::List<Status>;
+    using Writes = Engine::List<Control, Colour, Select>;
 };
 
 }   // namespace Kvasir::I2C::Chips

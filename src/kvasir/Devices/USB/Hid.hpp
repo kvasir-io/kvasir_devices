@@ -6,6 +6,7 @@
 #include "Device.hpp"
 #include "InterruptEndpoint.hpp"
 #include "Mixins.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <cstddef>
@@ -21,7 +22,7 @@
 ///     struct Knob {
 ///         static constexpr auto ReportDescriptor = std::to_array<std::uint8_t>({0x06, ...});
 ///         static constexpr std::size_t  InputReportSize = 8;    // the largest, id byte included
-///         static constexpr std::uint8_t PollIntervalMs  = 10;   // optional, 10
+///         static constexpr std::uint8_t pollIntervalMs  = 10;   // optional, 10
 ///
 ///         // optional: the host wrote an output or feature report (type 2 or 3). From the USB
 ///         // interrupt; false refuses it (STALL).
@@ -50,8 +51,24 @@ enum class Request : std::uint8_t {
     setProtocol = 0x0B,
 };
 
+// Class descriptor types (HID 1.11, 7.1, hid1_11.md l.1625-1626).
 inline constexpr std::uint8_t HidDescriptorType    = 0x21;
 inline constexpr std::uint8_t ReportDescriptorType = 0x22;
+
+/// The HID descriptor with its one class descriptor, the report descriptor (HID 1.11, 6.2.1,
+/// hid1_11.md l.705-713: bcdHID at offset 2, bCountryCode 4, bNumDescriptors 5, the class
+/// descriptor's type 6 and wDescriptorLength 7; 9 bytes).
+struct [[gnu::packed]] ClassDescriptor {
+    std::uint8_t  bLength{9};
+    std::uint8_t  bDescriptorType{HidDescriptorType};
+    std::uint16_t bcdHID{0x0111};
+    std::uint8_t  bCountryCode{0};   // not localized
+    std::uint8_t  bNumDescriptors{1};
+    std::uint8_t  bClassDescriptorType{ReportDescriptorType};
+    std::uint16_t wDescriptorLength{};
+};
+
+static_assert(sizeof(ClassDescriptor) == 9);
 
 template<typename Clock,
          typename Config,
@@ -62,7 +79,7 @@ template<typename Clock,
 struct Mixin {
 private:
     friend Derived;
-    friend struct Kvasir::USB::detail::MixinTraits;
+    friend struct Kvasir::USB::MixinTraits;
 
     static constexpr std::size_t InterfaceCount = 1;
     static constexpr std::size_t EndpointCount  = 1;
@@ -72,38 +89,24 @@ private:
     static_assert(InputReportSize != 0 && InputReportSize <= MaxPacketSize,
                   "an input report has to fit one 64-byte packet");
 
-    static constexpr std::uint8_t PollIntervalMs = [] {
-        if constexpr(requires { Traits::PollIntervalMs; }) {
-            return static_cast<std::uint8_t>(Traits::PollIntervalMs);
-        } else {
-            return std::uint8_t{10};
-        }
-    }();
+    static constexpr std::uint8_t PollIntervalMs
+      = static_cast<std::uint8_t>(KVASIR_CONFIG_OR(Traits, pollIntervalMs, std::uint8_t{10}));
 
     // Interface, the HID descriptor (HID 1.11, 6.2.1: bcdHID 1.11, no country, one class
     // descriptor - the report descriptor and its length), the endpoint.
-    static constexpr auto InterfaceDescriptor = USB::Descriptors::detail::generateArray(
+    static constexpr auto InterfaceDescriptor = USB::Descriptors::generateArray(
       USB::Descriptors::Interface{.bInterfaceNumber   = FirstInterfaceNumber,
                                   .bAlternateSetting  = 0,
                                   .bNumEndpoints      = 1,
                                   .bInterfaceClass    = 3,
                                   .bInterfaceSubClass = 0,
                                   .bInterfaceProtocol = 0},
-      std::array<std::byte, 9>{std::byte{9},
-                               std::byte{HidDescriptorType},
-                               std::byte{0x11},
-                               std::byte{0x01},
-                               std::byte{0},
-                               std::byte{1},
-                               std::byte{ReportDescriptorType},
-                               static_cast<std::byte>(ReportDescriptorSize & 0xff),
-                               static_cast<std::byte>(ReportDescriptorSize >> 8)},
-      USB::Descriptors::Endpoint{
-        .bEndpointAddress{makeEndpointAddress(EndpointDirection::In,
-                                              static_cast<std::uint8_t>(FirstEndpointNumber))},
-        .bmAttributes{EndpointTransferType::Interrupt},
-        .wMaxPacketSize{static_cast<std::uint16_t>(InputReportSize)},
-        .bInterval{PollIntervalMs}});
+      ClassDescriptor{.wDescriptorLength = static_cast<std::uint16_t>(ReportDescriptorSize)},
+      USB::Descriptors::endpoint(EndpointDirection::In,
+                                 FirstEndpointNumber,
+                                 EndpointTransferType::Interrupt,
+                                 InputReportSize,
+                                 PollIntervalMs));
 
     static constexpr auto ReportDescriptorBytes = [] {
         std::array<std::byte, ReportDescriptorSize> bytes{};
@@ -123,9 +126,9 @@ private:
     static inline std::uint16_t                        pendingLength{};   // 0: no SET_REPORT open
 
     // Callbacks
-    static void SetupEndpointsCallback() { In::setup(); }
+    static void setupEndpointsCallback() { In::setup(); }
 
-    static bool SetupPacketRequestCallback(SetupPacket const& pkt) {
+    static bool setupPacketRequestCallback(SetupPacket const& pkt) {
         using Direction = SetupPacket::Direction;
         bool const in   = pkt.direction() == Direction::deviceToHost;
 
@@ -147,7 +150,7 @@ private:
             if(pkt.type() == SetupPacket::Type::classT) { return classRequest(pkt, in); }
             return false;
         }
-        return detail::handleEndpointRequest<Derived, In>(pkt);
+        return handleEndpointRequest<Derived, In>(pkt);
     }
 
     static bool classRequest(SetupPacket const& pkt,
@@ -191,7 +194,7 @@ private:
         }
     }
 
-    static bool EndpointHandlerCallback(std::size_t epNum,
+    static bool endpointHandlerCallback(std::size_t epNum,
                                         bool        in) {
         // The data stage of a SET_REPORT, on endpoint 0.
         if(epNum == 0 && !in && pendingLength != 0) {
@@ -219,20 +222,20 @@ private:
         return false;
     }
 
-    static bool AbortDoneCallback(std::size_t epNum,
+    static bool abortDoneCallback(std::size_t epNum,
                                   bool        in) {
         if(epNum != FirstEndpointNumber || !in) { return false; }
         In::abortDone();
         return true;
     }
 
-    static void ResetCallback() {
+    static void resetCallback() {
         pendingLength = 0;
         idleRate      = 0;
         In::busReset();
     }
 
-    static void ConfiguredCallback(std::uint8_t) { In::configured(); }
+    static void configuredCallback(std::uint8_t) { In::configured(); }
 
 public:
     /// Whether sendReport() would take a report now.

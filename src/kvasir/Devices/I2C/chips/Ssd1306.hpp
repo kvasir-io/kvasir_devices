@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -99,7 +101,7 @@ namespace Ssd1306Detail {
     };
 
     /// Sino Wealth SH1106, 132 x 64, the 1.3" modules. RAM is 132 columns wide and a 128 px
-    /// panel is usually centred: set ColumnOffset 2. Page addressing only, DC-DC on by
+    /// panel is usually centred: set columnOffset 2. Page addressing only, DC-DC on by
     /// ADh 8Bh ("Set DC-DC OFF/ON").
     struct Sh1106C {
         static constexpr std::string_view Name              = "SH1106";
@@ -113,7 +115,7 @@ namespace Ssd1306Detail {
     };
 
     /// The knobs a panel may leave out, with what they are then; a panel derives from this
-    /// and redeclares what it sets. ComPins has no fixed default (it follows the height) and
+    /// and redeclares what it sets. comPins has no fixed default (it follows the height) and
     /// stays a lambda in the description.
     /// Segment remap (x) or COM scan direction (y): as wired, or mirrored.
     enum class Mirror : std::uint8_t { none, mirrored };
@@ -128,19 +130,19 @@ namespace Ssd1306Detail {
     enum class Inversion : std::uint8_t { normal, inverted };
 
     struct PanelDefaults {
-        static constexpr int          ColumnOffset  = 0;              ///< panel column 0 in RAM
-        static constexpr Mirror       FlipX         = Mirror::none;   ///< segment remap
-        static constexpr Mirror       FlipY         = Mirror::none;   ///< COM scan direction
-        static constexpr std::uint8_t Contrast      = 0x7F;           ///< 81h
-        static constexpr Vcc          Supply        = Vcc::chargePump;
-        static constexpr std::uint8_t DisplayOffset = 0;   ///< D3h
+        static constexpr int          columnOffset  = 0;              ///< panel column 0 in RAM
+        static constexpr Mirror       flipX         = Mirror::none;   ///< segment remap
+        static constexpr Mirror       flipY         = Mirror::none;   ///< COM scan direction
+        static constexpr std::uint8_t contrast      = 0x7F;           ///< 81h
+        static constexpr Vcc          supply        = Vcc::chargePump;
+        static constexpr std::uint8_t displayOffset = 0;   ///< D3h
     };
 
     /// The panel the catalogue names, and what an unqualified Ssd1306<> is: the 0.96" module.
     struct Panel128x64 : PanelDefaults {
         static constexpr int      Width   = 128;
         static constexpr int      Height  = 64;
-        static constexpr Address7 Address = 0x3C;
+        static constexpr Address7 address = 0x3C;
     };
 
     /// One command and its arguments: the unit the bring-up script is packed in, because a
@@ -197,15 +199,15 @@ namespace Ssd1306Detail {
 /// The panel policy derives from `Ssd1306Detail::PanelDefaults`:
 ///   Width, Height     the panel; Height a multiple of 8 the controller can drive
 ///   Address           0x3C (SA0 low, the usual) or 0x3D
-///   ColumnOffset (0)  where panel column 0 sits in RAM (2 on a 128 px SH1106)
-///   FlipX, FlipY      (none) mount orientation, by segment remap and COM scan
-///   Contrast (0x7F)   81h
-///   Supply            (chargePump) Vcc::external: the module supplies VCC, no charge pump
-///   ComPins           DAh: how the COM lines are wired to the glass. 12h (alternative)
+///   columnOffset (0)  where panel column 0 sits in RAM (2 on a 128 px SH1106)
+///   flipX, flipY      (none) mount orientation, by segment remap and COM scan
+///   contrast (0x7F)   81h
+///   supply            (chargePump) Vcc::external: the module supplies VCC, no charge pump
+///   comPins           DAh: how the COM lines are wired to the glass. 12h (alternative)
 ///                     above 32 rows, 02h (sequential) for the 128 x 32 modules. The small
 ///                     SSD1315 panels (72 x 40, 64 x 48, 64 x 32) all want 12h, so a
 ///                     64 x 32 one has to say so.
-///   DisplayOffset (0) D3h: the COM line the first RAM row is shown on
+///   displayOffset (0) D3h: the COM line the first RAM row is shown on
 template<Ssd1306Detail::Controller Ctrl, typename Panel = Ssd1306Detail::Panel128x64>
 struct MonoOled {
     using Cmd        = Ssd1306Detail::Cmd;
@@ -216,7 +218,7 @@ struct MonoOled {
                   "derive the panel from Kvasir::I2C::Chips::Ssd1306Detail::PanelDefaults");
 
     static constexpr std::string_view Name          = Ctrl::Name;
-    static constexpr Address7         Address       = Panel::Address;
+    static constexpr Address7         Address       = Panel::address;
     static constexpr std::size_t      RegisterBytes = 0;
 
     static constexpr std::array<Address7, 2> Addresses{0x3C, 0x3D};
@@ -233,19 +235,14 @@ struct MonoOled {
     /// 12h: alternative COM pin configuration, what a 64 row panel is wired for; 02h:
     /// sequential, for the 128 x 32 modules (SSD1306 10.1.18). The one default that depends
     /// on another member.
-    static constexpr std::uint8_t ComPins = [] {
-        if constexpr(requires { Panel::ComPins; }) {
-            return static_cast<std::uint8_t>(Panel::ComPins);
-        } else {
-            return Height > 32 ? std::uint8_t{0x12} : std::uint8_t{0x02};
-        }
-    }();
+    static constexpr std::uint8_t ComPins = static_cast<std::uint8_t>(
+      KVASIR_CONFIG_OR(Panel, comPins, Height > 32 ? std::uint8_t{0x12} : std::uint8_t{0x02}));
 
     static_assert(Height % 8 == 0 && Height >= 16 && Height <= Ctrl::MaxRows,
                   "the height must be a multiple of 8 the controller can drive");
-    static_assert(Width > 0 && Panel::ColumnOffset + Width <= Ctrl::RamColumns,
+    static_assert(Width > 0 && Panel::columnOffset + Width <= Ctrl::RamColumns,
                   "the panel does not fit the controller's RAM columns");
-    static_assert(Panel::DisplayOffset < Ctrl::MaxRows,
+    static_assert(Panel::displayOffset < Ctrl::MaxRows,
                   "D3h takes 0..MaxRows-1");
     static_assert(Address == 0x3C || Address == 0x3D,
                   "these controllers answer at 0x3C or 0x3D");
@@ -263,10 +260,10 @@ private:
         // 70h, the SH1106 to 50h), and what these modules are run at
         s.push(Cmd::ClockDivide, 0x80);
         s.push(Cmd::Multiplex, static_cast<std::uint8_t>(Height - 1));
-        s.push(Cmd::DisplayOffset, Panel::DisplayOffset);
+        s.push(Cmd::DisplayOffset, Panel::displayOffset);
         s.push(static_cast<std::uint8_t>(Cmd::StartLine | 0x00));
         if constexpr(Ctrl::ChargePumpOn != 0) {
-            if constexpr(Panel::Supply == Ssd1306Detail::Vcc::chargePump) {
+            if constexpr(Panel::supply == Ssd1306Detail::Vcc::chargePump) {
                 s.push(static_cast<std::uint8_t>(Ctrl::ChargePumpOn >> 8U),
                        static_cast<std::uint8_t>(Ctrl::ChargePumpOn & 0xFFU));
             }
@@ -275,12 +272,12 @@ private:
             s.push(Cmd::AddressMode, 0x02);   // page addressing, which is all the SH1106 has
         }
         s.push(static_cast<std::uint8_t>(
-          Cmd::SegmentRemap | (Panel::FlipX == Ssd1306Detail::Mirror::mirrored ? 0x01U : 0x00U)));
-        s.push(Panel::FlipY == Ssd1306Detail::Mirror::mirrored ? Cmd::ScanRemap : Cmd::ScanNormal);
+          Cmd::SegmentRemap | (Panel::flipX == Ssd1306Detail::Mirror::mirrored ? 0x01U : 0x00U)));
+        s.push(Panel::flipY == Ssd1306Detail::Mirror::mirrored ? Cmd::ScanRemap : Cmd::ScanNormal);
         s.push(Cmd::ComPins, ComPins);
-        s.push(Cmd::Contrast, Panel::Contrast);
+        s.push(Cmd::Contrast, Panel::contrast);
         s.push(Cmd::Precharge,
-               Panel::Supply == Ssd1306Detail::Vcc::external ? Ctrl::PrechargeExternal
+               Panel::supply == Ssd1306Detail::Vcc::external ? Ctrl::PrechargeExternal
                                                              : Ctrl::PrechargeInternal);
         s.push(Cmd::VcomDeselect, Ctrl::VcomDeselect);
         s.push(Cmd::AllOnResume);
@@ -308,7 +305,7 @@ private:
         while(i < Commands.n) {
             std::size_t bytes = 0;
             std::size_t j     = i;
-            while(j < Commands.n && bytes + Commands.units[j].n <= Step::InlineBytes - 1) {
+            while(j < Commands.n && bytes + Commands.units[j].n <= Engine::Step::InlineBytes - 1) {
                 bytes += Commands.units[j].n;
                 ++j;
             }
@@ -320,10 +317,10 @@ private:
 
 public:
     static constexpr auto Init = [] {
-        std::array<Step, Packing.n> a{};
+        std::array<Engine::Step, Packing.n> a{};
         for(std::size_t c = 0; c < Packing.n; ++c) {
-            Step st{};
-            st.kind        = Step::Kind::write;
+            Engine::Step st{};
+            st.kind        = Engine::Step::Kind::write;
             st.hasRegister = false;
             st.bytes[0]    = Ssd1306Detail::CommandStream;
             std::uint8_t k = 1;
@@ -349,12 +346,12 @@ public:
         /// on the glass, because Initial is only installed while nothing has been written.
         static constexpr Value Initial{};
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   2>
         encode(Value const&         value,
                std::size_t          page,
                std::span<std::byte> buffer) {
-            auto const col = static_cast<unsigned>(Panel::ColumnOffset);
+            auto const col = static_cast<unsigned>(Panel::columnOffset);
             buffer[0]      = std::byte{Ssd1306Detail::CommandStream};
             buffer[1]      = static_cast<std::byte>(Cmd::Page | static_cast<unsigned>(page));
             buffer[2]      = static_cast<std::byte>(Cmd::ColumnLow | (col & 0xFU));
@@ -363,9 +360,9 @@ public:
             for(std::size_t i = 0; i < static_cast<std::size_t>(Width); ++i) {
                 buffer[5 + i] = static_cast<std::byte>(value[i]);
             }
-            return {
-              Step::commandBuffer({.offset = 0, .count = 4}),
-              Step::commandBuffer({.offset = 4, .count = static_cast<std::uint8_t>(1 + Width)})};
+            return {Engine::Step::commandBuffer({.offset = 0, .count = 4}),
+                    Engine::Step::commandBuffer(
+                      {.offset = 4, .count = static_cast<std::uint8_t>(1 + Width)})};
         }
     };
 
@@ -376,11 +373,11 @@ public:
         static constexpr std::size_t Bytes   = 2;
         static constexpr Value       Initial = Value::on;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{Ssd1306Detail::CommandStream};
             buffer[1] = std::byte{value == Value::on ? Cmd::DisplayOn : Cmd::DisplayOff};
-            return Step::commandBuffer({.offset = 0, .count = 2});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 2});
         }
     };
 
@@ -390,12 +387,12 @@ public:
         using Value                        = std::uint8_t;
         static constexpr std::size_t Bytes = 3;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{Ssd1306Detail::CommandStream};
             buffer[1] = std::byte{Cmd::Contrast};
             buffer[2] = static_cast<std::byte>(value);
-            return Step::commandBuffer({.offset = 0, .count = 3});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 3});
         }
     };
 
@@ -404,16 +401,16 @@ public:
         using Value                        = Ssd1306Detail::Inversion;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{Ssd1306Detail::CommandStream};
             buffer[1] = std::byte{value == Value::inverted ? Cmd::Inverse : Cmd::Normal};
-            return Step::commandBuffer({.offset = 0, .count = 2});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 2});
         }
     };
 
     // Page first: at every bring-up the frame goes out before Power turns the panel on.
-    using Writes = List<Page, Power, Contrast, Invert>;
+    using Writes = Engine::List<Page, Power, Contrast, Invert>;
 
     // No Reads: these controllers are written, never asked. The first Init transaction is
     // what the base probes an absent module with.

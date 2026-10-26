@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -38,14 +39,14 @@ struct GeneralCall {
         static constexpr std::size_t Bytes     = 1;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
-    using Writes = List<Command>;
+    using Writes = Engine::List<Command>;
 };
 
 }   // namespace Kvasir::I2C::Chips

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -31,7 +32,7 @@ struct Bmp180 {
     /// Bosch BME280, BMP280, BMP180: the id register 0xD0 reads 0x60 (BME280.md:1106), 0x58
     /// (BMP280.md:989) and 0x55 (BMP180.md:421).
     static constexpr std::array Identity{
-      RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x55},
+      Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x55},
     };
     static constexpr Address7                Address = 0x77;
     static constexpr std::array<Address7, 1> Addresses{0x77};
@@ -43,7 +44,7 @@ struct Bmp180 {
     static constexpr unsigned OssBits = static_cast<unsigned>(Oss);
 
     static constexpr std::array Init{
-      Step::read({.reg = 0xAA, .count = 22, .offset = 0}),
+      Engine::Step::read({.reg = 0xAA, .count = 22, .offset = 0}),
     };
 
     struct State {
@@ -91,12 +92,13 @@ struct Bmp180 {
     struct Measurement {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
         static constexpr std::array Steps{
-          Step::write({.reg = 0xF4, .payload = {0x2E}, .delay = std::chrono::milliseconds{6}}),
-          Step::read({.reg = 0xF6, .count = 2, .offset = 0}),
-          Step::write({.reg     = 0xF4,
-                       .payload = {static_cast<std::uint8_t>(0x34U | (OssBits << 6))},
-                       .delay   = PressureWait}),
-          Step::read({.reg = 0xF6, .count = 3, .offset = 2}),
+          Engine::Step::write(
+            {.reg = 0xF4, .payload = {0x2E}, .delay = std::chrono::milliseconds{6}}),
+          Engine::Step::read({.reg = 0xF6, .count = 2, .offset = 0}),
+          Engine::Step::write({.reg     = 0xF4,
+                               .payload = {static_cast<std::uint8_t>(0x34U | (OssBits << 6))},
+                               .delay   = PressureWait}),
+          Engine::Step::read({.reg = 0xF6, .count = 3, .offset = 2}),
         };
 
         struct Sample {
@@ -107,15 +109,15 @@ struct Bmp180 {
         /// The datasheet's algorithm. Two of its divisors, `x1 + md` and `b4`, are zero for
         /// the frames a floating or stuck bus produces (all 0x00, all 0xFF) with typical
         /// calibration; those frames are rejected rather than divided by.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& c) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& c) {
             std::int32_t const ut = data.be16(0);
             std::int32_t const up = static_cast<std::int32_t>(data.be24(2) >> (8 - OssBits));
 
             // temperature
             std::int32_t x1
               = ((ut - static_cast<std::int32_t>(c.ac6)) * static_cast<std::int32_t>(c.ac5)) >> 15;
-            if(x1 + c.md == 0) { return Outcome<Sample>::reject(); }
+            if(x1 + c.md == 0) { return Engine::Outcome<Sample>::reject(); }
             std::int32_t       x2 = (static_cast<std::int32_t>(c.mc) << 11) / (x1 + c.md);
             std::int32_t const b5 = x1 + x2;
             Sample             sample{};
@@ -133,7 +135,7 @@ struct Bmp180 {
             x3 = ((x1 + x2) + 2) >> 2;
             std::uint32_t const b4
               = (static_cast<std::uint32_t>(c.ac4) * static_cast<std::uint32_t>(x3 + 32768)) >> 15;
-            if(b4 == 0) { return Outcome<Sample>::reject(); }
+            if(b4 == 0) { return Engine::Outcome<Sample>::reject(); }
             std::uint32_t const b7
               = (static_cast<std::uint32_t>(up) - static_cast<std::uint32_t>(b3))
               * (50000U >> OssBits);
@@ -144,11 +146,11 @@ struct Bmp180 {
             x2              = (-7357 * p) >> 16;
             p               = p + ((x1 + x2 + 3791) >> 4);
             sample.pressure = Units::pascal(static_cast<std::uint32_t>(p));
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
-    using Reads = List<Measurement>;
+    using Reads = Engine::List<Measurement>;
 };
 
 }   // namespace Kvasir::I2C::Chips

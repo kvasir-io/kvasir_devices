@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -31,11 +32,12 @@ struct SolderedSlider {
 
     static constexpr std::uint16_t FullScale = 1023;
 
-    static constexpr std::array Init{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
     struct Position {
         static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             std::uint16_t raw{};   ///< 0..1023
@@ -51,7 +53,7 @@ struct SolderedSlider {
         }
     };
 
-    using Reads = List<Position>;
+    using Reads = Engine::List<Position>;
 };
 
 /// Rotary encoder with easyC (333188). There is no register pointer at all: a bare five
@@ -81,11 +83,11 @@ struct SolderedRotary {
         clockwise    = 6,
     };
 
-    static constexpr std::array Init{Step::receive({.count = 5, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::receive({.count = 5, .offset = 0})};
 
     struct Motion {
         static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{Step::receive({.count = 5, .offset = 0})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 5, .offset = 0})};
 
         struct Sample {
             std::int32_t count{};
@@ -115,15 +117,15 @@ struct SolderedRotary {
         /// A one-shot command, not a state to restore after a reset.
         static constexpr bool Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = std::byte{0xAA};
-            return Step::commandBuffer({.offset = 0, .count = 1});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<Reset>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<Reset>;
 };
 
 }   // namespace Kvasir::I2C::Chips

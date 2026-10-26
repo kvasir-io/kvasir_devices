@@ -26,23 +26,21 @@ namespace Descriptors {
           .bInterfaceSubClass{0},
           .bInterfaceProtocol{Protocol}};
 
-        constexpr USB::Descriptors::Endpoint DataInEndpointDescriptor{
-          .bEndpointAddress{makeEndpointAddress(EndpointDirection::In, DataEndpointID)},
-          .bmAttributes{EndpointTransferType::Bulk},
-          .wMaxPacketSize{detail::MaxPacketSize}};
-
-        constexpr USB::Descriptors::Endpoint DataOutEndpointDescriptor{
-          .bEndpointAddress{makeEndpointAddress(EndpointDirection::Out, DataEndpointID)},
-          .bmAttributes{EndpointTransferType::Bulk},
-          .wMaxPacketSize{detail::MaxPacketSize}};
+        constexpr auto DataInEndpointDescriptor
+          = USB::Descriptors::endpoint(EndpointDirection::In,
+                                       DataEndpointID,
+                                       EndpointTransferType::Bulk);
+        constexpr auto DataOutEndpointDescriptor
+          = USB::Descriptors::endpoint(EndpointDirection::Out,
+                                       DataEndpointID,
+                                       EndpointTransferType::Bulk);
 
         if constexpr(Bidirectional) {
-            return USB::Descriptors::detail::generateArray(InterfaceDescriptor,
-                                                           DataOutEndpointDescriptor,
-                                                           DataInEndpointDescriptor);
+            return USB::Descriptors::generateArray(InterfaceDescriptor,
+                                                   DataOutEndpointDescriptor,
+                                                   DataInEndpointDescriptor);
         } else {
-            return USB::Descriptors::detail::generateArray(InterfaceDescriptor,
-                                                           DataInEndpointDescriptor);
+            return USB::Descriptors::generateArray(InterfaceDescriptor, DataInEndpointDescriptor);
         }
     }
 }   // namespace Descriptors
@@ -71,7 +69,7 @@ template<typename Clock,
 struct Mixin {
 private:
     friend Derived;
-    friend struct Kvasir::USB::detail::MixinTraits;
+    friend struct Kvasir::USB::MixinTraits;
 
     using Self = Mixin<Clock,
                        Config,
@@ -102,29 +100,29 @@ private:
                                                                      Bidirectional>;
 
     // Callbacks
-    static void SetupEndpointsCallback() { DataEndpointHandler::SetupEndpointsCallback(); }
+    static void setupEndpointsCallback() { DataEndpointHandler::setupEndpointsCallback(); }
 
-    static bool SetupPacketRequestCallback(SetupPacket const& pkt) {
+    static bool setupPacketRequestCallback(SetupPacket const& pkt) {
         return detail::handleSetInterface<Derived>(pkt,
                                                    FirstInterfaceNumber,
                                                    DataEndpointHandler::restart)
-            || DataEndpointHandler::SetupPacketRequestCallback(pkt);
+            || DataEndpointHandler::setupPacketRequestCallback(pkt);
     }
 
-    static bool EndpointHandlerCallback(std::size_t epNum,
+    static bool endpointHandlerCallback(std::size_t epNum,
                                         bool        in) {
-        return DataEndpointHandler::EndpointHandlerCallback(epNum, in);
+        return DataEndpointHandler::endpointHandlerCallback(epNum, in);
     }
 
-    static bool AbortDoneCallback(std::size_t epNum,
+    static bool abortDoneCallback(std::size_t epNum,
                                   bool        in) {
-        return DataEndpointHandler::AbortDoneCallback(epNum, in);
+        return DataEndpointHandler::abortDoneCallback(epNum, in);
     }
 
-    static void ResetCallback() { DataEndpointHandler::ResetCallback(); }
+    static void resetCallback() { DataEndpointHandler::resetCallback(); }
 
-    static void ConfiguredCallback(std::uint8_t configuration) {
-        DataEndpointHandler::ConfiguredCallback(configuration);
+    static void configuredCallback(std::uint8_t configuration) {
+        DataEndpointHandler::configuredCallback(configuration);
     }
 
 public:

@@ -1,8 +1,10 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -41,10 +43,10 @@ namespace Kvasir::I2C::Chips {
 /// also answers the LED All Call address 0x70 and sub-address 1 at 0x77 (MODE1 0x89, Table 8;
 /// ALLCALLADR E0h, SUBADR1 EEh) -- the defaults of a TCA9548A and a BME280 -- so bring-up
 /// writes MODE1 = 0x00, as Linux's leds-pca995x does: both off, SLEEP clear, AI1:AI0 = 00.
-/// `Timing::StartupDelay` is the wait after power before the first transaction. Section 7.5 asks
+/// `Timing::startupDelay` is the wait after power before the first transaction. Section 7.5 asks
 /// for 2 ms after power-on reset and at most 1.5 ms after RESET is released; 500 ms is a
 /// conservative default, not a requirement of the part.
-template<Address7 Addr, Ohm Rext = Units::ohm(1000), typename Timing = DefaultTiming>
+template<Address7 Addr, Ohm Rext = Units::ohm(1000), typename Timing = Engine::DefaultTiming>
 struct Pca9956b {
     static constexpr std::string_view Name = "PCA9956B";
     /// NXP PCA9956B. MODE1 (00h) SLEEP, bit 4, clear: normal mode, the oscillator runs
@@ -52,7 +54,7 @@ struct Pca9956b {
     /// sleep). The part has no identity register.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"awake", 0x00, 1, true, 0x10, 0x00},
+      Engine::RegisterCheck{"awake", 0x00, 1, true, 0x10, 0x00},
     };
     static constexpr Address7    Address       = Addr;
     static constexpr std::size_t RegisterBytes = 1;
@@ -64,13 +66,8 @@ struct Pca9956b {
     static_assert(Rext > Units::ohm(0),
                   "Rext is what the output current is set against");
 
-    static constexpr std::chrono::milliseconds StartupDelay = [] {
-        if constexpr(requires { Timing::StartupDelay; }) {
-            return Kvasir::asDuration(Timing::StartupDelay);
-        } else {
-            return std::chrono::milliseconds{500};
-        }
-    }();
+    static constexpr std::chrono::milliseconds StartupDelay
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
     /// The largest current the part can be asked for at this Rext: code 255.
     static constexpr MilliAmp MaxCurrent
@@ -87,12 +84,13 @@ struct Pca9956b {
 
     /// MODE2 is the probe as well as the error flag; then MODE1 turns the All Call and
     /// sub-address responses off.
-    static constexpr std::array Init{Step::read({.reg = 0x81, .count = 1, .offset = 0}),
-                                     Step::write({.reg = 0x80, .payload = {0x00}})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x81, .count = 1, .offset = 0}),
+                                     Engine::Step::write({.reg = 0x80, .payload = {0x00}})};
 
     struct Status {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Step::read({.reg = 0x81, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x81, .count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t mode2{};
@@ -125,16 +123,16 @@ struct Pca9956b {
         using Value                        = std::array<std::uint8_t, Channels>;
         static constexpr std::size_t Bytes = Channels;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             for(std::size_t i = 0; i < Channels; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Step::writeBuffer({.reg = Reg, .offset = 0, .count = Channels});
+            return Engine::Step::writeBuffer({.reg = Reg, .offset = 0, .count = Channels});
         }
     };
 
     /// One byte.
     template<std::uint16_t Reg, std::uint8_t Init>
-    using Byte = Groups::InitialByte<Reg, Init>;
+    using Byte = Engine::Groups::InitialByte<Reg, Init>;
 
     /// Two bits per channel: 00 off, 01 fully on, 10 PWM, 11 PWM with group dimming.
     struct LedOut {
@@ -143,10 +141,10 @@ struct Pca9956b {
         /// Every channel in PWM mode, which is what the PWM registers are for.
         static constexpr Value Initial{0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             for(std::size_t i = 0; i < 6; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Step::writeBuffer({.reg = 0x82, .offset = 0, .count = 6});
+            return Engine::Step::writeBuffer({.reg = 0x82, .offset = 0, .count = 6});
         }
     };
 
@@ -176,12 +174,13 @@ struct Pca9956b {
     /// needs the ERROR flag should not pay -- but by `Pca9956bDiagnostics` below.
     struct Errors {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Step::read({.reg = 0x41, .count = 1, .offset = 0}),
-                                          Step::read({.reg = 0x42, .count = 1, .offset = 1}),
-                                          Step::read({.reg = 0x43, .count = 1, .offset = 2}),
-                                          Step::read({.reg = 0x44, .count = 1, .offset = 3}),
-                                          Step::read({.reg = 0x45, .count = 1, .offset = 4}),
-                                          Step::read({.reg = 0x46, .count = 1, .offset = 5})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x41, .count = 1, .offset = 0}),
+          Engine::Step::read({.reg = 0x42, .count = 1, .offset = 1}),
+          Engine::Step::read({.reg = 0x43, .count = 1, .offset = 2}),
+          Engine::Step::read({.reg = 0x44, .count = 1, .offset = 3}),
+          Engine::Step::read({.reg = 0x45, .count = 1, .offset = 4}),
+          Engine::Step::read({.reg = 0x46, .count = 1, .offset = 5})};
 
         struct Sample {
             std::array<std::uint8_t, 6> eflag{};
@@ -215,18 +214,18 @@ struct Pca9956b {
         }
     };
 
-    using Reads  = List<Status>;
-    using Writes = List<Mode2, LedOut, IrefAll, PwmAll, Iref, Pwm>;
+    using Reads  = Engine::List<Status>;
+    using Writes = Engine::List<Mode2, LedOut, IrefAll, PwmAll, Iref, Pwm>;
 };
 
 /// The same part with the EFLAGn registers read once a second beside MODE2, for a user that
 /// wants to know *which* output the ERROR flag is about. Two read groups, so a Sample is
 /// named by its group: `latest<Status>()`, `latest<Errors>()`.
-template<Address7 Addr, Ohm Rext = Units::ohm(1000), typename Timing = DefaultTiming>
+template<Address7 Addr, Ohm Rext = Units::ohm(1000), typename Timing = Engine::DefaultTiming>
 struct Pca9956bDiagnostics : Pca9956b<Addr, Rext, Timing> {
     using Status = typename Pca9956b<Addr, Rext, Timing>::Status;
     using Errors = typename Pca9956b<Addr, Rext, Timing>::Errors;
-    using Reads  = List<Status, Errors>;
+    using Reads  = Engine::List<Status, Errors>;
 };
 
 }   // namespace Kvasir::I2C::Chips

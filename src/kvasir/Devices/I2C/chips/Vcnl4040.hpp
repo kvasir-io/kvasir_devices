@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -22,7 +23,7 @@ struct Vcnl4040 {
     /// Vishay VCNL4040. VCNL4040.md:442..443, :620..621: command code 0x0C reads ID_L 0x86 then ID_M
     /// 0x01, low byte first.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x0C, 2, false, 0xFFFF, 0x0186},
+      Engine::RegisterCheck{"id", 0x0C, 2, false, 0xFFFF, 0x0186},
     };
     static constexpr Address7                Address = 0x60;
     static constexpr std::array<Address7, 1> Addresses{0x60};
@@ -30,14 +31,14 @@ struct Vcnl4040 {
 
     static constexpr std::uint16_t DeviceId = 0x0186;
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::write({.reg = 0x00, .payload = {0x00, 0x00}}
-      ),
-      Step::write({.reg = 0x03, .payload = {0x00, 0x00}}
-      ),
-      Step::write({.reg = 0x04, .payload = {0x00, 0x00}, .delay = std::chrono::milliseconds{100}}
-      ),
+      Engine::Step::write({.reg = 0x00, .payload = {0x00, 0x00}}),
+      Engine::Step::write({.reg = 0x03, .payload = {0x00, 0x00}}),
+      Engine::Step::write(
+        {.reg = 0x04, .payload = {0x00, 0x00}, .delay = std::chrono::milliseconds{100}}),
     };
+    // clang-format on
 
     struct State {
         std::uint16_t deviceId{};
@@ -55,9 +56,10 @@ struct Vcnl4040 {
 
     struct Light {
         static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{Step::read({.reg = 0x08, .count = 2, .offset = 0}),
-                                          Step::read({.reg = 0x09, .count = 2, .offset = 2}),
-                                          Step::read({.reg = 0x0A, .count = 2, .offset = 4})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x08, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x09, .count = 2, .offset = 2}),
+          Engine::Step::read({.reg = 0x0A, .count = 2, .offset = 4})};
 
         struct Sample {
             std::uint16_t proximity{};
@@ -74,7 +76,7 @@ struct Vcnl4040 {
         }
     };
 
-    using Reads = List<Light>;
+    using Reads = Engine::List<Light>;
 };
 
 }   // namespace Kvasir::I2C::Chips

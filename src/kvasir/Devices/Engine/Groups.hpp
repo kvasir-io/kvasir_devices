@@ -1,0 +1,104 @@
+#pragma once
+
+#include "../Duration.hpp"
+#include "Description.hpp"
+#include "kvasir/Util/Config.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+
+/// Common shapes of write/read groups, so a description does not spell them out: a one-byte
+/// register a write group owns, and the identification register a bring-up reads first.
+namespace Kvasir::Engine::Groups {
+
+/// A one-byte register the application writes. No Initial: the part keeps what it came up with
+/// until something is set, and a value set is put back after a later bring-up.
+template<std::uint16_t Reg>
+struct Byte {
+    using Value                        = std::uint8_t;
+    static constexpr std::size_t Bytes = 1;
+
+    [[nodiscard]] static constexpr Step encode(Value const&         value,
+                                               std::span<std::byte> buffer) {
+        buffer[0] = static_cast<std::byte>(value);
+        return Step::writeBuffer({.reg = Reg, .offset = 0, .count = 1});
+    }
+};
+
+/// A one-byte register that holds `Init` from every bring-up on, unless the application set it.
+template<std::uint16_t Reg, std::uint8_t Init>
+struct InitialByte : Byte<Reg> {
+    static constexpr typename Byte<Reg>::Value Initial = Init;
+};
+
+/// A 16-bit big-endian register that holds `Init` from every bring-up on, unless the
+/// application set it: the TI monitors' ADC_CONFIG and SHUNT_CAL words.
+template<std::uint16_t Reg, std::uint16_t Init>
+struct Word {
+    using Value                          = std::uint16_t;
+    static constexpr std::size_t Bytes   = 2;
+    static constexpr Value       Initial = Init;
+
+    [[nodiscard]] static constexpr Step encode(Value const&         value,
+                                               std::span<std::byte> buffer) {
+        putBe16(buffer, 0, value);
+        return Step::writeBuffer({.reg = Reg, .offset = 0, .count = 2});
+    }
+};
+
+/// The same, little-endian (low byte first): a 16-bit pair of 8-bit registers such as an I/O expander's port A and
+/// port B (MCP23017, TCA9555), A in the low byte.
+template<std::uint16_t Reg, std::uint16_t Init>
+struct WordLe {
+    using Value                          = std::uint16_t;
+    static constexpr std::size_t Bytes   = 2;
+    static constexpr Value       Initial = Init;
+
+    [[nodiscard]] static constexpr Step encode(Value const&         value,
+                                               std::span<std::byte> buffer) {
+        putLe16(buffer, 0, value);
+        return Step::writeBuffer({.reg = Reg, .offset = 0, .count = 2});
+    }
+};
+
+/// An InitialByte read back `Timing::VerifyDelay` after every write and every
+/// `Timing::VerifyInterval` after that, and written again when it does not match (Device.hpp's
+/// verify). Both are std::chrono durations:
+///
+///     struct Checked {
+///         static constexpr std::chrono::milliseconds VerifyDelay{100};
+///         static constexpr std::chrono::milliseconds VerifyInterval{1000};
+///     };
+///     using Enable = Groups::VerifiedByte<0x80, 0x00, Checked>;
+template<std::uint16_t Reg, std::uint8_t Init, typename Timing>
+struct VerifiedByte : InitialByte<Reg, Init> {
+    static constexpr std::chrono::milliseconds VerifyDelay    = Timing::VerifyDelay;
+    static constexpr std::chrono::milliseconds VerifyInterval = Timing::VerifyInterval;
+};
+
+/// A temperature sensor's alert limits, read back every `Timing::LimitsVerifyInterval` (and
+/// `LimitsVerifyDelay` after a write, default 100 ms) and rewritten when they differ: a part
+/// that lost them to a supply dip keeps answering with its reset defaults. Empty otherwise.
+///     struct Checked { static constexpr std::chrono::seconds LimitsVerifyInterval{5}; };
+///     using Sensor = Chips::Tmp1075<Checked>;
+template<typename Timing>
+struct LimitsReadBack {};
+
+template<typename Timing>
+    requires requires { Timing::LimitsVerifyInterval; }
+struct LimitsReadBack<Timing> {
+    static constexpr std::chrono::milliseconds VerifyDelay = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Timing, LimitsVerifyDelay, std::chrono::milliseconds{100}));
+    static constexpr std::chrono::milliseconds VerifyInterval
+      = Kvasir::asDuration(Timing::LimitsVerifyInterval);
+};
+
+/// The State of a description that publishes its identity register and nothing else: filled by its
+/// `identified()` hook from what the engine read for the description's `Identity` (Device.hpp).
+struct DeviceId {
+    std::uint16_t deviceId{};
+};
+
+}   // namespace Kvasir::Engine::Groups

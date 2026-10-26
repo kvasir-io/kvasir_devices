@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -24,20 +25,16 @@ struct Shtc3 {
     static constexpr std::size_t             RegisterBytes = 0;
     static constexpr auto                    StartupDelay  = std::chrono::milliseconds{1};
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}
-      ),
-      Step::command({.payload = {0x80, 0x5D}, .delay = std::chrono::milliseconds{1}}
-      ),
-      Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}
-      ),
-      Step::command({.payload = {0xEF, 0xC8}}
-      ),
-      Step::receive({.count = 3, .offset = 0}
-      ),
-      Step::command({.payload = {0xB0, 0x98}}
-      ),
+      Engine::Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {0x80, 0x5D}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {0xEF, 0xC8}}),
+      Engine::Step::receive({.count = 3, .offset = 0}),
+      Engine::Step::command({.payload = {0xB0, 0x98}}),
     };
+    // clang-format on
 
     struct State {
         std::uint16_t deviceId{};
@@ -50,37 +47,33 @@ struct Shtc3 {
     }
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
+        static constexpr auto Period = std::chrono::milliseconds{1000};
+        // clang-format off
         static constexpr std::array Steps{
-          Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}
-          ),
-          Step::command({.payload = {0x78, 0x66}, .delay = std::chrono::milliseconds{13}}
-          ),
-          Step::receive({.count = 6, .offset = 0}
-          ),
-          Step::command({.payload = {0xB0, 0x98}}
-          ),
+          Engine::Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}),
+          Engine::Step::command({.payload = {0x78, 0x66}, .delay = std::chrono::milliseconds{13}}),
+          Engine::Step::receive({.count = 6, .offset = 0}),
+          Engine::Step::command({.payload = {0xB0, 0x98}}),
         };
+        // clang-format on
 
         struct Sample {
             CentiDegC    temperature{};
             CentiPercent humidity{};
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             if(!Sensirion::wordOk(data, 0) || !Sensirion::wordOk(data, 3)) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             Sample sample{};
-            sample.temperature = Units::centiDegC(
-              -4500 + static_cast<std::int32_t>((17500LL * data.be16(0)) / 65535));
-            sample.humidity
-              = Units::centiPercent(static_cast<std::uint32_t>((10000ULL * data.be16(3)) / 65535));
-            return Outcome<Sample>::ok(sample);
+            sample.temperature = Units::centiDegC(Sensirion::centiDegC(data.be16(0)));
+            sample.humidity    = Units::centiPercent(Sensirion::centiPercentRh(data.be16(3)));
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
-    using Reads = List<Measurement>;
+    using Reads = Engine::List<Measurement>;
 };
 
 }   // namespace Kvasir::I2C::Chips

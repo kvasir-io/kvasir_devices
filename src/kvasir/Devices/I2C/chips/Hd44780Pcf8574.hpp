@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -98,44 +99,37 @@ struct Hd44780Pcf8574 {
 
     /// One command byte as a Step, backlight on (the bring-up's). No default for the delay:
     /// a default argument may not be used from inside the class that declares it.
-    [[nodiscard]] static constexpr Step command(std::uint8_t              v,
-                                                std::chrono::milliseconds delay) {
+    [[nodiscard]] static constexpr Engine::Step command(std::uint8_t              v,
+                                                        std::chrono::milliseconds delay) {
         auto const n = nibbles(v, 0);
-        return Step::command({
+        return Engine::Step::command({
           .payload = {n[0], n[1], n[2], n[3]},
           .delay   = delay
         });
     }
 
+    // clang-format off
     static constexpr std::array Init{
       // A single high nibble, three times, then the switch to 4-bit: E pulsed once each.
-      Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
-                                 static_cast<std::uint8_t>(0x30 | BacklightBit)},
-                     .delay   = std::chrono::milliseconds{5}}
-      ),
-      Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
-                                 static_cast<std::uint8_t>(0x30 | BacklightBit)},
-                     .delay   = std::chrono::milliseconds{1}}
-      ),
-      Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
-                                 static_cast<std::uint8_t>(0x30 | BacklightBit)},
-                     .delay   = std::chrono::milliseconds{1}}
-      ),
-      Step::command({.payload = {static_cast<std::uint8_t>(0x20 | BacklightBit | Enable),
-                                 static_cast<std::uint8_t>(0x20 | BacklightBit)},
-                     .delay   = std::chrono::milliseconds{1}}
-      ),
-      command(0x28, std::chrono::milliseconds{0}
-      ), // function set: 4-bit, two lines, 5 x 8
-      command(0x08, std::chrono::milliseconds{0}
-      ), // display off
-      command(0x01, std::chrono::milliseconds{3}
-      ), // clear
-      command(0x06, std::chrono::milliseconds{0}
-      ), // entry mode: increment, no shift
-      command(0x0C, std::chrono::milliseconds{0}
-      ), // display on, cursor off
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
+                                         static_cast<std::uint8_t>(0x30 | BacklightBit)},
+                             .delay   = std::chrono::milliseconds{5}}),
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
+                                         static_cast<std::uint8_t>(0x30 | BacklightBit)},
+                             .delay   = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
+                                         static_cast<std::uint8_t>(0x30 | BacklightBit)},
+                             .delay   = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x20 | BacklightBit | Enable),
+                                         static_cast<std::uint8_t>(0x20 | BacklightBit)},
+                             .delay   = std::chrono::milliseconds{1}}),
+      command(0x28, std::chrono::milliseconds{0}),   // function set: 4-bit, two lines, 5 x 8
+      command(0x08, std::chrono::milliseconds{0}),   // display off
+      command(0x01, std::chrono::milliseconds{3}),   // clear
+      command(0x06, std::chrono::milliseconds{0}),   // entry mode: increment, no shift
+      command(0x0C, std::chrono::milliseconds{0}),   // display on, cursor off
     };
+    // clang-format on
 
     /// One row of text, and the backlight state its bytes carry. Shorter strings are padded
     /// with spaces.
@@ -165,9 +159,9 @@ struct Hd44780Pcf8574 {
         static constexpr std::size_t Items = Lines;
         static constexpr std::size_t Bytes = 4 + 4 * Columns;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             auto const lit  = light(value.backlight);
             auto const addr = nibbles(static_cast<std::uint8_t>(0x80U | RowAddress[item]), 0, lit);
             for(std::size_t i = 0; i < 4; ++i) { buffer[i] = std::byte{addr[i]}; }
@@ -175,7 +169,8 @@ struct Hd44780Pcf8574 {
                 auto const n = nibbles(static_cast<std::uint8_t>(value.chars[c]), Rs, lit);
                 for(std::size_t i = 0; i < 4; ++i) { buffer[4 + 4 * c + i] = std::byte{n[i]}; }
             }
-            return Step::commandBuffer({.offset = 0, .count = static_cast<std::uint8_t>(Bytes)});
+            return Engine::Step::commandBuffer(
+              {.offset = 0, .count = static_cast<std::uint8_t>(Bytes)});
         }
     };
 
@@ -197,15 +192,15 @@ struct Hd44780Pcf8574 {
         static constexpr Value blink{0x0F, Backlight::on};    ///< display on, blinking cursor
         static constexpr Value Initial = on;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             auto const n = nibbles(value.mode, 0, light(value.backlight));
             for(std::size_t i = 0; i < 4; ++i) { buffer[i] = std::byte{n[i]}; }
-            return Step::commandBuffer({.offset = 0, .count = 4});
+            return Engine::Step::commandBuffer({.offset = 0, .count = 4});
         }
     };
 
-    using Writes = List<Line, Control>;
+    using Writes = Engine::List<Line, Control>;
 };
 
 using Lcd1602 = Hd44780Pcf8574<16, 2>;

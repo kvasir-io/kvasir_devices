@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -75,13 +76,13 @@ namespace Ds1307Detail {
 
     struct Clock {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 7})};
+        static constexpr std::array Steps{Engine::Step::read({.reg = 0x00, .count = 7})};
         using Sample = Time;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             Sample t{};
-            if(!decodeTime(data, t)) { return Outcome<Sample>::reject(); }
-            return Outcome<Sample>::ok(t);
+            if(!decodeTime(data, t)) { return Engine::Outcome<Sample>::reject(); }
+            return Engine::Outcome<Sample>::ok(t);
         }
     };
 
@@ -93,10 +94,10 @@ namespace Ds1307Detail {
         /// the stale time back on a chip that has been keeping its own since.
         static constexpr bool Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         time,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         time,
+                                                           std::span<std::byte> buffer) {
             encodeTime(time, buffer);
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 7});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 7});
         }
     };
 }   // namespace Ds1307Detail
@@ -123,17 +124,17 @@ struct Ds1307 {
     using SetTime = Ds1307Detail::SetTime;
 
     struct Clock : Ds1307Detail::Clock {
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const got = Ds1307Detail::Clock::decode(data);
-            if(got.kind == Outcome<Sample>::Kind::ok && got.value.halted) {
-                return Outcome<Sample>::reject();
+            if(got.kind == Engine::DecodeKind::ok && got.value.halted) {
+                return Engine::Outcome<Sample>::reject();
             }
             return got;
         }
     };
 
-    using Reads  = List<Clock>;
-    using Writes = List<SetTime>;
+    using Reads  = Engine::List<Clock>;
+    using Writes = Engine::List<SetTime>;
 };
 
 /// Maxim DS3231: the same seven time registers at 0x00, so the layout is the DS1307's plus
@@ -152,8 +153,9 @@ struct Ds3231 {
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{10000};
-        static constexpr std::array Steps{Step::read({.reg = 0x0F, .count = 1, .offset = 0}),
-                                          Step::read({.reg = 0x11, .count = 2, .offset = 1})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x0F, .count = 1, .offset = 0}),
+          Engine::Step::read({.reg = 0x11, .count = 2, .offset = 1})};
 
         struct Sample {
             CentiDegC temperature{};         ///< the die, in quarter degrees (0.25 degC steps)
@@ -170,8 +172,8 @@ struct Ds3231 {
         }
     };
 
-    using Reads  = List<Clock, Temperature>;
-    using Writes = List<SetTime>;
+    using Reads  = Engine::List<Clock, Temperature>;
+    using Writes = Engine::List<SetTime>;
 };
 
 }   // namespace Kvasir::I2C::Chips

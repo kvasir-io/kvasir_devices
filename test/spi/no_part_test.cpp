@@ -1,15 +1,10 @@
 /// Every SPI driver with MISO floating low and high: none may take that for a part or write a
 /// configuration to it. Also the one place every driver is instantiated on the host.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 
 #include <chrono>
 #include <cstddef>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/SdCard.hpp>
 #include <kvasir/Devices/SPI/chips/Ad7124.hpp>
 #include <kvasir/Devices/SPI/chips/Ads131m0X.hpp>
@@ -35,34 +30,29 @@ struct Tag {};
 using Bus = QueuedSpi::Bus<Tag>;
 
 struct Adc131Config {
-    static constexpr std::size_t Channels = 2;
+    static constexpr std::size_t channels = 2;
 };
 
 std::uint8_t level{};
 
 void fresh(std::uint8_t l) {
     level = l;
-    Bus::reset();
-    Pins::reset();
-    FakeClock::set(1s);
-    Log::reset();
-    Bus::floating     = l;
-    Bus::partSelected = [] { return !Pins::level[Spi::Cs::id]; };
+    Spi::Harness::fresh<Bus>();
+    Bus::floating = l;
 }
 
 /// Runs `turn` for `span`; DRDY/RVS float to MISO's level, so either sense is met in one run.
-template<typename Turn>
+template<typename BusTurn>
 void run(std::chrono::milliseconds span,
-         Turn                      turn) {
-    auto const until = FakeClock::now() + span;
-    while(FakeClock::now() < until) {
-        FakeClock::advance(1ms);
-        Pins::level[Spi::Drdy::id] = level != 0;
-        Pins::level[Spi::Rvs::id]  = level != 0;
-        Bus::handler();
-        turn();
-        Bus::tick();
-    }
+         BusTurn                   turn) {
+    // 1 ms turns, the clock first; every turn the floating lines are put back to MISO's level
+    Spi::Harness::runFor<Bus>(turn,
+                              span,
+                              Spi::Loop{.step = 1ms, .order = Spi::ClockOrder::first},
+                              [] {
+                                  Pins::level[Spi::Drdy::id] = level != 0;
+                                  Pins::level[Spi::Rvs::id]  = level != 0;
+                              });
 }
 
 /// Frames longer than a command byte with CS low: a configuration written to nothing.
@@ -77,26 +67,30 @@ void all(std::uint8_t l) {
 
     fresh(l);
     A::Device<Bus, FakeClock, A::Chips::Bme280, Spi::Cs> bme{};
-    run(5s, [&] { bme.handler(); });
+    Spi::BusScope<Bus> const                             bmeScope{};
+    run(5s, [&] { bme.turn(); });
     check(!bme.answering() && configurationFrames() == 0, "BME280: not answering, nothing written");
     check(Pins::level[Spi::Cs::id], "BME280: CS high");
 
     fresh(l);
     A::Device<Bus, FakeClock, A::Chips::Mpu9250, Spi::Cs> mpu{};
-    run(5s, [&] { mpu.handler(); });
+    Spi::BusScope<Bus> const                              mpuScope{};
+    run(5s, [&] { mpu.turn(); });
     check(!mpu.answering() && configurationFrames() == 0,
           "MPU-9250: not answering, nothing written");
 
     fresh(l);
     A::Max31865<Bus, FakeClock, Spi::Cs, Spi::Drdy> rtd{};
-    run(5s, [&] { rtd.handler(); });
+    Spi::BusScope<Bus> const                        rtdScope{};
+    run(5s, [&] { rtd.turn(); });
     check(!rtd.answering() && !rtd.temperature(), "MAX31865: not answering, no reading");
     check(Pins::level[Spi::Cs::id], "MAX31865: CS high");
 
     fresh(l);
     A::Ad7124<Bus, FakeClock, Spi::Cs> adc{};
-    run(5s, [&] { adc.handler(); });
-    check(!adc.present() && adc.conversions() == 0, "AD7124: not answering, nothing converted");
+    Spi::BusScope<Bus> const           adcScope{};
+    run(5s, [&] { adc.turn(); });
+    check(!adc.answering() && adc.conversions() == 0, "AD7124: not answering, nothing converted");
     std::size_t configured = 0;
     for(auto const& f : Bus::frames) {
         configured += (f.mosi.size() > 1 && f.mosi[0] == 0x07) ? 1U : 0U;
@@ -105,17 +99,19 @@ void all(std::uint8_t l) {
 
     fresh(l);
     A::NorFlash<Bus, FakeClock, Spi::Cs> flash{};
+    Spi::BusScope<Bus> const             flashScope{};
     static_cast<void>(flash.readJedec());
     run(1s, [&] {
-        flash.handler();
-        if(flash.takeDone() && !flash.present()) { static_cast<void>(flash.readJedec()); }
+        flash.turn();
+        if(flash.takeDone() && !flash.answering()) { static_cast<void>(flash.readJedec()); }
     });
-    check(!flash.present(), "NOR flash: no JEDEC id from nothing");
+    check(!flash.answering(), "NOR flash: no JEDEC id from nothing");
     check(flash.absent(), "NOR flash: reported absent");
 
     fresh(l);
     A::Max7219<Bus, FakeClock, Spi::Cs> leds{};
-    run(2s, [&] { leds.handler(); });
+    Spi::BusScope<Bus> const            ledsScope{};
+    run(2s, [&] { leds.turn(); });
     check(leds.answering(), "MAX7219: write-only, so the frames going out is all it can say");
     check(Pins::level[Spi::Cs::id], "MAX7219: LOAD high between frames");
 
@@ -124,7 +120,7 @@ void all(std::uint8_t l) {
     A::Ads8675<Bus, FakeClock, Spi::Cs, Spi::Rvs, Spi::Rst> ads{
       [&](Kvasir::Units::MicroVolt) { ++got; }};
     run(3s, [&] {
-        ads.handler();
+        ads.turn();
         ads.sampleCallback();
         ads.pinInterrupt();
     });
@@ -132,17 +128,20 @@ void all(std::uint8_t l) {
 
     fresh(l);
     A::Ads131m0X<Bus, FakeClock, Spi::Cs, Spi::Drdy, Adc131Config> m0x{};
-    run(3s, [&] { m0x.handler(); });
-    check(!m0x.present() && !m0x.valid(), "ADS131M0x: no reset acknowledge, no reading");
+    Spi::BusScope<Bus> const                                       m0xScope{};
+    run(3s, [&] { m0x.turn(); });
+    check(!m0x.answering() && !m0x.valid(), "ADS131M0x: no reset acknowledge, no reading");
     check(Pins::level[Spi::Cs::id], "ADS131M0x: CS high");
 
     fresh(l);
     A::Ltc2400::Reader<Bus, FakeClock, Spi::Cs, Spi::Drdy> ltc{};
-    run(3s, [&] { ltc.handler(); });
+    Spi::BusScope<Bus> const                               ltcScope{};
+    run(3s, [&] { ltc.turn(); });
     check(!ltc.valid() && ltc.link() == Kvasir::Link::absent, "LTC2401: no reading, absent");
 
     fresh(l);
     A::Ltc2641::Dac<Bus, Spi::Cs> dac{};
+    Spi::BusScope<Bus> const      dacScope{};
     dac.write(0x8000);
     run(10ms, [] {});
     check(dac.writes() == 1 && Pins::level[Spi::Cs::id],
@@ -150,7 +149,8 @@ void all(std::uint8_t l) {
 
     fresh(l);
     A::SdCard<Bus, FakeClock, Spi::Cs> card{};
-    run(3s, [&] { card.handler(); });
+    Spi::BusScope<Bus> const           cardScope{};
+    run(3s, [&] { card.turn(); });
     check(!card.up(), "SD card: not up");
 }
 

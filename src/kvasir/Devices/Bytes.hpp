@@ -97,26 +97,6 @@ constexpr std::uint8_t toBcd(std::uint8_t value) {
     return static_cast<std::uint8_t>(((value / 10) << 4) | (value % 10));
 }
 
-/// CRC-8, MSB first, no reflection and no final XOR, polynomial and init free. Superseded by
-/// Kvasir::Crc::Engine (kvasir/Util/Crc.hpp), whose parameters carry their check value; kept
-/// for code outside this repository.
-template<std::uint8_t Polynomial>
-[[deprecated(
-  "use a Kvasir::Crc::Engine preset (kvasir/Util/Crc.hpp)")]] [[nodiscard]] constexpr std::uint8_t
-crc8(Bytes        data,
-     std::uint8_t init) {
-    std::uint8_t crc = init;
-    for(std::size_t i = 0; i < data.size(); ++i) {
-        crc ^= data.u8(i);
-        for(int k = 0; k < 8; ++k) {
-            auto const shifted = static_cast<unsigned>(crc) << 1U;
-            crc = (crc & 0x80U) != 0 ? static_cast<std::uint8_t>(shifted ^ Polynomial)
-                                     : static_cast<std::uint8_t>(shifted);
-        }
-    }
-    return crc;
-}
-
 /// The CRC-8 Sensirion's parts use (SHT3x Table 20, also SHT4x, SHTC3, SGP30/40, SCD4x)
 /// and Aosong copied for the AHT20: CRC-8/NRSC-5, polynomial 0x31, init 0xFF. CRC(0xBEEF) =
 /// 0x92. (The HTU21D / Si7021 use the same polynomial from 0x00: Kvasir::Crc::Crc8Htu21d.)
@@ -137,6 +117,18 @@ namespace Sensirion {
         return crc8(data.sub(i, 2)) == data.u8(i + 2);
     }
 
+    /// The signal conversions the SHT3x (4.13), SHTC3 (5.11) and SCD4x share, in hundredths and integer arithmetic:
+    /// T = -45 + 175 x S / (2^16 - 1) degC and RH = 100 x S / (2^16 - 1) %RH (the SCD4x sheet's read_measurement
+    /// table, md l.433-434, has them as text; the SHT3x/SHTC3 sheets as pictures). The SHT4x's humidity is another
+    /// formula (-6 + 125 x S / (2^16 - 1), clamped): its own.
+    [[nodiscard]] constexpr std::int32_t centiDegC(std::uint16_t raw) {
+        return -4500 + static_cast<std::int32_t>((17500LL * raw) / 65535);
+    }
+
+    [[nodiscard]] constexpr std::uint32_t centiPercentRh(std::uint16_t raw) {
+        return static_cast<std::uint32_t>((10000ULL * raw) / 65535);
+    }
+
     /// The three bytes a 16-bit command argument is sent as.
     constexpr std::array<std::uint8_t,
                          3>
@@ -151,25 +143,6 @@ namespace Sensirion {
 /// the address bytes.
 [[nodiscard]] constexpr std::uint8_t crc8Smbus(Bytes data) {
     return Crc::Crc8Smbus<>::compute(data.bytes);
-}
-
-/// CRC-8 reflected (LSB first), no final XOR, polynomial (reflected) and init free. Superseded
-/// by Kvasir::Crc::Engine (kvasir/Util/Crc.hpp); kept for code outside this repository.
-template<std::uint8_t ReflectedPolynomial>
-[[deprecated(
-  "use a Kvasir::Crc::Engine preset (kvasir/Util/Crc.hpp)")]] [[nodiscard]] constexpr std::uint8_t
-crc8Reflected(Bytes        data,
-              std::uint8_t init) {
-    std::uint8_t crc = init;
-    for(std::size_t i = 0; i < data.size(); ++i) {
-        crc ^= data.u8(i);
-        for(int k = 0; k < 8; ++k) {
-            auto const shifted = static_cast<std::uint8_t>(crc >> 1U);
-            crc = (crc & 0x01U) != 0 ? static_cast<std::uint8_t>(shifted ^ ReflectedPolynomial)
-                                     : shifted;
-        }
-    }
-    return crc;
 }
 
 /// The Dallas/Maxim CRC-8 (CRC-8/MAXIM-DOW: x^8 + x^5 + x^4 + 1, reflected, init 0): 1-Wire
@@ -206,6 +179,23 @@ constexpr void putLe16(std::span<std::byte> out,
                        std::uint16_t        value) {
     out[i]     = static_cast<std::byte>(value & 0xFF);
     out[i + 1] = static_cast<std::byte>(value >> 8);
+}
+
+/// The low three bytes of `value`, high first (a 24-bit flash address).
+constexpr void putBe24(std::span<std::byte> out,
+                       std::size_t          i,
+                       std::uint32_t        value) {
+    out[i]     = static_cast<std::byte>((value >> 16) & 0xFF);
+    out[i + 1] = static_cast<std::byte>((value >> 8) & 0xFF);
+    out[i + 2] = static_cast<std::byte>(value & 0xFF);
+}
+
+/// The four bytes of `value`, high first (an SD command argument).
+constexpr void putBe32(std::span<std::byte> out,
+                       std::size_t          i,
+                       std::uint32_t        value) {
+    out[i] = static_cast<std::byte>(value >> 24);
+    putBe24(out, i + 1, value);
 }
 
 }   // namespace Kvasir

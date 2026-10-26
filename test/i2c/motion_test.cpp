@@ -28,8 +28,7 @@ using namespace Kvasir::I2C;
 namespace {
 
 void mpu6050() {
-    testCase("MPU6050");
-    fresh();
+    I2cCase const    testcase{"MPU6050"};
     RegisterModel<1> m{0x68};
     m.set(0x75, {0x68});
     m.set(0x3A, {0x01});   // INT_STATUS: DATA_RDY_INT
@@ -67,12 +66,12 @@ void mpu6050() {
                                0x00,
                                0x00,
                                0x00);
-        auto const got = Chips::Mpu6050::Motion::decode(Bytes{f}, Chips::Mpu6050::State{});
+        auto const got = Chips::Mpu6050::Motion::decode(Kvasir::Bytes{f}, Chips::Mpu6050::State{});
         return isOk(got) && equal(got.value.accel[2], 1000000) && equal(got.value.gyro[0], -1000)
             && equal(got.value.temperature, 3653);
     }());
     {
-        testCase("MPU6050 at +-16 g and 2000 dps");
+        testcase.step("MPU6050 at +-16 g and 2000 dps");
         RegisterModel<1> w{0x68};
         w.set(0x75, {0x68});
         w.set(0x3A, {0x01});
@@ -110,7 +109,7 @@ void mpu6050() {
             Chips::Mpu6050::State st{};
             st.accelRange  = 3;
             st.gyroRange   = 3;
-            auto const got = Chips::Mpu6050::Motion::decode(Bytes{f}, st);
+            auto const got = Chips::Mpu6050::Motion::decode(Kvasir::Bytes{f}, st);
             return isOk(got) && equal(got.value.accel[2], 8000000)
                 && equal(got.value.gyro[0], -7987);
         }());
@@ -119,12 +118,10 @@ void mpu6050() {
     auto const n = d.samples();
     runFor(d, 1s);
     checkEq(d.samples() - n, 50U, "50 samples a second");
-    if(failures != 0) { dump(); }
 }
 
 void lsm303agr() {
-    testCase("LSM303AGR");
-    fresh();
+    I2cCase const    testcase{"LSM303AGR"};
     RegisterModel<1> la{0x19};
     la.set(0x0F, {0x33});
     la.set(0x27,
@@ -168,9 +165,9 @@ void lsm303agr() {
     checkEq(l3.latest().temperature, 43203, "OUT_TEMP_A's step lands at offset 7");
     // ZYXDA, x 16384 and y -16384 left-aligned 12 bit at 0.98 mg, then OUT_TEMP 0x1234
     static_assert([] {
-        auto const f = frame(0x08, 0x00, 0x40, 0x00, 0xC0, 0x00, 0x00, 0x34, 0x12);
-        auto const got
-          = Chips::Lsm303agrAccel<>::Motion::decode(Bytes{f}, Chips::Lsm303agrAccel<>::State{});
+        auto const f   = frame(0x08, 0x00, 0x40, 0x00, 0xC0, 0x00, 0x00, 0x34, 0x12);
+        auto const got = Chips::Lsm303agrAccel<>::Motion::decode(Kvasir::Bytes{f},
+                                                                 Chips::Lsm303agrAccel<>::State{});
         return isOk(got) && equal(got.value.x, 1003520) && equal(got.value.y, -1003520)
             && equal(got.value.z, 0) && equal(got.value.temperature, 43203);
     }());
@@ -207,16 +204,14 @@ void lsm303agr() {
     // Zyxda, x 1000 counts at 1.5 mgauss: 150 uT
     static_assert([] {
         auto const f   = frame(0x08, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00);
-        auto const got = Chips::Lsm303agrMag<>::Field::decode(Bytes{f}, {});
+        auto const got = Chips::Lsm303agrMag<>::Field::decode(Kvasir::Bytes{f}, {});
         return isOk(got) && equal(got.value.x, 150000) && equal(got.value.y, 0)
             && equal(got.value.z, 0);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void iis2dulpx() {
-    testCase("IIS2DULPX");
-    fresh();
+    I2cCase const    testcase{"IIS2DULPX"};
     RegisterModel<1> iis{0x18};
     iis.set(0x0F, {0x47});
     // x = 16384 (1 g at +-2 g), y = -16384, z = 0, temperature = +3555 lsb (35 degC)
@@ -230,14 +225,14 @@ void iis2dulpx() {
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
           if(asleep > 0) {
               --asleep;
-              return FakeBus::Result::notAcknowledged;
+              return FakeBus::Result::nack;
           }
           return iis(a, sent, recv);
       }};
     Dev<Chips::Iis2dulpx<>> iu{};
     check(runUntil(iu, [&] { return iu.valid(); }, 500ms), "first sample");
     check(iu.identified(), "WHO_AM_I 0x47");
-    checkEq(iu.wakeRetries(), 2U, "the NAKs of the power-up were retried");
+    checkEq(iu.wakeRetryCount(), 2U, "the NAKs of the power-up were retried");
     check(!hasWrite({0x3E, 0x01}), "no SOFT_PD write: that is the SPI way out");
     check(hasWrite({0x10, 0x20}), "then the software reset");
     check(hasWrite({0x12, 0x04}), "CTRL3: HP_EN for the high-performance ODR");
@@ -247,15 +242,16 @@ void iis2dulpx() {
     checkEq(iu.latest().x, 999424, "the model's frame reached the decode");
     // x 16384, y -16384, z 0 at 61 ug/LSB, temperature 3555 lsb (35 degC)
     static_assert([] {
-        auto const f   = frame(0x00, 0x40, 0x00, 0xC0, 0x00, 0x00, 0xE3, 0x0D, 0x01);
-        auto const out = Chips::Iis2dulpx<>::Motion::decode(Bytes{f}, Chips::Iis2dulpx<>::State{});
+        auto const f = frame(0x00, 0x40, 0x00, 0xC0, 0x00, 0x00, 0xE3, 0x0D, 0x01);
+        auto const out
+          = Chips::Iis2dulpx<>::Motion::decode(Kvasir::Bytes{f}, Chips::Iis2dulpx<>::State{});
         auto const got = out.value;
         auto       old = f;
         old[8]         = std::byte{0x00};   // DRDY clear: the sample already read
         return isOk(out) && equal(got.x, 999424) && equal(got.y, -999424) && equal(got.z, 0)
             && equal(got.temperature, 35000)
-            && isUnchanged(
-                 Chips::Iis2dulpx<>::Motion::decode(Bytes{old}, Chips::Iis2dulpx<>::State{}));
+            && isUnchanged(Chips::Iis2dulpx<>::Motion::decode(Kvasir::Bytes{old},
+                                                              Chips::Iis2dulpx<>::State{}));
     }());
     // BW the rate allows: none on the ultra-low-power rates, ODR/16 only at 6 Hz low power,
     // at least ODR/8 at 12.5 Hz; the high-performance rates take what is asked
@@ -294,7 +290,7 @@ void iis2dulpx() {
         auto const                f = frame(0x00, 0x40, 0x00, 0xC0, 0x00, 0x00, 0xE3, 0x0D, 0x01);
         Chips::Iis2dulpx<>::State st{};
         st.fs          = 1;
-        auto const got = Chips::Iis2dulpx<>::Motion::decode(Bytes{f}, st).value;
+        auto const got = Chips::Iis2dulpx<>::Motion::decode(Kvasir::Bytes{f}, st).value;
         return equal(got.x, 1998848) && equal(got.y, -1998848);
     }());
     iu.set<Chips::Iis2dulpx<>::Config>(0x71);   // 50 Hz, +-4 g
@@ -317,12 +313,10 @@ void iis2dulpx() {
         }
         check(burst, "one eight-byte burst covers 0x28..0x2F");
     }
-    if(failures != 0) { dump(); }
 }
 
 void lsm9ds1() {
-    testCase("LSM9DS1");
-    fresh();
+    I2cCase const    testcase{"LSM9DS1"};
     RegisterModel<1> ag{0x6B};
     ag.set(0x0F, {0x68});
     ag.set(0x15, {0x00, 0x01, 0x03});   // temperature raw 256, STATUS_REG XLDA | GDA
@@ -351,22 +345,23 @@ void lsm9ds1() {
     checkEq(l9.latest().gyro[0], 7008, "the gyroscope's step lands at offset 3");
     // OUT_TEMP 256 and XLDA | GDA, gyro x 801, accel z 16384
     static_assert([] {
-        auto const f   = frame(0x00,
-                               0x01,
-                               0x03,
-                               0x21,
-                               0x03,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x00,
-                               0x40);
-        auto const got = Chips::Lsm9ds1Ag<>::Motion::decode(Bytes{f}, Chips::Lsm9ds1Ag<>::State{});
+        auto const f = frame(0x00,
+                             0x01,
+                             0x03,
+                             0x21,
+                             0x03,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x00,
+                             0x40);
+        auto const got
+          = Chips::Lsm9ds1Ag<>::Motion::decode(Kvasir::Bytes{f}, Chips::Lsm9ds1Ag<>::State{});
         return isOk(got) && equal(got.value.accel[2], 999424) && equal(got.value.gyro[0], 7008)
             && equal(got.value.temperature, 41000);
     }());
@@ -395,24 +390,30 @@ void lsm9ds1() {
     checkEq(lm.latest().x, 59801, "the model's frame reached the decode");
     // ZYXDA, x 4096 counts at 146 ugauss/LSB (1/6842 gauss): 59801.6 nT
     static_assert([] {
-        auto const f   = frame(0x08, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00);
-        auto const got = Chips::Lsm9ds1Mag<>::Field::decode(Bytes{f}, Chips::Lsm9ds1Mag<>::State{});
+        auto const f = frame(0x08, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00);
+        auto const got
+          = Chips::Lsm9ds1Mag<>::Field::decode(Kvasir::Bytes{f}, Chips::Lsm9ds1Mag<>::State{});
         return isOk(got) && equal(got.value.x, 59801) && equal(got.value.y, 0);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void bma456() {
-    testCase("BMA456");
-    fresh();
+    I2cCase const    testcase{"BMA456"};
     RegisterModel<1> bm{0x18};
     bm.set(0x00, {0x16});                                 // CHIP_ID
+    bm.set(0x03, {0x10});                                 // STATUS: cmd_rdy, no drdy_acc yet
     bm.set(0x12, {0x00, 0x10, 0x00, 0xF0, 0x00, 0x40});   // x=4096, y=-4096, z=16384
     bm.set(0x22, {0x07});                                 // 23 + 7 degC
-    bm.readOnly      = {0x00, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x22};
+    bm.readOnly      = {0x00, 0x03, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x22};
     FakeBus::respond = std::ref(bm);
     Dev<Chips::Bma456<>> bb{};
-    check(runUntil(bb, [&] { return bb.valid(); }, 1s), "first sample");
+    // the part answers and is polled, but without drdy_acc no frame is a sample (its data registers would be the
+    // reset value 0 before the first conversion: a 0 g sample)
+    runFor(bb, 400ms);
+    check(bb.identified(), "up and polled");
+    check(!bb.valid(), "no sample while STATUS.drdy_acc is clear");
+    bm.set(0x03, {0x90});   // drdy_acc
+    check(runUntil(bb, [&] { return bb.valid(); }, 1s), "first sample once drdy_acc is set");
     check(bb.identified(), "CHIP_ID 0x16");
     check(writes(0).size() >= 7, "the seven bring-up writes");
     check(!writes(0).empty() && writes(0)[0] == std::vector<std::uint8_t>{0x7E, 0xB6},
@@ -424,29 +425,36 @@ void bma456() {
     checkEq(bb.latest().temperature, 30, "the temperature's step lands at offset 6");
     // x 4096, y -4096, z 16384 little endian at 16384 LSB/g, then temperature 0x07 (23 + 7)
     static_assert([] {
-        auto const f   = frame(0x00, 0x10, 0x00, 0xF0, 0x00, 0x40, 0x07);
-        auto const got = Chips::Bma456<>::Motion::decode(Bytes{f}, Chips::Bma456<>::State{});
+        auto const f = frame(0x00, 0x10, 0x00, 0xF0, 0x00, 0x40, 0x07, 0x90);
+        auto const got
+          = Chips::Bma456<>::Motion::decode(Kvasir::Bytes{f}, Chips::Bma456<>::State{});
         return isOk(got) && equal(got.value.x, 250000) && equal(got.value.y, -250000)
             && equal(got.value.z, 1000000) && equal(got.value.temperature, 30)
             && got.value.temperatureValid;
     }());
+    // the registers' reset value without drdy_acc (STATUS 0x10, its reset value): no sample, not 0 g
+    static_assert([] {
+        auto const f = frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10);
+        return isUnchanged(
+          Chips::Bma456<>::Motion::decode(Kvasir::Bytes{f}, Chips::Bma456<>::State{}));
+    }());
     // temperature 0x80, the part's "no temperature yet": the acceleration still counts
     static_assert([] {
-        auto const f   = frame(0x00, 0x10, 0x00, 0xF0, 0x00, 0x40, 0x80);
-        auto const got = Chips::Bma456<>::Motion::decode(Bytes{f}, Chips::Bma456<>::State{});
+        auto const f = frame(0x00, 0x10, 0x00, 0xF0, 0x00, 0x40, 0x80, 0x80);
+        auto const got
+          = Chips::Bma456<>::Motion::decode(Kvasir::Bytes{f}, Chips::Bma456<>::State{});
         return isOk(got) && equal(got.value.x, 250000) && !got.value.temperatureValid;
     }());
     checkEq(Chips::Bma456<Chips::Bma456Detail::Range::g16>::CountsPerG,
             std::uint16_t{2048},
             "2048 LSB/g at +-16 g");
-    if(failures != 0) { dump(); }
 }
 
 void motion() {
-    testCase("LIS3DH");
-    fresh();
+    I2cCase          testcase{"LIS3DH"};
     RegisterModel<1> m{0x18};
     m.set(0x0F, {0x33});
+    m.set(0x27, {0x0F});                                 // STATUS_REG: ZYXDA and the axes
     m.set(0xA8, {0x00, 0x00, 0x00, 0x00, 0x00, 0x40});   // z = 0x4000 -> 1024 mg
     FakeBus::respond = std::ref(m);
     Dev<Chips::Lis3dh> a{};
@@ -456,15 +464,21 @@ void motion() {
     checkEq(a.latest().z, 1024000, "the model's frame reached the decode");
     // z 0x4000 left-aligned: 1024 counts at 1 mg
     static_assert([] {
-        auto const f   = frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x40);
-        auto const got = Chips::Lis3dh::Motion::decode(Bytes{f}, Chips::Lis3dh::State{});
-        return equal(got.x, 0) && equal(got.y, 0) && equal(got.z, 1024000);
+        auto const f   = frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x08);
+        auto const out = Chips::Lis3dh::Motion::decode(Kvasir::Bytes{f}, Chips::Lis3dh::State{});
+        auto const got = out.value;
+        return isOk(out) && equal(got.x, 0) && equal(got.y, 0) && equal(got.z, 1024000);
+    }());
+    // without ZYXDA (single axes ready, or nothing yet): no sample
+    static_assert([] {
+        auto const f = frame(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07);
+        return isUnchanged(Chips::Lis3dh::Motion::decode(Kvasir::Bytes{f}, Chips::Lis3dh::State{}));
     }());
 
-    testCase("LSM6DS3");
-    fresh();
+    testcase.next("LSM6DS3");
     RegisterModel<1> g{0x6A};
     g.set(0x0F, {0x69});
+    g.set(0x1E, {0x03});   // STATUS_REG: GDA, XLDA
     g.set(0x20,
           {0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x40});
     FakeBus::respond = std::ref(g);
@@ -488,18 +502,30 @@ void motion() {
                                         0x00,
                                         0x00,
                                         0x09,
-                                        0x40);
+                                        0x40,
+                                        0x03);
         Chips::Lsm6ds3::State st{};
         st.deviceId    = 0x69;
-        auto const got = Chips::Lsm6ds3::Motion::decode(Bytes{f}, st);
-        return equal(got.temperature, 2500) && equal(got.gyro[0], 140)
+        auto const out = Chips::Lsm6ds3::Motion::decode(Kvasir::Bytes{f}, st);
+        auto const got = out.value;
+        return isOk(out) && equal(got.temperature, 2500) && equal(got.gyro[0], 140)
             && equal(got.accel[2], 999973);
     }());
+    // neither XLDA nor GDA (TDA alone, or the reset value): no sample; GDA alone is one
+    static_assert([] {
+        std::array<std::byte, 15> f{};
+        f[14] = std::byte{0x04};   // TDA
+        Chips::Lsm6ds3::State st{};
+        st.deviceId   = 0x69;
+        auto const no = Chips::Lsm6ds3::Motion::decode(Kvasir::Bytes{f}, st);
+        f[14]         = std::byte{0x02};   // GDA
+        return isUnchanged(no) && isOk(Chips::Lsm6ds3::Motion::decode(Kvasir::Bytes{f}, st));
+    }());
 
-    testCase("LSM6DS3 at +-16 g and 2000 dps");
-    fresh();
+    testcase.next("LSM6DS3 at +-16 g and 2000 dps");
     RegisterModel<1> g16{0x6A};
     g16.set(0x0F, {0x69});
+    g16.set(0x1E, {0x01});   // STATUS_REG: XLDA alone is enough
     g16.set(0x20,
             {0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x40});
     FakeBus::respond = std::ref(g16);
@@ -524,17 +550,17 @@ void motion() {
                                         0x00,
                                         0x00,
                                         0x09,
-                                        0x40);
+                                        0x40,
+                                        0x03);
         Chips::Lsm6ds3::State st{};
         st.deviceId    = 0x69;
         st.accelFs     = 1;
         st.gyroFs      = 3;
-        auto const got = Chips::Lsm6ds3::Motion::decode(Bytes{f}, st);
+        auto const got = Chips::Lsm6ds3::Motion::decode(Kvasir::Bytes{f}, st).value;
         return equal(got.accel[2], 7999784) && equal(got.gyro[0], 1120);
     }());
 
-    testCase("ADXL345");
-    fresh();
+    testcase.next("ADXL345");
     RegisterModel<1> x{0x53};
     x.set(0x00, {0xE5});
     x.set(0x30, {0x80});   // INT_SOURCE: DATA_READY
@@ -548,12 +574,11 @@ void motion() {
     // DATA_READY, DATA_FORMAT, then z 256 counts: 1 g
     static_assert([] {
         auto const f   = frame(0x80, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01);
-        auto const got = Chips::Adxl345::Motion::decode(Bytes{f}, {});
+        auto const got = Chips::Adxl345::Motion::decode(Kvasir::Bytes{f}, {});
         return isOk(got) && equal(got.value.x, 0) && equal(got.value.z, 1000000);
     }());
 
-    testCase("HMC5883L");
-    fresh();
+    testcase.next("HMC5883L");
     RegisterModel<1> h{0x1E};
     h.set(0x0A, {'H', '4', '3'});
     h.set(0x03, {0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x01});   // X, Z, Y, then STATUS RDY
@@ -566,13 +591,12 @@ void motion() {
     // X 256, Z 512, Y 768 big-endian at 1090 counts per gauss, then STATUS RDY
     static_assert([] {
         auto const f   = frame(0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x01);
-        auto const got = Chips::Hmc5883l::Field::decode(Bytes{f}, {});
+        auto const got = Chips::Hmc5883l::Field::decode(Kvasir::Bytes{f}, {});
         return isOk(got) && equal(got.value.x, 23486) && equal(got.value.z, 46972)
             && equal(got.value.y, 70458);
     }());
 
-    testCase("AS5600");
-    fresh();
+    testcase.next("AS5600");
     RegisterModel<1> e{0x36};
     e.set(0x0B, {0x20, 0x08, 0x00, 0x05, 0x37});
     e.set(0x1A, {0x80, 0x0A, 0xBC});
@@ -594,7 +618,7 @@ void motion() {
     // STATUS MD, RAW ANGLE 2048 (180 degrees), ANGLE 1335
     static_assert([] {
         auto const f   = frame(0x20, 0x08, 0x00, 0x05, 0x37);
-        auto const got = Chips::As5600::Angle::decode(Bytes{f});
+        auto const got = Chips::As5600::Angle::decode(Kvasir::Bytes{f});
         return isOk(got) && got.value.magnet && !got.value.tooWeak && !got.value.tooStrong
             && equal(got.value.raw, 2048) && equal(got.value.scaledAngle, 1335)
             && equal(got.value.angle, 18000);
@@ -602,17 +626,15 @@ void motion() {
     // AGC 0x80, MAGNITUDE 0xABC
     static_assert([] {
         auto const f   = frame(0x80, 0x0A, 0xBC);
-        auto const got = Chips::As5600::Gain::decode(Bytes{f});
+        auto const got = Chips::As5600::Gain::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.agc, 0x80) && equal(got.value.magnitude, 0xABC);
     }());
-    if(failures != 0) { dump(); }
 }
 
 // -- accelerometer, pressure, display and GPS descriptions -------------------------------
 
 void mma8451() {
-    testCase("MMA8451");
-    fresh();
+    I2cCase const    testcase{"MMA8451"};
     RegisterModel<1> m{0x1D};
     m.set(0x0D, {0x1A});
     // +1 g on Z: 4096 counts, left-justified 14 bit = 0x4000; X = -0.5 g (-2048 -> 0xE000)
@@ -630,11 +652,10 @@ void mma8451() {
     // ZYXDR, X 0xE000 (-2048 counts, -0.5 g), Z 0x4000 (4096 counts, 1 g), left-justified 14 bit
     static_assert([] {
         auto const f   = frame(0x08, 0xE0, 0x00, 0x00, 0x00, 0x40, 0x00);
-        auto const got = Chips::Mma8451::Motion::decode(Bytes{f}, {});
+        auto const got = Chips::Mma8451::Motion::decode(Kvasir::Bytes{f}, {});
         return isOk(got) && equal(got.value.raw[2], 4096) && equal(got.value.raw[0], -2048)
             && equal(got.value.z, 1000000) && equal(got.value.x, -500000) && equal(got.value.y, 0);
     }());
-    if(failures != 0) { dump(); }
 }
 
 // -- TMAG5273 ------------------------------------------------------------------------------------
@@ -661,7 +682,7 @@ constexpr Tmag::State tmagState(std::uint8_t version) {
 
 // +-40 mT: B = code x 40 mT / 32768; T = 25 + (code - 17508) / 58; 354.5 degrees; 64 x 40 mT / 128
 static_assert([] {
-    auto const  got = Tmag::Field::decode(Bytes{tmagFrame(0x01)}, tmagState(1));
+    auto const  got = Tmag::Field::decode(Kvasir::Bytes{tmagFrame(0x01)}, tmagState(1));
     auto const& s   = got.value;
     return isOk(got) && equal(s.x, 20'000'000) && equal(s.y, -10'000'000) && equal(s.z, 312'500)
         && equal(s.temperature, 35'000) && equal(s.angle, 35'450) && s.angleCode == 5672
@@ -672,7 +693,7 @@ static_assert([] {
 static_assert([] {
     auto st        = tmagState(2);
     st.ranges.xy   = Tmag::RangeSetting::high;
-    auto const got = Tmag::Field::decode(Bytes{tmagFrame(0x01)}, st);
+    auto const got = Tmag::Field::decode(Kvasir::Bytes{tmagFrame(0x01)}, st);
     return isOk(got) && equal(got.value.x, 133'000'000) && equal(got.value.y, -66'500'000)
         && equal(got.value.z, 1'039'062) && equal(got.value.magnitude, 133'000'000);
 }());
@@ -685,14 +706,14 @@ static_assert([] {
     auto f         = tmagFrame(0x13, 0x01, 0x14);
     f[0]           = std::byte{0x35};   // 13738 = 17508 - 65 x 58
     f[1]           = std::byte{0xAA};
-    auto const got = Tmag::Field::decode(Bytes{f}, st);
+    auto const got = Tmag::Field::decode(Kvasir::Bytes{f}, st);
     return isOk(got) && equal(got.value.angle, 1725) && equal(got.value.temperature, -40'000)
         && equal(got.value.z, 0) && equal(got.value.x, 20'000'000) && got.value.diagnostic
         && got.value.powerOnReset;
 }());
 
 // RESULT_STATUS clear: nothing new
-static_assert(isUnchanged(Tmag::Field::decode(Bytes{tmagFrame(0x10)},
+static_assert(isUnchanged(Tmag::Field::decode(Kvasir::Bytes{tmagFrame(0x10)},
                                               tmagState(1))));
 
 // the period follows 25 us x (averages x (channels + T) + 1), rounded up to milliseconds
@@ -721,9 +742,8 @@ RegisterModel<1> tmagModel(std::uint8_t address,
 }
 
 void tmag5273() {
-    testCase("TMAG5273");
-    fresh();
-    auto m           = tmagModel(0x22, 0x01, 0x49);
+    I2cCase testcase{"TMAG5273"};
+    auto    m        = tmagModel(0x22, 0x01, 0x49);
     FakeBus::respond = std::ref(m);
     Dev<Tmag> d{};
     check(runUntil(d, [&] { return d.valid(); }, 200ms), "first sample");
@@ -767,8 +787,7 @@ void tmag5273() {
     check(d.unchanged<Tmag::Field>() > idle && d.seq() == before,
           "no conversion complete: unchanged");
 
-    testCase("TMAG5273: identification");
-    fresh();
+    testcase.next("TMAG5273: identification");
     auto wrong       = tmagModel(0x22, 0x01, 0x48);
     FakeBus::respond = std::ref(wrong);
     Dev<Tmag> r{};
@@ -785,11 +804,10 @@ void tmag5273() {
     fresh();
     auto a           = tmagModel(0x35, 0x02, 0x49);
     FakeBus::respond = std::ref(a);
-    Dev<Tmag, At<0x35>> va{};
+    Dev<Tmag, Kvasir::Engine::At<0x35>> va{};
     check(runUntil(va, [&] { return va.valid(); }, 200ms), "the A version at 0x35");
     checkEq(va.state().version, 2U, "VER 2");
     checkEq(va.latest().x, 66'500'000, "16384 counts at +-133 mT");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

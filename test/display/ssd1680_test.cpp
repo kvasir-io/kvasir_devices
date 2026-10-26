@@ -1,4 +1,4 @@
-/// The SSD1680 e-paper driver against a mock SPI master, D/C and BUSY: what goes on the wire.
+/// The SSD1680 e-paper driver against a mock Display::DataBus and BUSY: what goes on the wire.
 /// Not whether the waveform suits a given module.
 ///
 ///   ssd1680_test [-v]     -v prints every command
@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <kd/Case.hpp>
 #include <kvasir/Devices/Display/Ssd1680.hpp>
 #include <span>
 #include <string>
@@ -49,22 +50,14 @@ using Cmd       = Kvasir::Display::Ssd1680Cmd;
 
 struct Transfer {
     bool                      data{};
-    std::vector<std::uint8_t> bytes{};
-    FakeClock::time_point     at{};
+    std::vector<std::uint8_t> bytes;
+    FakeClock::time_point     at;
 };
 
 /// A command with its parameters, and for WRITE RAM the whole frame that followed it.
 struct Command {
     std::uint8_t              cmd{};
-    std::vector<std::uint8_t> params{};
-};
-
-struct MockDc {
-    static inline bool dataMode{};
-
-    static void command() { dataMode = false; }
-
-    static void data() { dataMode = true; }
+    std::vector<std::uint8_t> params;
 };
 
 /// High for a few milliseconds after a SW reset and for a refresh's length after an
@@ -92,44 +85,89 @@ struct MockReset {
     static void release() { releaseAt = FakeClock::now(); }
 };
 
-/// Records every transfer with its D/C level; stays busy for two polls.
-struct MockSpi {
-    enum class OperationState { succeeded, failed, ongoing };
-
+/// Records every transfer with its D/C level: a command as its byte (D/C low) and its parameters
+/// (D/C high), a RAM chunk as data. Busy for two turns after each; refuses while busy (the driver
+/// waits for idle()).
+struct MockBus {
     static inline std::vector<Transfer> log{};
     static inline int                   polls{};
     static inline bool                  commandWhileBusy{};
+    static inline bool                  refused{};
+    static inline bool                  failNext{};   ///< the transfer in flight fails
+    static inline bool                  failed_{};
 
-    static void send_nocopy(std::span<std::byte const> bytes) {
-        Transfer t{MockDc::dataMode, {}, FakeClock::now()};
-        for(auto const b : bytes) { t.bytes.push_back(static_cast<std::uint8_t>(b)); }
-        if(!t.data && !t.bytes.empty()) {
-            if(MockBusy::busy()) { commandWhileBusy = true; }
-            MockBusy::onCommand(t.bytes[0]);
+    static bool writeCommand(std::uint8_t               cmd,
+                             std::span<std::byte const> params) {
+        if(polls > 0) {
+            refused = true;
+            return false;
         }
-        log.push_back(std::move(t));
+        if(MockBusy::busy()) { commandWhileBusy = true; }
+        MockBusy::onCommand(cmd);
+        log.push_back({false, {cmd}, FakeClock::now()});
+        if(!params.empty()) {
+            Transfer t{true, {}, FakeClock::now()};
+            for(auto const b : params) { t.bytes.push_back(static_cast<std::uint8_t>(b)); }
+            log.push_back(std::move(t));
+        }
         polls = 2;
+        return true;
     }
 
-    static OperationState operationState() {
+    static bool writeData(std::span<std::byte const> bytes) {
         if(polls > 0) {
-            --polls;
-            return OperationState::ongoing;
+            refused = true;
+            return false;
         }
-        return OperationState::succeeded;
+        Transfer t{true, {}, FakeClock::now()};
+        for(auto const b : bytes) { t.bytes.push_back(static_cast<std::uint8_t>(b)); }
+        log.push_back(std::move(t));
+        polls = 2;
+        return true;
+    }
+
+    [[maybe_unused]] static void writePixels(std::span<std::byte const>) {}
+
+    [[maybe_unused]] static void fillPixels(std::uint8_t,
+                                            std::uint8_t,
+                                            std::size_t) {}
+
+    [[maybe_unused]] static bool readRegister(std::uint8_t,
+                                              std::uint8_t,
+                                              std::size_t,
+                                              std::span<std::byte>) {
+        return false;
+    }
+
+    static bool idle() { return polls == 0; }
+
+    static bool failed() { return failed_; }
+
+    static void clearError() { failed_ = false; }
+
+    static void turn() {
+        if(polls == 0) { return; }
+        if(failNext) {
+            failNext = false;
+            polls    = 0;
+            failed_  = true;
+            return;
+        }
+        --polls;
     }
 };
 
-static_assert(Kvasir::Display::SpiBus<MockSpi>);
-static_assert(Kvasir::DataCommandLine<MockDc>);
+static_assert(Kvasir::Display::DataBus<MockBus>);
 static_assert(Kvasir::BusyLine<MockBusy>);
 static_assert(Kvasir::ResetLine<MockReset>);
 
 void resetMocks() {
-    MockSpi::log.clear();
-    MockSpi::polls            = 0;
-    MockSpi::commandWhileBusy = false;
-    MockDc::dataMode          = false;
+    MockBus::log.clear();
+    MockBus::polls            = 0;
+    MockBus::commandWhileBusy = false;
+    MockBus::refused          = false;
+    MockBus::failNext         = false;
+    MockBus::failed_          = false;
     MockBusy::until           = {};
     MockBusy::stuck           = false;
     FakeClock::reset();
@@ -138,8 +176,8 @@ void resetMocks() {
 /// The log as commands, data transfers folded into the command before them.
 std::vector<Command> commands(std::size_t from = 0) {
     std::vector<Command> out{};
-    for(std::size_t i = from; i < MockSpi::log.size(); ++i) {
-        auto const& t = MockSpi::log[i];
+    for(std::size_t i = from; i < MockBus::log.size(); ++i) {
+        auto const& t = MockBus::log[i];
         if(!t.data) {
             for(auto const b : t.bytes) { out.push_back({b, {}}); }
         } else if(!out.empty()) {
@@ -169,17 +207,7 @@ std::string describe(Command const& c) {
     return s;
 }
 
-int failures = 0;
-
-void check(bool             ok,
-           std::string_view what) {
-    if(!ok) {
-        std::printf("  FAIL: %.*s\n", static_cast<int>(what.size()), what.data());
-        ++failures;
-    } else if(verbose) {
-        std::printf("  ok:   %.*s\n", static_cast<int>(what.size()), what.data());
-    }
-}
+using Kvasir::Test::check;
 
 /// Polls a millisecond per turn until `done` or `limitMs`.
 template<typename Done>
@@ -193,16 +221,42 @@ void pump(Done&& done,
 
 template<typename Panel>
 struct UntilReady {
-    static void panelHandler() { Panel::handler(); }
+    static void panelHandler() { Panel::turn(); }
 
     bool operator()() const { return Panel::ready() || Panel::failed(); }
 };
 
 template<typename Panel>
 struct Forever {
-    static void panelHandler() { Panel::handler(); }
+    static void panelHandler() { Panel::turn(); }
 
     bool operator()() const { return Panel::failed(); }
+};
+
+/// Up again: failed() does not count as done.
+template<typename Panel>
+struct UntilUp {
+    static void panelHandler() { Panel::turn(); }
+
+    bool operator()() const { return Panel::ready(); }
+};
+
+/// Every turn of the pump, nothing ends it early.
+template<typename Panel>
+struct Never {
+    static void panelHandler() { Panel::turn(); }
+
+    bool operator()() const { return false; }
+};
+
+/// Until the panel has seen one more failure than `before`.
+template<typename Panel>
+struct UntilFailure {
+    std::uint32_t before{};
+
+    static void panelHandler() { Panel::turn(); }
+
+    bool operator()() const { return Panel::failures() > before; }
 };
 
 /// Ink at gate line `y`, source `x` of a WRITE RAM frame (0 bits are black).
@@ -210,7 +264,9 @@ bool inkAt(Command const& ram,
            int            rowBytes,
            int            y,
            int            x) {
-    auto const byte = ram.params[static_cast<std::size_t>((y * rowBytes) + (x / 8))];
+    auto const at   = (static_cast<std::size_t>(y) * static_cast<std::size_t>(rowBytes))
+                    + static_cast<std::size_t>(x / 8);
+    auto const byte = ram.params[at];
     return ((byte >> (7 - (x % 8))) & 1) == 0;
 }
 
@@ -231,45 +287,42 @@ Command const* lastRam(std::vector<Command> const& cs) {
 }
 
 template<typename Panel>
-void exercise(std::string_view name) {
+void exercise(char const* name) {
     using Config          = typename Panel::Config;
-    int const  W          = Panel::Width;
-    int const  H          = Panel::Height;
+    int const  width      = Panel::Width;
+    int const  height     = Panel::Height;
     auto const rowBytes   = Panel::RowBytes;
-    auto const frameBytes = static_cast<std::size_t>(W) * static_cast<std::size_t>(rowBytes);
+    auto const frameBytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(rowBytes);
+    Kvasir::Test::Case const thisCase{name};
 
-    std::printf("%.*s (%d x %d%s%s)\n",
-                static_cast<int>(name.size()),
-                name.data(),
-                W,
-                H,
-                Config::Flip ? ", flipped" : "",
-                Config::Partial ? ", partial" : "");
+    std::printf("  %d x %d%s%s\n",
+                width,
+                height,
+                Config::flip ? ", flipped" : "",
+                Config::partial ? ", partial" : "");
 
     resetMocks();
     Panel::restart();
     pump(UntilReady<Panel>{}, 5000);
     check(Panel::ready(), "bring-up completes");
     check(!Panel::failed(), "bring-up does not fail");
-    check(!MockSpi::commandWhileBusy, "no command is sent while BUSY is high");
+    check(!MockBus::commandWhileBusy, "no command is sent while BUSY is high");
+    check(!MockBus::refused, "nothing is handed to the bus before the last transfer is off it");
 
     auto const bringUp = commands();
     if(verbose) {
         for(auto const& c : bringUp) { std::printf("    %s\n", describe(c).c_str()); }
     }
 
-    check(!MockSpi::log.empty()
-            && MockReset::releaseAt - MockReset::holdAt
-                 >= std::chrono::milliseconds{Panel::ResetPulseMs},
+    check(!MockBus::log.empty() && MockReset::releaseAt - MockReset::holdAt >= Panel::ResetPulse,
           "RES# is held low for the reset pulse");
-    check(!MockSpi::log.empty()
-            && MockSpi::log.front().at - MockReset::releaseAt
-                 >= std::chrono::milliseconds{Panel::ResetToCommandMs},
+    check(!MockBus::log.empty()
+            && MockBus::log.front().at - MockReset::releaseAt >= Panel::ResetToCommand,
           "nothing is sent until the reset-to-command wait is over");
 
     // The full-waveform bring-up, command by command.
-    std::uint8_t const         lastLo = static_cast<std::uint8_t>((Config::GateLines - 1) & 0xFF);
-    std::uint8_t const         lastHi = static_cast<std::uint8_t>((Config::GateLines - 1) >> 8);
+    std::uint8_t const         lastLo = static_cast<std::uint8_t>((Config::gateLines - 1) & 0xFF);
+    std::uint8_t const         lastHi = static_cast<std::uint8_t>((Config::gateLines - 1) >> 8);
     std::vector<Command> const fullHead{
       {              Cmd::SwReset,                                              {}},
       {  Cmd::DriverOutputControl,                             {lastLo, lastHi, 0}},
@@ -295,7 +348,7 @@ void exercise(std::string_view name) {
 
     std::size_t rams = 0;
     for(auto const& c : bringUp) { rams += c.cmd == Cmd::WriteRamBw ? 1U : 0U; }
-    if(Config::Partial) {
+    if(Config::partial) {
         std::size_t lut = 0;
         for(auto const& c : bringUp) {
             if(c.cmd == Cmd::WriteLut) { lut = c.params.size(); }
@@ -314,14 +367,14 @@ void exercise(std::string_view name) {
     auto const       draw = [&](auto& c) {
         c.clear();
         c.pixel(0, 0);
-        c.pixel(W - 1, H - 1);
+        c.pixel(width - 1, height - 1);
         c.pixel(5, 9);
     };
-    auto const before = MockSpi::log.size();
+    auto const before = MockBus::log.size();
     check(screen.frame(draw), "a frame is drawn once the panel is ready");
     check(!Panel::ready(), "and the panel is busy with it");
     pump(UntilReady<Panel>{}, 5000);
-    check(Panel::ready() && !MockSpi::commandWhileBusy, "the refresh completes, BUSY respected");
+    check(Panel::ready() && !MockBus::commandWhileBusy, "the refresh completes, BUSY respected");
 
     auto const frame = commands(before);
     if(verbose) {
@@ -341,30 +394,32 @@ void exercise(std::string_view name) {
     check(ram != nullptr && ram->params.size() == frameBytes, "the refresh sends the whole frame");
     if(ram != nullptr && ram->params.size() == frameBytes) {
         check(inkCount(*ram) == 3, "exactly the three drawn pixels are black");
-        if(Config::Flip) {
-            check(inkAt(*ram, rowBytes, 0, H - 1), "flipped: (0, 0) is gate 0, last source");
-            check(inkAt(*ram, rowBytes, W - 1, 0),
+        if(Config::flip) {
+            check(inkAt(*ram, rowBytes, 0, height - 1), "flipped: (0, 0) is gate 0, last source");
+            check(inkAt(*ram, rowBytes, width - 1, 0),
                   "flipped: the far corner is last gate, source 0");
-            check(inkAt(*ram, rowBytes, 5, H - 1 - 9), "flipped: (5, 9) is gate 5, source H-10");
+            check(inkAt(*ram, rowBytes, 5, height - 1 - 9),
+                  "flipped: (5, 9) is gate 5, source H-10");
         } else {
-            check(inkAt(*ram, rowBytes, W - 1, 0), "(0, 0) is the last gate line, source 0");
-            check(inkAt(*ram, rowBytes, 0, H - 1), "the far corner is gate 0, the last source");
-            check(inkAt(*ram, rowBytes, W - 1 - 5, 9), "(5, 9) is gate W-6, source 9");
+            check(inkAt(*ram, rowBytes, width - 1, 0), "(0, 0) is the last gate line, source 0");
+            check(inkAt(*ram, rowBytes, 0, height - 1),
+                  "the far corner is gate 0, the last source");
+            check(inkAt(*ram, rowBytes, width - 1 - 5, 9), "(5, 9) is gate W-6, source 9");
         }
     }
 
     // The same picture again: nothing is sent, nothing flickers.
     {
-        auto const quiet = MockSpi::log.size();
+        auto const quiet = MockBus::log.size();
         check(screen.frame(draw), "an identical frame is drawn");
         pump(UntilReady<Panel>{}, 1000);
-        check(Panel::ready() && MockSpi::log.size() == quiet,
+        check(Panel::ready() && MockBus::log.size() == quiet,
               "an identical frame is not sent or refreshed");
     }
 
     // clean(): the bring-up waveform again, with the current picture.
     {
-        auto const mark = MockSpi::log.size();
+        auto const mark = MockBus::log.size();
         Panel::clean();
         check(!Panel::ready(), "clean() makes the panel busy");
         pump(UntilReady<Panel>{}, 10000);
@@ -382,33 +437,106 @@ void exercise(std::string_view name) {
     {
         resetMocks();
         Panel::restart();
+        check(Panel::link() == Kvasir::Link::starting, "link: starting after restart()");
         MockBusy::stuck = true;
-        pump(Forever<Panel>{}, static_cast<int>(Config::BusyTimeoutMs) + 2000);
+        Kvasir::Test::Log::reset();
+        auto const failuresBefore = Panel::failures();
+        pump(Forever<Panel>{}, static_cast<int>(Config::busyTimeout.count()) + 2000);
         check(Panel::failed(), "BUSY stuck high fails the panel after the timeout");
         check(commands().size() <= 1, "and nothing past the first command is sent");
+        check(Panel::failures() == failuresBefore + 1, "the failure is counted once");
+        check(Kvasir::Test::Log::warnings == 1, "and logged once");
+        check(Panel::link() == Kvasir::Link::absent, "link: absent while failed");
+
+        // (a) BUSY lets go: nothing until retryAfter, then a reset and the whole bring-up with
+        // the picture that was showing.
+        auto const failedAt = FakeClock::now();
+        auto const mark     = MockBus::log.size();
+        MockBusy::stuck     = false;
+        pump(Never<Panel>{}, static_cast<int>(Config::retryAfter.count()) - 5);
+        check(Panel::failed() && MockBus::log.size() == mark,
+              "a failed panel sends nothing before retryAfter");
+        check(Kvasir::Test::Log::warnings == 1, "and logs the failure only once");
+        pump(UntilUp<Panel>{}, 10000);
+        check(Panel::ready(), "a failed panel comes back by itself, without restart()");
+        check(Panel::link() == Kvasir::Link::answering, "link: answering again, by itself");
+        check(MockReset::holdAt - failedAt >= Config::retryAfter
+                && MockReset::holdAt - failedAt
+                     <= Config::retryAfter + std::chrono::milliseconds{2},
+              "the bring-up starts retryAfter after the failure, with a reset pulse");
+        auto const  back = commands(mark);
+        auto const* r    = lastRam(back);
+        check(!back.empty() && back.front().cmd == Cmd::SwReset, "the bring-up starts over");
+        check(r != nullptr && r->params.size() == frameBytes && inkCount(*r) == 3,
+              "and resends the picture that was showing");
+        check(!MockBus::commandWhileBusy, "no command while BUSY, across the failure");
+        check(Panel::failures() == failuresBefore + 1, "failures() keeps the count");
+
+        // (b) A failed transfer in the middle of a refresh: failed, then up again with the new
+        // picture.
+        auto const redraw = [&](auto& c) {
+            draw(c);
+            c.pixel(width / 2, height / 2);
+        };
+        check(screen.frame(redraw), "a new frame is drawn after the recovery");
+        MockBus::failNext = true;
+        auto const mark2  = MockBus::log.size();
+        pump(Forever<Panel>{}, 1000);
+        check(Panel::failed(), "a failed transfer fails the panel");
+        check(Panel::failures() == failuresBefore + 2, "the second failure is counted");
+        pump(UntilUp<Panel>{}, static_cast<int>(Config::retryAfter.count()) + 10000);
+        auto const  again = commands(mark2);
+        auto const* r2    = lastRam(again);
+        check(Panel::ready(), "and the panel comes back after a failed transfer");
+        check(r2 != nullptr && r2->params.size() == frameBytes && inkCount(*r2) == 4,
+              "with the frame drawn before the failure");
+        check(Kvasir::Test::Log::warnings == 2, "one warning per failure");
+
+        // (c) A panel that keeps failing is tried less and less often (the pause doubles), and
+        // the pause starts over once it was back.
+        MockBusy::stuck = true;
+        Panel::clean();
+        pump(UntilFailure<Panel>{failuresBefore + 2},
+             static_cast<int>(Config::busyTimeout.count()) + 2000);
+        auto const third = FakeClock::now();
+        check(Panel::failures() == failuresBefore + 3, "stuck again: a third failure");
+        pump(UntilFailure<Panel>{failuresBefore + 3},
+             static_cast<int>((Config::retryAfter + Config::busyTimeout).count()) + 2000);
+        auto const fourth = FakeClock::now();
+        check(Panel::failures() == failuresBefore + 4
+                && MockReset::holdAt - third >= Config::retryAfter
+                && MockReset::holdAt - third <= Config::retryAfter + std::chrono::milliseconds{2},
+              "the first retry after a recovery comes retryAfter later");
+        pump(Never<Panel>{}, static_cast<int>(2 * Config::retryAfter.count()) + 100);
+        check(MockReset::holdAt - fourth >= 2 * Config::retryAfter
+                && MockReset::holdAt - fourth
+                     <= 2 * Config::retryAfter + std::chrono::milliseconds{2},
+              "the next one twice as late");
         MockBusy::stuck = false;
+        pump(UntilUp<Panel>{}, static_cast<int>(4 * Config::retryAfter.count()) + 10000);
+        check(Panel::ready(), "and it still comes back once BUSY lets go");
     }
 }
 
 struct FullConfig : Kvasir::Display::Ssd1680Defaults {};
 
 struct FlipConfig : Kvasir::Display::Ssd1680Defaults {
-    static constexpr bool Flip = true;
+    static constexpr bool flip = true;
 };
 
 /// A module with fewer source lines, the partial waveform, and chunks that do not divide
 /// the gate lines evenly.
 struct PartialConfig : Kvasir::Display::Ssd1680Defaults {
-    static constexpr int  SourceLines = 120;
-    static constexpr int  GateLines   = 250;
-    static constexpr bool Partial     = true;
-    static constexpr int  ChunkRows   = 7;
+    static constexpr int  sourceLines = 120;
+    static constexpr int  gateLines   = 250;
+    static constexpr bool partial     = true;
+    static constexpr int  chunkRows   = 7;
 };
 
 template<typename Config>
-using Panel = Kvasir::Display::Ssd1680<FakeClock, MockSpi, MockReset, MockDc, MockBusy, Config>;
+using Panel = Kvasir::Display::Ssd1680<FakeClock, MockBus, MockReset, MockBusy, Config>;
 
-// gfx::MonoPanel matches structurally (pageRam(), pagesChanged(), ready(), failed(), handler()).
+// gfx::MonoPanel matches structurally (pageRam(), pagesChanged(), ready(), failed(), turn()).
 static_assert(requires {
     Panel<FullConfig>::pageRam();
     Panel<FullConfig>::pagesChanged(0U);
@@ -424,6 +552,5 @@ int main(int          argc,
     exercise<Panel<FlipConfig>>("SSD1680 2.9\" upside down");
     exercise<Panel<PartialConfig>>("SSD1680 2.13\"");
 
-    std::printf("%s\n", failures == 0 ? "ssd1680 test passed" : "SSD1680 TEST FAILED");
-    return failures == 0 ? 0 : 1;
+    return Kvasir::Test::finish();
 }

@@ -1,12 +1,6 @@
 /// The SD card driver (SPI/SdCard.hpp) against a card model (SdModel.hpp): bring-up, blocks, and each
 /// fault the spec names.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 #include "SdModel.hpp"
 
 #include <array>
@@ -14,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/SdCard.hpp>
 #include <map>
 #include <support/FakeClock.hpp>
@@ -39,44 +34,38 @@ Model model{};
 std::uint32_t rises{};
 
 void fresh() {
-    Bus::reset();
-    Pins::reset();
-    FakeClock::reset();
-    Log::reset();
-    model             = Model{};
-    rises             = Pins::rises[Cs::id];
-    Bus::partSelected = [] { return !Pins::level[Cs::id]; };
-    Bus::exchange     = [](std::uint8_t m) {
-        if(Pins::rises[Cs::id] != rises) {
-            rises = Pins::rises[Cs::id];
-            model.deselected();
-        }
-        return model.exchange(m);
-    };
+    Spi::Harness::fresh<Bus>(
+      [](std::uint8_t m) {
+          if(Pins::rises[Cs::id] != rises) {
+              rises = Pins::rises[Cs::id];
+              model.deselected();
+          }
+          return model.exchange(m);
+      },
+      0s);
+    model        = Model{};
+    rises        = Pins::rises[Cs::id];
     Bus::onFrame = [](bool selected) {
         if(!selected) { model.deselected(); }
     };
 }
 
 /// Turns of the loop: the card driver, the bus, the transfers completing, 100 us each.
+/// 100 us turns, the clock last, the card's turn before the master's; a limit in turns.
+constexpr Spi::Loop loop{.step = 100us, .order = Spi::ClockOrder::last, .deviceFirst = true};
+
 template<typename Pred>
 bool runUntil(Card& c,
               Pred  pred,
               int   turns = 200'000) {
-    for(int i = 0; i < turns; ++i) {
-        c.handler();
-        Bus::handler();
-        Bus::tick();
-        FakeClock::advance(100us);
-        if(pred()) { return true; }
-    }
-    return false;
+    return Spi::Harness::runUntil<Bus>(c, pred, turns * loop.step, loop);
 }
 
 void bringUp() {
     testCase("bring-up: clocks with CS high, CMD0..CMD10 at 400 kHz, then 25 MHz");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     check(runUntil(c, [&] { return c.up(); }), "comes up");
     check(c.highCapacity(), "CCS from the OCR");
     checkEq(c.blocks(), (61'047U + 1U) * 1024U, "capacity from the CSD");
@@ -94,7 +83,8 @@ void bringUp() {
 void writeAndReadBack() {
     testCase("a block written and read back, CRC16 checked, at 25 MHz");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     std::array<std::byte, 512> out{};
     for(std::size_t i = 0; i < out.size(); ++i) {
@@ -123,7 +113,8 @@ void writeAndReadBack() {
 void crcError() {
     testCase("a read whose CRC16 does not match is crcError, and the card stays up");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     std::array<std::byte, 512> in{};
     model.corruptNextRead = true;
@@ -136,23 +127,26 @@ void crcError() {
 }
 
 void noCard() {
-    testCase("no card: never up, parked, tried again every second, CS released");
+    testCase(
+      "no card: never up, parked, tried again after 1 s, then 2, 4 ... (doubling), CS released");
     fresh();
     Bus::exchange = {};   // MISO floats high
-    Card c{};
-    runUntil(c, [] { return false; }, 25'000);   // 2.5 s
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
+    runUntil(c, [] { return false; }, 80'000);   // 8 s: attempts at 0, 1, 3, 7 s
     check(!c.up(), "not up");
     check(c.link() == Kvasir::Link::absent, "absent");
     check(Pins::level[Cs::id], "CS high");
     int starts = 0;
     for(auto const& f : Bus::frames) { starts += (!f.selected && f.mosi.size() == 10) ? 1 : 0; }
-    check(starts >= 2 && starts <= 3, "a new attempt a second");
+    check(starts == 4, "a new attempt after a pause that doubles");
 }
 
 void busFault() {
     testCase("a transfer the bus fails ends the operation and brings the card up again");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     std::array<std::byte, 512> in{};
     c.read(9, in);   // its command is on the wire at once
@@ -168,7 +162,8 @@ void busFault() {
 void noToken() {
     testCase("no data token within 100 ms is a timeout");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     model.noTokenNextRead = true;
     std::array<std::byte, 512> in{};
@@ -184,7 +179,8 @@ void noToken() {
 void writeRejected() {
     testCase("a write the card does not accept is rejected, the card stays up");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     model.rejectNextWrite = true;
     std::array<std::byte, 512> out{};
@@ -198,7 +194,8 @@ void writeRejected() {
 void writeBusyTooLong() {
     testCase("busy past the spec's 500 ms is a timeout, and the card is brought up again");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     model.busyBytes = 6000;   // 600 ms of busy at a byte a turn
     std::array<std::byte, 512> out{};
@@ -217,7 +214,8 @@ void writeBusyTooLong() {
 void rejectedInARowIsLost() {
     testCase("RejectedLost rejections in a row (MISO low, no card) end in a bring-up");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     model.rejectAllReads = true;
     std::array<std::byte, 512> in{};
@@ -242,16 +240,17 @@ void loopStallCutsTheHold() {
       "a main loop that stalls past the master's HoldTimeout mid-sequence: a timeout, "
       "then a bring-up");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     model.tokenDelayBytes = 1000;   // the card takes its time before the token
     std::array<std::byte, 512> in{};
     c.read(2, in);
     runUntil(c, [] { return false; }, 30);   // the command out, R1 in, polling for the token
     check(!Pins::level[Cs::id], "in the sequence, CS low");
-    // the loop stalls 60 ms; the master's handler runs first, as in a firmware
+    // the loop stalls 60 ms; the master's turn runs first, as in a firmware
     FakeClock::advance(60ms);
-    Bus::handler();
+    Bus::turn();
     checkEq(Bus::Core::holdTimeouts(), 1U, "the master released the hold");
     check(Pins::level[Cs::id], "CS went high mid-sequence");
     std::optional<SdResult> done{};
@@ -264,7 +263,8 @@ void loopStallCutsTheHold() {
 void sharedBus() {
     testCase("another device's frames never land inside the card's CS-low sequence");
     fresh();
-    Card c{};
+    Card                     c{};
+    Spi::BusScope<Bus> const cScope{};
     runUntil(c, [&] { return c.up(); });
     std::array<std::byte, 512> in{};
     c.read(1, in);
@@ -288,7 +288,7 @@ void sharedBus() {
     check(clean, "never with the card selected");
     check(submitted > 0, "and it did get turns");
     for(int i = 0; i < 20; ++i) {
-        Bus::handler();
+        Bus::turn();
         Bus::tick();
     }
     check(!otherLow, "its CS released too");

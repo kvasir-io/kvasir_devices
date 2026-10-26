@@ -8,7 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <kvasir/Devices/I2C/SegmentBackends.hpp>
+#include <kvasir/Devices/I2C/Adapters/SegmentBackends.hpp>
 #include <kvasir/Devices/I2C/chips/Mcp23017.hpp>
 #include <kvasir/Devices/I2C/chips/Pca9956b.hpp>
 #include <kvasir/Devices/I2C/chips/Pcf8574.hpp>
@@ -218,7 +218,7 @@ static_assert(Sd::scanFrame<10>(Scanned,
               "no digit: every select inactive, every segment dark");
 
 struct FastScan {
-    static constexpr std::chrono::microseconds DigitPeriod{500};
+    static constexpr std::chrono::microseconds digitPeriod{500};
 };
 
 // -- helpers --------------------------------------------------------------------------------
@@ -254,8 +254,7 @@ std::size_t writesTo(std::uint8_t reg) {
 // -- PCA9956B -------------------------------------------------------------------------------
 
 void pca9956b() {
-    testCase("PCA9956B: LEDOUT, IREFALL, PWMALL, blink and CLRERR");
-    fresh();
+    I2cCase const testcase{"PCA9956B: LEDOUT, IREFALL, PWMALL, blink and CLRERR"};
     FakeBus::respond = zeros;
     LedsDev                  leds{};
     Pca9956bDisplay<LedsDev> digits{leds, Kvasir::Units::milliAmp(5), std::uint8_t{200}, 100ms};
@@ -290,14 +289,12 @@ void pca9956b() {
     digits.current(Kvasir::Units::milliAmp(10));
     run(digits, leds, 50ms);
     check(hasWrite({0x40, 98}), "IREFALL for 10 mA");
-    if(failures != 0) { dump(); }
 }
 
 // -- expanders ------------------------------------------------------------------------------
 
 void pcf8574() {
-    testCase("PCF8574: one digit, active low");
-    fresh();
+    I2cCase const testcase{"PCF8574: one digit, active low"};
     FakeBus::respond = zeros;
     using PortDev    = Dev<Chips::Pcf8574>;
     PortDev                             port{};
@@ -314,12 +311,10 @@ void pcf8574() {
     run(digit, port, 50ms);
     checkEq(countWrites({0xF9}), w, "an unchanged digit sends nothing");
     check(FakeBus::log.size() >= n, "only the pin reads meanwhile");
-    if(failures != 0) { dump(); }
 }
 
 void mcp23017() {
-    testCase("MCP23017: two digits, no decimal points");
-    fresh();
+    I2cCase const testcase{"MCP23017: two digits, no decimal points"};
     FakeBus::respond = zeros;
     using PortDev    = Dev<Chips::Mcp23017>;
     PortDev                            port{};
@@ -330,8 +325,7 @@ void mcp23017() {
     check(hasWrite({0x00, 0x80, 0x80}), "IODIR: the used lines outputs, the point pins inputs");
     digits.setNumber(12, 1);
     run(digits, port, 50ms);
-    check(hasWrite({0x14, 0x06, 0x5B}), "OLAT: \"1\" and \"2\", the point nowhere");
-    if(failures != 0) { dump(); }
+    check(hasWrite({0x14, 0x06, 0x5B}), R"(OLAT: "1" and "2", the point nowhere)");
 }
 
 // -- pins -----------------------------------------------------------------------------------
@@ -390,8 +384,7 @@ Sd::Glyph segmentsLit() {
 }
 
 void gpioStatic() {
-    testCase("GPIO: one digit, static");
-    fresh();
+    I2cCase const testcase{"GPIO: one digit, static"};
     PinLog::reset();
     Sd::GpioDisplay<EightPins, FakeClock, PinDigit> digit{};
     check(PinLog::initialised, "the pins set up");
@@ -408,8 +401,7 @@ void gpioStatic() {
 }
 
 void gpioScanned() {
-    testCase("GPIO: two digits, multiplexed");
-    fresh();
+    I2cCase const testcase{"GPIO: two digits, multiplexed"};
     PinLog::reset();
     using Display = Sd::GpioDisplay<TenPins, FakeClock, Scanned>;
     static_assert(Display::Multiplexed && Display::DigitPeriod == 2ms);

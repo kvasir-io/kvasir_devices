@@ -1,8 +1,10 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Gnss/Ubx.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
-#include "../Ubx.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,24 +34,24 @@ namespace Kvasir::I2C::Chips {
 /// UBX or NMEA message of at least two bytes (11.5.2); a UBX frame is at least eight.
 ///
 /// `Stream::Sample` is the chunk. The application assembles UBX frames from it with
-/// `Kvasir::I2C::Ubx` (I2C/Ubx.hpp; `Chips::Ubx` is its default instance) and decodes the
-/// navigation solution with `UbloxM8Detail::decodeNavPvt`:
+/// `Kvasir::Gnss::Ubx<>` (Gnss/Ubx.hpp) and decodes the
+/// navigation solution with `Kvasir::Gnss::Ublox::decodeNavPvt`:
 ///
 ///     using Gnss = Kvasir::I2C::Device<I2c1, Clock, Chips::SamM8q<>>;
 ///     Gnss        gnss{};
-///     Chips::Ubx  ubx{};
+///     Kvasir::Gnss::Ubx<> ubx{};
 ///     ...
-///     gnss.handler();
+///     gnss.turn();
 ///     if(gnss.fresh()) {   // every loop turn: a chunk not taken is overwritten by the next
-///         ubx.feed(gnss.latest().data(), [&](Kvasir::I2C::UbxMessage const& m) {
-///             if(m.is(Chips::UbloxM8Detail::NavPvtClass, Chips::UbloxM8Detail::NavPvtId)) {
-///                 auto const pvt = Chips::UbloxM8Detail::decodeNavPvt(m.payload);
-///                 if(pvt.fixType == Chips::UbloxM8Detail::FixType::fix3d) { ... pvt.lat ... }
+///         ubx.feed(gnss.latest().data(), [&](Kvasir::Gnss::UbxMessage const& m) {
+///             if(m.is(Kvasir::Gnss::Ublox::NavPvtClass, Kvasir::Gnss::Ublox::NavPvtId)) {
+///                 auto const pvt = Kvasir::Gnss::Ublox::decodeNavPvt(m.payload);
+///                 if(pvt.fixType == Kvasir::Gnss::Ublox::FixType::fix3d) { ... pvt.lat ... }
 ///             }
 ///         });
 ///     }
 ///
-/// A run completes at most one chunk per loop turn, so checking fresh() after each handler()
+/// A run completes at most one chunk per loop turn, so checking fresh() after each turn()
 /// sees every one. At 50 ms and 128 bytes the group drains 2.5 kB a second; UBX-NAV-PVT at 1 Hz
 /// is 100 bytes a second, and the receiver's default NMEA output before the port is
 /// configured is a few hundred.
@@ -67,7 +69,7 @@ namespace Kvasir::I2C::Chips {
 ///                   form, 32.10.18.3): UBX-NAV-PVT (0x01 0x07) every navigation solution.
 ///                   The current port is the one the message arrives on, DDC, so the rates
 ///                   of the UART and USB are left alone.
-///   MeasurementRate UBX-CFG-RATE (0x06 0x08, 32.10.27.1): measRate from `Timing::MeasRate`, navRate 1,
+///   MeasurementRate UBX-CFG-RATE (0x06 0x08, 32.10.27.1): measRate from `Timing::measRate`, navRate 1,
 ///                   timeRef 1 (GPS time, the default of C.16). measRate must be 50 ms or more
 ///                   below protocol version 24 (25 ms from 24 on); the SAM-M8Q's firmware is
 ///                   older, so 50 is the floor here. The module itself updates at most at 10 Hz
@@ -76,8 +78,8 @@ namespace Kvasir::I2C::Chips {
 /// Every CFG message is answered on the stream with UBX-ACK-ACK or -NAK (32.5.1), which the
 /// application sees through the framer.
 ///
-/// `Command` sends any prebuilt UBX frame (`Frame::of(ubxFrame(0x0A, 0x04))`, a MON-VER poll).
-/// It is Transient -- a command, not a state -- so it is not sent again after a reset: a
+/// `Command` sends any prebuilt UBX frame (`Frame::of(Gnss::ubxFrame(0x0A, 0x04))`, a MON-VER
+/// poll). It is Transient -- a command, not a state -- so it is not sent again after a reset: a
 /// replayed UBX-CFG-RST would restart the receiver after every bring-up. A frame of up to
 /// `CommandBytes` (255 at most, a step's count is one byte) is one transaction, so no command
 /// needs more than one Step.
@@ -86,8 +88,7 @@ namespace Kvasir::I2C::Chips {
 /// polling Stream never lets happen. TX_READY (11.1) is not used.
 /// The messages themselves -- CFG-PRT, CFG-MSG, CFG-RATE, NAV-PVT and its decoder -- are the
 /// same on every port and live in Gnss/Ubx.hpp (`Kvasir::Gnss::Ublox`), where a receiver on a
-/// UART uses them too; `UbloxM8Detail` is their I2C-side name.
-namespace UbloxM8Detail { using namespace Kvasir::Gnss::Ublox; }   // namespace UbloxM8Detail
+/// UART uses them too.
 
 /// `MaxChunk`: the most bytes one poll takes (2 + MaxChunk of the group's buffer).
 /// `CommandBytes`: the longest frame Command sends. `Timing`: `Period`, how often the stream is
@@ -95,22 +96,12 @@ namespace UbloxM8Detail { using namespace Kvasir::Gnss::Ublox; }   // namespace 
 /// UBX-NAV-PVT comes (1 s); either may be left out.
 template<std::uint8_t MaxChunk     = 128,
          std::size_t  CommandBytes = 100,
-         typename Timing           = DefaultTiming>
+         typename Timing           = Engine::DefaultTiming>
 struct UbloxM8 {
-    static constexpr std::chrono::milliseconds PollPeriod = [] {
-        if constexpr(requires { Timing::Period; }) {
-            return Kvasir::asDuration(Timing::Period);
-        } else {
-            return std::chrono::milliseconds{50};
-        }
-    }();
-    static constexpr std::chrono::milliseconds MeasRate = [] {
-        if constexpr(requires { Timing::MeasRate; }) {
-            return Kvasir::asDuration(Timing::MeasRate);
-        } else {
-            return std::chrono::milliseconds{1000};
-        }
-    }();
+    static constexpr std::chrono::milliseconds PollPeriod
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{50}));
+    static constexpr std::chrono::milliseconds MeasRate
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, measRate, std::chrono::milliseconds{1000}));
 
     static_assert(PollPeriod > std::chrono::milliseconds::zero(),
                   "the stream is polled; a period of 0 never reads it");
@@ -133,19 +124,19 @@ struct UbloxM8 {
     static constexpr std::uint8_t BytesAvailable = 0xFD;
     static constexpr std::uint8_t StreamData     = 0xFF;
 
-    using Frame   = UbloxM8Detail::Frame<CommandBytes>;
-    using FixType = UbloxM8Detail::FixType;
-    using NavPvt  = UbloxM8Detail::NavPvt;
+    using Frame   = Kvasir::Gnss::Ublox::Frame<CommandBytes>;
+    using FixType = Kvasir::Gnss::Ublox::FixType;
+    using NavPvt  = Kvasir::Gnss::Ublox::NavPvt;
 
     struct Stream {
         static constexpr auto       Period = PollPeriod;
         static constexpr std::array Steps{
-          Step::read({.reg = BytesAvailable, .count = 2, .offset = 0}),
-          Step::readCounted({.reg         = StreamData,
-                             .countOffset = 0,
-                             .countBytes  = 2,
-                             .maxCount    = MaxChunk,
-                             .offset      = 2}),
+          Engine::Step::read({.reg = BytesAvailable, .count = 2, .offset = 0}),
+          Engine::Step::readCounted({.reg         = StreamData,
+                                     .countOffset = 0,
+                                     .countBytes  = 2,
+                                     .maxCount    = MaxChunk,
+                                     .offset      = 2}),
         };
 
         struct Sample {
@@ -160,13 +151,13 @@ struct UbloxM8 {
         };
 
         /// Nothing waiting is not a sample: fresh() steps once per chunk that holds bytes.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
-            if(data.size() <= 2) { return Outcome<Sample>::unchanged(); }
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
+            if(data.size() <= 2) { return Engine::Outcome<Sample>::unchanged(); }
             Sample s{};
             s.available = static_cast<std::uint16_t>(data.be16(0) & 0x7FFFU);
             s.length    = static_cast<std::uint8_t>(data.size() - 2);
             for(std::size_t i = 0; i < s.length; ++i) { s.bytes[i] = data.at(2 + i); }
-            return Outcome<Sample>::ok(s);
+            return Engine::Outcome<Sample>::ok(s);
         }
     };
 
@@ -182,19 +173,20 @@ struct UbloxM8 {
         using Value                        = Protocols;
         static constexpr std::size_t Bytes = 28;
         static constexpr Value       Initial
-          = {.in = UbloxM8Detail::ProtoUbx, .out = UbloxM8Detail::ProtoUbx};
+          = {.in = Kvasir::Gnss::Ublox::ProtoUbx, .out = Kvasir::Gnss::Ublox::ProtoUbx};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
-            auto const f = UbloxM8Detail::cfgPrtDdc(Address, value.in, value.out);
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
+            auto const f = Kvasir::Gnss::Ublox::cfgPrtDdc(Address, value.in, value.out);
             for(std::size_t i = 0; i < f.size(); ++i) { buffer[i] = std::byte{f[i]}; }
-            return Step::commandBuffer({.offset = 0, .count = static_cast<std::uint8_t>(f.size())});
+            return Engine::Step::commandBuffer(
+              {.offset = 0, .count = static_cast<std::uint8_t>(f.size())});
         }
     };
 
     /// UBX-NAV-PVT on this port: every `value`-th navigation solution, 0 off.
     ///
-    /// `Timing::MessageRatePerPort = true` sends the six-port form of UBX-CFG-MSG (32.10.18.2:
+    /// `Timing::messageRatePerPort = true` sends the six-port form of UBX-CFG-MSG (32.10.18.2:
     /// the value for DDC, 0 for the other ports) instead of the three-byte one. Why anybody
     /// would: the short frame for NAV-PVT every solution ends in the checksum 0x13 0x51, and
     /// 0x51 is "0x28, read". Measured on a SAM-M8Q sharing a TCA9548A channel at
@@ -207,34 +199,30 @@ struct UbloxM8 {
     /// take for a START. A frame to the receiver must not hold the address byte of such a
     /// neighbour; `frames()` is there so that an application can check that at compile time.
     struct NavPvtRate {
-        using Value                   = std::uint8_t;
-        static constexpr bool PerPort = [] {
-            if constexpr(requires { Timing::MessageRatePerPort; }) {
-                return static_cast<bool>(Timing::MessageRatePerPort);
-            } else {
-                return false;
-            }
-        }();
+        using Value = std::uint8_t;
+        static constexpr bool PerPort
+          = static_cast<bool>(KVASIR_CONFIG_OR(Timing, messageRatePerPort, false));
         static constexpr std::size_t Bytes   = PerPort ? 16 : 11;
         static constexpr Value       Initial = 1;
 
         [[nodiscard]] static constexpr auto frame(Value value) {
             if constexpr(PerPort) {
-                return UbloxM8Detail::cfgMsgPorts(UbloxM8Detail::NavPvtClass,
-                                                  UbloxM8Detail::NavPvtId,
-                                                  {value, 0, 0, 0, 0, 0});
+                return Kvasir::Gnss::Ublox::cfgMsgPorts(Kvasir::Gnss::Ublox::NavPvtClass,
+                                                        Kvasir::Gnss::Ublox::NavPvtId,
+                                                        {value, 0, 0, 0, 0, 0});
             } else {
-                return UbloxM8Detail::cfgMsg(UbloxM8Detail::NavPvtClass,
-                                             UbloxM8Detail::NavPvtId,
-                                             value);
+                return Kvasir::Gnss::Ublox::cfgMsg(Kvasir::Gnss::Ublox::NavPvtClass,
+                                                   Kvasir::Gnss::Ublox::NavPvtId,
+                                                   value);
             }
         }
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             auto const f = frame(value);
             for(std::size_t i = 0; i < f.size(); ++i) { buffer[i] = std::byte{f[i]}; }
-            return Step::commandBuffer({.offset = 0, .count = static_cast<std::uint8_t>(f.size())});
+            return Engine::Step::commandBuffer(
+              {.offset = 0, .count = static_cast<std::uint8_t>(f.size())});
         }
     };
 
@@ -244,13 +232,14 @@ struct UbloxM8 {
         static constexpr std::size_t Bytes   = 14;
         static constexpr Value       Initial = MeasRate;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             auto const ms
               = std::clamp(value, std::chrono::milliseconds{50}, std::chrono::milliseconds{65535});
-            auto const f = UbloxM8Detail::cfgRate(ms);
+            auto const f = Kvasir::Gnss::Ublox::cfgRate(ms);
             for(std::size_t i = 0; i < f.size(); ++i) { buffer[i] = std::byte{f[i]}; }
-            return Step::commandBuffer({.offset = 0, .count = static_cast<std::uint8_t>(f.size())});
+            return Engine::Step::commandBuffer(
+              {.offset = 0, .count = static_cast<std::uint8_t>(f.size())});
         }
     };
 
@@ -265,9 +254,9 @@ struct UbloxM8 {
             }
             return false;
         };
-        return in(UbloxM8Detail::cfgPrtDdc(Address, Port::Initial.in, Port::Initial.out))
+        return in(Kvasir::Gnss::Ublox::cfgPrtDdc(Address, Port::Initial.in, Port::Initial.out))
             || in(NavPvtRate::frame(NavPvtRate::Initial))
-            || in(UbloxM8Detail::cfgRate(MeasurementRate::Initial));
+            || in(Kvasir::Gnss::Ublox::cfgRate(MeasurementRate::Initial));
     }
 
     /// Any prebuilt UBX frame, once.
@@ -276,24 +265,21 @@ struct UbloxM8 {
         static constexpr std::size_t Bytes     = CommandBytes;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             for(std::size_t i = 0; i < value.length; ++i) { buffer[i] = std::byte{value.bytes[i]}; }
-            return Step::commandBuffer({.offset = 0, .count = value.length});
+            return Engine::Step::commandBuffer({.offset = 0, .count = value.length});
         }
     };
 
-    using Reads  = List<Stream>;
-    using Writes = List<Port, NavPvtRate, MeasurementRate, Command>;
+    using Reads  = Engine::List<Stream>;
+    using Writes = Engine::List<Port, NavPvtRate, MeasurementRate, Command>;
 };
 
 /// The SAM-M8Q is the M8 this was written for.
 template<std::uint8_t MaxChunk     = 128,
          std::size_t  CommandBytes = 100,
-         typename Timing           = DefaultTiming>
+         typename Timing           = Engine::DefaultTiming>
 using SamM8q = UbloxM8<MaxChunk, CommandBytes, Timing>;
-
-/// `Chips::Ubx`: the frame assembler over an M8's chunks (I2C/Ubx.hpp) at its default payload.
-using Ubx = Kvasir::I2C::Ubx<>;
 
 }   // namespace Kvasir::I2C::Chips

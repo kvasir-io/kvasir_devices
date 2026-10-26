@@ -51,7 +51,7 @@ static_assert([] {
 
 // The template parameters reach the block, and the CRC follows it.
 struct SlowRefresh {
-    static constexpr auto Refresh = 200ms;
+    static constexpr auto refresh = 200ms;
 };
 
 using Other = Chips::Cy8cmbr3102<0x38,
@@ -69,34 +69,34 @@ static_assert(Other::Configuration[0x00] == 0x02 && Other::Configuration[0x08] =
 // average 0, 0xE6, SYNC2 7.
 static_assert([] {
     auto const f   = frame(0x07, 0x00, 23, 0x12, 0x00, 0x56, 0x04, 0x68, 0x04, 0, 0, 0, 0x07);
-    auto const got = Soil::Moisture::decode(Bytes{f});
+    auto const got = Soil::Moisture::decode(Kvasir::Bytes{f});
     return isOk(got) && equal(got.value.capacitance, 23) && equal(got.value.difference, 0x12)
         && equal(got.value.baseline, 0x456) && equal(got.value.raw, 0x468);
 }());
 // the reserved high nibble of the counters does not count
-static_assert(isOk(Soil::Moisture::decode(Bytes{frame(0xA7,
-                                                      0x00,
-                                                      23,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0,
-                                                      0x57)})));
+static_assert(isOk(Soil::Moisture::decode(Kvasir::Bytes{frame(0xA7,
+                                                              0x00,
+                                                              23,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              0x57)})));
 // the part moved on between the counters: read again, soon
 static_assert([] {
-    auto const got
-      = Soil::Moisture::decode(Bytes{frame(0x07, 0x00, 23, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08)});
+    auto const got = Soil::Moisture::decode(
+      Kvasir::Bytes{frame(0x07, 0x00, 23, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08)});
     return isRetry(got) && got.retryAfter == 5ms;
 }());
 // SENSOR_ID not taken yet (255 after a reset): read again after the command latency
 static_assert([] {
-    auto const got
-      = Soil::Moisture::decode(Bytes{frame(0x07, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x07)});
+    auto const got = Soil::Moisture::decode(
+      Kvasir::Bytes{frame(0x07, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x07)});
     return isRetry(got) && got.retryAfter == 50ms;
 }());
 
@@ -193,9 +193,8 @@ std::size_t debugReads() {
 // -- cases ----------------------------------------------------------------------------------
 
 void identified() {
-    testCase("CY8CMBR3102 identified, configured, reading");
-    fresh();
-    Part part{Soil::ConfigCrc};
+    I2cCase const testcase{"CY8CMBR3102 identified, configured, reading"};
+    Part          part{Soil::ConfigCrc};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
@@ -215,26 +214,22 @@ void identified() {
     }
     checkEq(d.errors(), 0U, "no errors");
     checkEq(d.rejected(), 0U, "no rejections");
-    if(failures != 0) { dump(); }
 }
 
 void rejected() {
-    testCase("CY8CMBR3102 rejects another family member");
-    fresh();
-    Part part{Soil::ConfigCrc, 0x0A06};   // a CY8CMBR3106S
+    I2cCase const testcase{"CY8CMBR3102 rejects another family member"};
+    Part          part{Soil::ConfigCrc, 0x0A06};   // a CY8CMBR3106S
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     runFor(d, 500ms);
     check(!d.identified(), "DEVICE_ID 0x0A06 is not a 3102");
     check(!d.valid(), "and nothing is read from it");
     check(writes().empty(), "nor written to it");
-    if(failures != 0) { dump(); }
 }
 
 void provision() {
-    testCase("CY8CMBR3102 unconfigured, provisioned once");
-    fresh();
-    Part part{0xBEEF};
+    I2cCase const testcase{"CY8CMBR3102 unconfigured, provisioned once"};
+    Part          part{0xBEEF};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "reads regardless");
@@ -277,7 +272,7 @@ void provision() {
     auto const ticket = d.request<Soil::Stored>();
     check(runUntil(
             d,
-            [&] { return d.answer<Soil::Stored>(ticket) != Answer::pending; },
+            [&] { return d.answer<Soil::Stored>(ticket) != Kvasir::Engine::Answer::pending; },
             500ms),
           "Stored read back");
     check(d.latest<Soil::Stored>().configured
@@ -287,13 +282,11 @@ void provision() {
     auto const after = FakeBus::log.size();
     runFor(d, 2s);
     for(auto const& w : writes(after)) { check(w.size() == 2 && w[0] == 0x82, "and never again"); }
-    if(failures != 0) { dump(); }
 }
 
 void setAddress() {
-    testCase("CY8CMBR3102 SetAddress and Command");
-    fresh();
-    Part part{Soil::ConfigCrc};
+    I2cCase const testcase{"CY8CMBR3102 SetAddress and Command"};
+    Part          part{Soil::ConfigCrc};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
@@ -316,19 +309,17 @@ void setAddress() {
     std::array<std::byte, Soil::BlockBytes> buf{};
     static_cast<void>(Soil::SetAddress::encode(0x05, buf));
     check(buf[0x51] == std::byte{0x37}, "an address outside 8..119 writes Addr");
-    if(failures != 0) { dump(); }
 }
 
 void syncMismatch() {
-    testCase("CY8CMBR3102 sync counters disagree: retried, then read");
-    fresh();
+    I2cCase const    testcase{"CY8CMBR3102 sync counters disagree: retried, then read"};
     Part             part{Soil::ConfigCrc};
     int              torn = 2;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
           auto const r = part.m(addr, sent, recv);
-          if(r == FakeBusResult::succeeded && recv.size() == 13 && torn > 0) {
+          if(r == FakeBusResult::ok && recv.size() == 13 && torn > 0) {
               --torn;
               recv[12] = std::byte{4};   // SYNC_COUNTER2 moved on under the read
           }
@@ -340,12 +331,10 @@ void syncMismatch() {
     checkEq(debugReads(), 3U, "two retries, then the frame that holds");
     checkEq(d.rejected(), 0U, "a retry is not a rejection");
     checkEq(d.samples(), 1U, "one sample");
-    if(failures != 0) { dump(); }
 }
 
 void wakeNaks() {
-    testCase("CY8CMBR3102 NAKs while it wakes: put on the wire again");
-    fresh();
+    I2cCase const    testcase{"CY8CMBR3102 NAKs while it wakes: put on the wire again"};
     Part             part{Soil::ConfigCrc};
     int              naks = 3;   // the bring-up's first read
     ScopedHook const answering{
@@ -353,7 +342,7 @@ void wakeNaks() {
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
           if(naks > 0) {
               --naks;
-              return FakeBusResult::notAcknowledged;
+              return FakeBusResult::nack;
           }
           return part.m(addr, sent, recv);
       }};
@@ -361,14 +350,14 @@ void wakeNaks() {
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
     check(d.identified(), "identified after the wake NAKs");
     checkEq(d.errors(), 0U, "the NAKs did not count as errors");
-    checkEq(d.wakeRetries(), 3U, "they counted as wake retries");
+    checkEq(d.wakeRetryCount(), 3U, "they counted as wake retries");
 
     // asleep again later: two NAKs on a cyclic read
     auto const n = d.samples();
     naks         = 2;
     runFor(d, 500ms);
     checkEq(d.errors(), 0U, "still no errors");
-    checkEq(d.wakeRetries(), 5U, "two more retries");
+    checkEq(d.wakeRetryCount(), 5U, "two more retries");
     check(d.samples() > n, "and the samples go on");
     check(d.answering(), "the part is answering");
 
@@ -376,13 +365,11 @@ void wakeNaks() {
     naks = 1000;
     runFor(d, 500ms);
     check(d.errors() > 0, "six NAKs in a row are a NAK");
-    if(failures != 0) { dump(); }
 }
 
 void capacitance() {
-    testCase("CY8CMBR3102 Capacitance on demand: SENSOR_ID away and back");
-    fresh();
-    Part part{Soil::ConfigCrc};
+    I2cCase const testcase{"CY8CMBR3102 Capacitance on demand: SENSOR_ID away and back"};
+    Part          part{Soil::ConfigCrc};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
@@ -393,10 +380,10 @@ void capacitance() {
     auto const ticket = d.request<Soil::Capacitance>();
     check(runUntil(
             d,
-            [&] { return d.answer<Soil::Capacitance>(ticket) != Answer::pending; },
+            [&] { return d.answer<Soil::Capacitance>(ticket) != Kvasir::Engine::Answer::pending; },
             1s),
           "answered");
-    check(d.answer<Soil::Capacitance>(ticket) == Answer::ok, "ok");
+    check(d.answer<Soil::Capacitance>(ticket) == Kvasir::Engine::Answer::ok, "ok");
     check(writes(from) == std::vector<std::vector<std::uint8_t>>{{0x82, 0x01}, {0x82, 0x00}},
           "CS1 selected, then CS0");
     std::vector<FakeClock::time_point> at;
@@ -404,7 +391,6 @@ void capacitance() {
     check(at.size() == 3 && at[1] - at[0] >= 50ms && at[2] - at[1] >= 50ms,
           "each given the 50 ms command latency, then the block");
     checkEq(d.latest<Soil::Capacitance>().capacitance, 37U, "DEBUG_CP after the reselect");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

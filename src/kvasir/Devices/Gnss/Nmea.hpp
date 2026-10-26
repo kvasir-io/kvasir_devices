@@ -239,9 +239,9 @@ static_assert(NmeaSentence<>::of("PMTK000").view() == "$PMTK000*32\r\n");
 static_assert([] {
     constexpr std::string_view gga
       = "$GNGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*59\r\n";
-    Nmea<>   n{};
-    unsigned seen = 0;
-    auto     on   = [&](Nmea<> const& s) {
+    Nmea<>     n{};
+    unsigned   seen = 0;
+    auto const on   = [&](Nmea<> const& s) {
         if(s.is("GGA") && s.field(Gga::satellites) == "08" && s.field(Gga::altitude) == "545.4") {
             ++seen;
         }
@@ -260,10 +260,10 @@ static_assert([] {
     constexpr std::string_view gga
       = "$GNGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*59\r\n";
     constexpr std::array<std::uint8_t, 12>
-             ubx{0xB5, 0x62, 0x01, 0x07, 0x04, 0x00, 0x0A, 0x0A, 0xFF, 0x0A, 0x2E, 0x0A};
-    Nmea<>   n{};
-    unsigned seen = 0;
-    auto     on   = [&](Nmea<> const&) { ++seen; };
+               ubx{0xB5, 0x62, 0x01, 0x07, 0x04, 0x00, 0x0A, 0x0A, 0xFF, 0x0A, 0x2E, 0x0A};
+    Nmea<>     n{};
+    unsigned   seen = 0;
+    auto const on   = [&](Nmea<> const&) { ++seen; };
     n.feed(gga, on);
     n.feed(ubx, on);
     n.feed(gga, on);

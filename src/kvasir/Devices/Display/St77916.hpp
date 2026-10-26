@@ -4,6 +4,7 @@
 #include "DcsPanel.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -39,15 +40,16 @@ namespace Kvasir { namespace St77916 {
         static constexpr int          WindowAlign     = 1;
         static constexpr int          MaxAddress      = 65536;
 
-        static constexpr unsigned long MaxWriteHz = 50'000'000;
-        static constexpr unsigned long MaxReadHz  = 6'666'666;
+        static constexpr Units::Hertz MaxWriteClock = Units::hertz(50'000'000);
+        static constexpr Units::Hertz MaxReadClock  = Units::hertz(6'666'666);
 
         // 3Ah: IFPF 101 = 16 bit (13.2); 55h sets VIPF the same way, as Espressif does.
         static constexpr std::uint8_t Colmod565 = 0x55;
 
-        static constexpr unsigned ResetPulseMs     = 10;
-        static constexpr unsigned ResetToCommandMs = 120;   // no SLPOUT within 120 ms of RESX
-        static constexpr unsigned SleepOutMs       = 120;
+        static constexpr std::chrono::milliseconds ResetPulse{10};
+        /// no SLPOUT within 120 ms of RESX
+        static constexpr std::chrono::milliseconds ResetToCommand{120};
+        static constexpr std::chrono::milliseconds SleepOut{120};
 
         // WRDISBV drives the CABC backlight PWM output, which these modules do not wire.
         static constexpr bool         Brightness  = false;
@@ -142,16 +144,16 @@ namespace Kvasir { namespace St77922 {
         static constexpr int          WindowAlign     = 1;
         static constexpr int          MaxAddress      = 65536;
 
-        static constexpr unsigned long MaxWriteHz = 50'000'000;
-        static constexpr unsigned long MaxReadHz  = 6'666'666;
+        static constexpr Units::Hertz MaxWriteClock = Units::hertz(50'000'000);
+        static constexpr Units::Hertz MaxReadClock  = Units::hertz(6'666'666);
 
         // The datasheet says 3Ah = 01h for 16 bit; Espressif's driver sends 55h. Wrong
         // colours: try this first.
         static constexpr std::uint8_t Colmod565 = 0x55;
 
-        static constexpr unsigned ResetPulseMs     = 10;
-        static constexpr unsigned ResetToCommandMs = 120;
-        static constexpr unsigned SleepOutMs       = 120;
+        static constexpr std::chrono::milliseconds ResetPulse{10};
+        static constexpr std::chrono::milliseconds ResetToCommand{120};
+        static constexpr std::chrono::milliseconds SleepOut{120};
 
         static constexpr bool         Brightness  = false;
         static constexpr std::uint8_t CtrlDisplay = 0x00;

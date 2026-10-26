@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -64,9 +65,9 @@ struct Hmc5883lX {
     /// Honeywell HMC5883L. HMC5883L.md:594..626: identification registers A, B, C (10..12) read the
     /// ASCII characters H, 4, 3.
     static constexpr std::array Identity{
-      RegisterCheck{"id-a", 0x0A, 1, true, 0xFF, 'H'},
-      RegisterCheck{"id-b", 0x0B, 1, true, 0xFF, '4'},
-      RegisterCheck{"id-c", 0x0C, 1, true, 0xFF, '3'},
+      Engine::RegisterCheck{"id-a", 0x0A, 1, true, 0xFF, 'H'},
+      Engine::RegisterCheck{"id-b", 0x0B, 1, true, 0xFF, '4'},
+      Engine::RegisterCheck{"id-c", 0x0C, 1, true, 0xFF, '3'},
     };
     static constexpr Address7                Address = 0x1E;
     static constexpr std::array<Address7, 1> Addresses{0x1E};
@@ -84,14 +85,14 @@ struct Hmc5883lX {
       = Hmc5883lDetail::RatePeriod[static_cast<std::size_t>(Rate)];
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x00, .payload = {ConfigA}}),
-      Step::write({.reg = 0x01, .payload = {ConfigB}}),
-      Step::write({.reg = 0x02, .payload = {0x00}, .delay = std::chrono::milliseconds{7}}),
+      Engine::Step::write({.reg = 0x00, .payload = {ConfigA}}),
+      Engine::Step::write({.reg = 0x01, .payload = {ConfigB}}),
+      Engine::Step::write({.reg = 0x02, .payload = {0x00}, .delay = std::chrono::milliseconds{7}}),
       // The measurement the part took at power-up, at the default gain, holds RDY until it is
       // read, and the first measurement after a gain change still uses the previous gain
       // (Configuration Register B): both are read out here and dropped, and the first sample
       // kept is two output periods on (Mode Register, "first set of data after 2/fDO").
-      Step::read({.reg = 0x03, .count = 6, .offset = 0, .delay = 2 * OutputPeriod}),
+      Engine::Step::read({.reg = 0x03, .count = 6, .offset = 0, .delay = 2 * OutputPeriod}),
     };
 
     struct State {
@@ -109,28 +110,30 @@ struct Hmc5883lX {
     struct Field {
         static constexpr auto       Period = OutputPeriod;
         static constexpr std::array Steps{
-          Step::read({.reg = 0x03, .count = 7})};   // X, Z, Y, status
+          Engine::Step::read({.reg = 0x03, .count = 7})};   // X, Z, Y, status
 
         struct Sample {
             NanoTesla x{}, y{}, z{};
         };
 
         /// `CountsPerGauss` counts per gauss, and a gauss is 100'000 nT.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data,
-                                                              Sample const&) {
-            if((data.u8(6) & 0x01U) == 0) { return Outcome<Sample>::unchanged(); }   // RDY
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data,
+                                                                      Sample const&) {
+            if((data.u8(6) & 0x01U) == 0) { return Engine::Outcome<Sample>::unchanged(); }   // RDY
             auto const rx = data.s16be(0);
             auto const rz = data.s16be(2);
             auto const ry = data.s16be(4);
-            if(rx == -4096 || ry == -4096 || rz == -4096) { return Outcome<Sample>::reject(); }
+            if(rx == -4096 || ry == -4096 || rz == -4096) {
+                return Engine::Outcome<Sample>::reject();
+            }
             auto const nT = [](std::int16_t raw) {
                 return Units::nanoTesla(static_cast<std::int64_t>(raw) * 100'000 / CountsPerGauss);
             };
-            return Outcome<Sample>::ok({nT(rx), nT(ry), nT(rz)});
+            return Engine::Outcome<Sample>::ok({nT(rx), nT(ry), nT(rz)});
         }
     };
 
-    using Reads = List<Field>;
+    using Reads = Engine::List<Field>;
 };
 
 /// The part at its reset configuration: 15 Hz and 1090 counts per gauss.

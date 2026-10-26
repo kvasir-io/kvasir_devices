@@ -12,17 +12,14 @@
 #include <random>
 
 using namespace Kvasir::Test;
+using namespace Kvasir::Test::Usb;
 
 namespace {
-struct Config {
-    static constexpr auto        ManufacturerString = "Kvasir host test";
-    static constexpr auto        ProductString      = "fuzz";
-    static constexpr auto        SerialNumberString = "1";
-    static constexpr auto        ProductVersionBCD  = 0x0100;
-    static constexpr auto        VendorID           = 0x1209;
-    static constexpr auto        ProductID          = 0x0005;
-    static constexpr std::size_t SendBufferSize     = 400;
-    static constexpr std::size_t RecvBufferSize     = 300;
+struct Config : TestConfig {
+    static constexpr auto        productString  = "fuzz";
+    static constexpr auto        productId      = 0x0005;
+    static constexpr std::size_t sendBufferSize = 400;
+    static constexpr std::size_t recvBufferSize = 300;
 };
 
 constexpr std::size_t  Ep    = 1;
@@ -61,7 +58,7 @@ bool run(char const*   name,
 
     Model       model;
     std::size_t counter = 0;
-    int         before  = failures;
+    int const   before  = failures;
 
     auto const bringUp = [&] {
         check(Host::enumerate(), "enumerated");
@@ -127,7 +124,7 @@ bool run(char const*   name,
             {   // the application reads some
                 std::size_t n = pick(200);
                 std::byte   b{};
-                while(n-- != 0 && Device::getRecvBuffer().pop_into(b)) {
+                while(n-- != 0 && Device::getRecvBuffer().popInto(b)) {
                     check(!model.expectedBytes.empty() && model.expectedBytes.front() == b,
                           "a byte read is the oldest byte written");
                     if(!model.expectedBytes.empty()) { model.expectedBytes.pop_front(); }
@@ -150,7 +147,9 @@ bool run(char const*   name,
                 if(pick(2) == 0) {
                     check(Host::setConfiguration(1).ok(), "SET_CONFIGURATION again");
                 } else {
-                    check(Host::controlOut(Host::makeSetup(0x01, 11, 0, 0, 0)).ok(),
+                    check(Host::controlOut(
+                            Host::makeSetup(toInterface, Setup::Request::setInterface, 0, 0, 0))
+                            .ok(),
                           "SET_INTERFACE");
                 }
                 model.dropInFlight();
@@ -183,7 +182,7 @@ bool run(char const*   name,
     // Whole packets a controller still holds come up once the reading side has looked twice,
     // a while apart.
     for(int look = 0; look != 3; ++look) {
-        while(Device::getRecvBuffer().pop_into(b)) {
+        while(Device::getRecvBuffer().popInto(b)) {
             check(!model.expectedBytes.empty() && model.expectedBytes.front() == b,
                   "the rest of the bytes, in order");
             if(!model.expectedBytes.empty()) { model.expectedBytes.pop_front(); }

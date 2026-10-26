@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -18,16 +19,16 @@ namespace Kvasir::I2C::Chips {
 /// clamped to 0..100, the datasheet's N.B.). 0x44 (SHT40-AD1B, SHT41, SHT45), 0x45
 /// (-BD1B), 0x46 (-CD1B).
 struct Sht4x {
-    static constexpr std::string_view        Name    = "SHT4x";
-    static constexpr Address7                Address = 0x44;
-    static constexpr std::array<Address7, 3> Addresses{0x44, 0x45, 0x46};
-    static constexpr std::size_t             RegisterBytes = 0;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{1};
+    static constexpr std::string_view Name          = "SHT4x";
+    static constexpr Address7         Address       = 0x44;
+    static constexpr auto             Addresses     = addressRun<0x44, 3>();
+    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr auto             StartupDelay  = std::chrono::milliseconds{1};
 
     static constexpr std::array Init{
-      Step::command({.payload = {0x94}, .delay = std::chrono::milliseconds{1}}),
-      Step::command({.payload = {0x89}, .delay = std::chrono::milliseconds{1}}),
-      Step::receive({.count = 6, .offset = 0}),
+      Engine::Step::command({.payload = {0x94}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::command({.payload = {0x89}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::receive({.count = 6, .offset = 0}),
     };
 
     struct State {
@@ -43,25 +44,24 @@ struct Sht4x {
     struct Measurement {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
         static constexpr std::array Steps{
-          Step::command({.payload = {0xFD}, .delay = std::chrono::milliseconds{9}}),
-          Step::receive({.count = 6, .offset = 0})};
+          Engine::Step::command({.payload = {0xFD}, .delay = std::chrono::milliseconds{9}}),
+          Engine::Step::receive({.count = 6, .offset = 0})};
 
         struct Sample {
             CentiDegC    temperature{};
             CentiPercent humidity{};
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             if(!Sensirion::wordOk(data, 0) || !Sensirion::wordOk(data, 3)) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             Sample sample{};
-            sample.temperature = Units::centiDegC(
-              -4500 + static_cast<std::int32_t>((17500LL * data.be16(0)) / 65535));
-            auto const rh   = -600 + static_cast<std::int32_t>((12500LL * data.be16(3)) / 65535);
-            sample.humidity = Units::centiPercent(
+            sample.temperature = Units::centiDegC(Sensirion::centiDegC(data.be16(0)));
+            auto const rh      = -600 + static_cast<std::int32_t>((12500LL * data.be16(3)) / 65535);
+            sample.humidity    = Units::centiPercent(
               static_cast<std::uint32_t>(rh < 0 ? 0 : (rh > 10000 ? 10000 : rh)));
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -73,12 +73,12 @@ struct Sht4x {
     /// rises, the humidity falls) and for driving off condensation.
     struct Heated {
         static constexpr std::array Steps{
-          Step::command({.payload = {0x24}, .delay = std::chrono::milliseconds{120}}),
-          Step::receive({.count = 6, .offset = 0})};
+          Engine::Step::command({.payload = {0x24}, .delay = std::chrono::milliseconds{120}}),
+          Engine::Step::receive({.count = 6, .offset = 0})};
 
         using Sample = Measurement::Sample;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             return Measurement::decode(data);
         }
     };
@@ -86,7 +86,7 @@ struct Sht4x {
     /// What latest() and fresh() mean without a group name.
     using Primary = Measurement;
 
-    using Reads = List<Measurement, Heated>;
+    using Reads = Engine::List<Measurement, Heated>;
 };
 
 }   // namespace Kvasir::I2C::Chips

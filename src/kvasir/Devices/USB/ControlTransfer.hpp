@@ -2,6 +2,7 @@
 
 #include "../Log.hpp"
 #include "Descriptors.hpp"
+#include "kvasir/Log/LogLimited.hpp"
 
 #include <array>
 #include <cstdint>
@@ -14,7 +15,7 @@ namespace Kvasir::USB::detail {
 /// what happens next, the device only notices that it lost track.
 struct EP0ControlState {
 private:
-    ControlStage current_stage{ControlStage::Idle};
+    ControlStage currentStage{ControlStage::Idle};
     // A protocol bug repeats per transfer; no clock here, so count based.
     Kvasir::CountLimiter<> badTransitionLog_{};
 
@@ -30,23 +31,23 @@ private:
     };
 
 public:
-    constexpr void transition(ControlStage new_stage) {
-        auto const valid_mask  = valid_from[std::to_underlying(new_stage)];
-        auto const current_bit = 1U << std::to_underlying(current_stage);
+    constexpr void transition(ControlStage newStage) {
+        auto const validMask  = valid_from[std::to_underlying(newStage)];
+        auto const currentBit = 1U << std::to_underlying(currentStage);
 
-        if(!(valid_mask & current_bit)) {
+        if(!(validMask & currentBit)) {
             KVASIR_LOG_LIMITED(badTransitionLog_.allow(),
                                UC_LOG_E,
                                "Invalid EP0 stage transition {} -> {}",
-                               current_stage,
-                               new_stage);
+                               currentStage,
+                               newStage);
         }
 
-        current_stage = new_stage;
+        currentStage = newStage;
     }
 
-    constexpr ControlStage stage() const { return current_stage; }
+    [[nodiscard]] constexpr ControlStage stage() const { return currentStage; }
 
-    constexpr void reset() { current_stage = ControlStage::Idle; }
+    constexpr void reset() { currentStage = ControlStage::Idle; }
 };
 }   // namespace Kvasir::USB::detail

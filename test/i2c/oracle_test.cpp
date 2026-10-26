@@ -19,6 +19,7 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
@@ -50,7 +51,7 @@ struct IdentityPart {
         std::size_t at  = 0;
         auto        reg = pointer;
         while(at < recv.size()) {
-            RegisterCheck const* hit = nullptr;
+            Kvasir::Engine::RegisterCheck const* hit = nullptr;
             for(auto const& c : Chip::Identity) {
                 if(c.reg == reg) { hit = &c; }
             }
@@ -58,7 +59,9 @@ struct IdentityPart {
                 recv[at++] = std::byte{0};
             } else {
                 auto value = hit->expect;
-                if(says == Says::also && hit->also != RegisterCheck::None) { value = hit->also; }
+                if(says == Says::also && hit->also != Kvasir::Engine::RegisterCheck::None) {
+                    value = hit->also;
+                }
                 if(says == Says::wrong) { value = hit->expect ^ hit->mask; }
                 for(std::size_t b = 0; b < hit->width && at < recv.size(); ++b) {
                     auto const shift = hit->bigEndian ? 8U * (hit->width - 1U - b) : 8U * b;
@@ -67,7 +70,25 @@ struct IdentityPart {
             }
             ++reg;
         }
-        return FakeBusResult::succeeded;
+        return FakeBusResult::ok;
+    }
+};
+
+/// The description as it is, with an identified() hook that records what the engine hands it
+/// and passes it on: the engine keeps no copy of the identity (it lives in the State only), so
+/// the values handed to the hook are what the oracle test judges.
+template<typename Chip>
+struct Seen {
+    static inline std::vector<std::uint32_t> ids{};
+};
+
+template<typename Chip>
+struct Spy : Chip {
+    template<typename State>
+    static void identified(std::span<std::uint32_t const> ids,
+                           State&                         state) {
+        Seen<Chip>::ids.assign(ids.begin(), ids.end());
+        if constexpr(requires { Chip::identified(ids, state); }) { Chip::identified(ids, state); }
     }
 };
 
@@ -75,9 +96,11 @@ struct IdentityPart {
 /// engine has read already, and a second place for the value to live.
 template<typename Chip>
 constexpr bool readsIdentityItself() {
-    if constexpr(requires { std::span<Step const>{Chip::Init}; }) {
+    if constexpr(requires { std::span<Kvasir::Engine::Step const>{Chip::Init}; }) {
         for(auto const& s : Chip::Init) {
-            if(s.kind != Step::Kind::read || !s.hasRegister || s.regFromBuffer) { continue; }
+            if(s.kind != Kvasir::Engine::Step::Kind::read || !s.hasRegister || s.regFromBuffer) {
+                continue;
+            }
             for(auto const& c : Chip::Identity) {
                 // a block read that starts below the register and runs over it counts too
                 if(c.reg >= s.reg && c.reg < static_cast<unsigned>(s.reg) + s.count) {
@@ -92,7 +115,7 @@ constexpr bool readsIdentityItself() {
 template<typename Chip>
 constexpr bool hasAlso() {
     for(auto const& c : Chip::Identity) {
-        if(c.also != RegisterCheck::None) { return true; }
+        if(c.also != Kvasir::Engine::RegisterCheck::None) { return true; }
     }
     return false;
 }
@@ -103,6 +126,7 @@ std::string readTwice{};
 template<typename Chip>
 void identityFromTheDataSheet() {
     using D = Device<FakeBus, FakeClock, Chip>;
+    using S = Device<FakeBus, FakeClock, Spy<Chip>>;
     if constexpr(D::HasIdentity) {
         using Part = IdentityPart<Chip>;
         std::string const name{Chip::Name};
@@ -111,15 +135,21 @@ void identityFromTheDataSheet() {
             fresh();
             Part part{.says = says};
             FakeBus::respond = std::ref(part);
-            D d{};
-            check(runUntil(d, [&] { return d.identityMatched(); }, 5s), (name + what).c_str());
-            for(std::size_t i = 0; i < Chip::Identity.size(); ++i) {
+            Seen<Chip>::ids.clear();
+            S d{};
+            check(runUntil(d, [&] { return d.identityMatched(); }, 5s), name + what);
+            checkEq(Seen<Chip>::ids.size(),
+                    Chip::Identity.size(),
+                    name + ": identified() is handed every value");
+            for(std::size_t i = 0; i < Chip::Identity.size() && i < Seen<Chip>::ids.size(); ++i) {
                 auto const& c = Chip::Identity[i];
                 auto const  wanted
-                  = says == Part::Says::also && c.also != RegisterCheck::None ? c.also : c.expect;
-                checkEq(d.identity(i) & c.mask,
+                  = says == Part::Says::also && c.also != Kvasir::Engine::RegisterCheck::None
+                    ? c.also
+                    : c.expect;
+                checkEq(Seen<Chip>::ids[i] & c.mask,
                         wanted,
-                        (name + ": identity(i) is what was read").c_str());
+                        name + ": identified() is handed what was read");
             }
         };
 
@@ -137,10 +167,10 @@ void identityFromTheDataSheet() {
             runFor(d, 3s);
             std::size_t writes = 0;
             for(auto const& x : FakeBus::log) { writes += x.isWrite() ? 1U : 0U; }
-            check(
-              !d.identityMatched() && !d.identified() && !d.answering() && d.unidentified() >= 1,
-              (name + ": a part with another identity is never identified or answering").c_str());
-            checkEq(writes, std::size_t{0}, (name + ": and is not written to").c_str());
+            check(!d.identityMatched() && !d.identified() && !d.answering()
+                    && d.unidentified() >= 1,
+                  name + ": a part with another identity is never identified or answering");
+            checkEq(writes, std::size_t{0}, name + ": and is not written to");
         }
     }
 }
@@ -149,7 +179,7 @@ template<typename L>
 struct ForEach;
 
 template<typename... Chips>
-struct ForEach<List<Chips...>> {
+struct ForEach<Kvasir::Engine::List<Chips...>> {
     static void run() { (identityFromTheDataSheet<Chips>(), ...); }
 };
 
@@ -158,7 +188,6 @@ struct ForEach<List<Chips...>> {
 int main() {
     testCase("identity: every description's data sheet identity, through the engine's stage");
     ForEach<Chips::Every>::run();
-    check(readTwice.empty(),
-          ("an identity register is read by the description too: " + readTwice).c_str());
+    check(readTwice.empty(), "an identity register is read by the description too: " + readTwice);
     return finish();
 }

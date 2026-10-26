@@ -8,7 +8,6 @@
 #include <cstring>
 #include <iterator>
 #include <kvasir/Util/StaticVector.hpp>
-#include <kvasir/Util/using_literals.hpp>
 #include <memory>
 #include <span>
 #include <string_constant/string_constant.hpp>
@@ -104,13 +103,19 @@ struct SetupPacket {
         setInterface     = 11,
     };
 
-    Direction direction() const { return static_cast<Direction>((bmRequestType & 0x80) >> 7); }
+    [[nodiscard]] Direction direction() const {
+        return static_cast<Direction>((bmRequestType & 0x80) >> 7);
+    }
 
-    Type type() const { return static_cast<Type>((bmRequestType & 0x60) >> 5); }
+    [[nodiscard]] Type type() const { return static_cast<Type>((bmRequestType & 0x60) >> 5); }
 
-    Recipient recipient() const { return static_cast<Recipient>(bmRequestType & 0x1f); }
+    [[nodiscard]] Recipient recipient() const {
+        return static_cast<Recipient>(bmRequestType & 0x1f);
+    }
 
-    DescriptorType descriptorType() const { return static_cast<DescriptorType>(wValue >> 8); }
+    [[nodiscard]] DescriptorType descriptorType() const {
+        return static_cast<DescriptorType>(wValue >> 8);
+    }
 
     uint8_t  bmRequestType;
     Request  bRequest;
@@ -126,8 +131,6 @@ static_assert(sizeof(SetupPacket) == 8);
 inline constexpr std::size_t MaxPacketSize = 64;
 
 namespace detail {
-    static constexpr std::size_t MaxPacketSize = Kvasir::USB::MaxPacketSize;
-
     static constexpr std::uint16_t bcdUSB{0x0200};
 
     // bLength is not defaulted to sizeof(Derived): gcc cannot constant-evaluate bit_cast of a
@@ -151,101 +154,116 @@ namespace Descriptors {
 
     struct [[gnu::packed]] Device : detail::DescriptorBase<Device, DescriptorType::device> {
         std::uint16_t bcdUSB{detail::bcdUSB};
-        DeviceClass   bDeviceClass;
-        DeviceClass   bDeviceSubClass;
-        std::uint8_t  bDeviceProtocol;
-        std::uint8_t  bMaxPacketSize0;
-        std::uint16_t idVendor;
-        std::uint16_t idProduct;
-        std::uint16_t bcdDevice;
-        std::uint8_t  iManufacturer;
-        std::uint8_t  iProduct;
-        std::uint8_t  iSerialNumber;
-        std::uint8_t  bNumConfigurations;
+        DeviceClass   bDeviceClass{};
+        DeviceClass   bDeviceSubClass{};
+        std::uint8_t  bDeviceProtocol{};
+        std::uint8_t  bMaxPacketSize0{};
+        std::uint16_t idVendor{};
+        std::uint16_t idProduct{};
+        std::uint16_t bcdDevice{};
+        std::uint8_t  iManufacturer{};
+        std::uint8_t  iProduct{};
+        std::uint8_t  iSerialNumber{};
+        std::uint8_t  bNumConfigurations{};
     };
 
     struct [[gnu::packed]] Configuration
       : detail::DescriptorBase<Configuration, DescriptorType::configuration> {
-        std::uint16_t           wTotalLength;
-        std::uint8_t            bNumInterfaces;
-        std::uint8_t            bConfigurationValue;
+        std::uint16_t           wTotalLength{};
+        std::uint8_t            bNumInterfaces{};
+        std::uint8_t            bConfigurationValue{};
         std::uint8_t            iConfiguration{};
         ConfigurationAttributes bmAttributes{ConfigurationAttributes::BusPowered};
-        std::uint8_t            bMaxPower;
+        std::uint8_t            bMaxPower{};
     };
 
     struct [[gnu::packed]] Interface
       : detail::DescriptorBase<Interface, DescriptorType::interface> {
-        std::uint8_t bInterfaceNumber;
-        std::uint8_t bAlternateSetting;
-        std::uint8_t bNumEndpoints;
-        std::uint8_t bInterfaceClass;
-        std::uint8_t bInterfaceSubClass;
-        std::uint8_t bInterfaceProtocol;
+        std::uint8_t bInterfaceNumber{};
+        std::uint8_t bAlternateSetting{};
+        std::uint8_t bNumEndpoints{};
+        std::uint8_t bInterfaceClass{};
+        std::uint8_t bInterfaceSubClass{};
+        std::uint8_t bInterfaceProtocol{};
         std::uint8_t iInterface{};
     };
 
     struct [[gnu::packed]] InterfaceAssociation
       : detail::DescriptorBase<InterfaceAssociation, DescriptorType::interfaceAssociation> {
-        std::uint8_t bFirstInterface;
-        std::uint8_t bInterfaceCount;
-        std::uint8_t bFunctionClass;
-        std::uint8_t bFunctionSubClass;
-        std::uint8_t bFunctionProtocol;
+        std::uint8_t bFirstInterface{};
+        std::uint8_t bInterfaceCount{};
+        std::uint8_t bFunctionClass{};
+        std::uint8_t bFunctionSubClass{};
+        std::uint8_t bFunctionProtocol{};
         std::uint8_t iFunction{};
     };
 
     struct [[gnu::packed]] Endpoint : detail::DescriptorBase<Endpoint, DescriptorType::endpoint> {
-        std::uint8_t         bEndpointAddress;
-        EndpointTransferType bmAttributes;
-        std::uint16_t        wMaxPacketSize;
+        std::uint8_t         bEndpointAddress{};
+        EndpointTransferType bmAttributes{};
+        std::uint16_t        wMaxPacketSize{};
         std::uint8_t         bInterval{};
     };
 
+    /// An endpoint descriptor: endpoint `number` in direction `dir`, `maxPacket` bytes a packet
+    /// (full speed: 64 for bulk), polled every `interval` ms (interrupt endpoints; 0 otherwise).
+    constexpr Endpoint endpoint(EndpointDirection    dir,
+                                std::size_t          number,
+                                EndpointTransferType type,
+                                std::size_t          maxPacket = MaxPacketSize,
+                                std::uint8_t         interval  = 0) {
+        return Endpoint{
+          .bEndpointAddress{makeEndpointAddress(dir, static_cast<std::uint8_t>(number))},
+          .bmAttributes{type},
+          .wMaxPacketSize{static_cast<std::uint16_t>(maxPacket)},
+          .bInterval{interval}};
+    }
+
     struct [[gnu::packed]] Bos : detail::DescriptorBase<Bos, DescriptorType::bos> {
-        std::uint16_t wTotalLength;
-        std::uint8_t  bNumDeviceCaps;
+        std::uint16_t wTotalLength{};
+        std::uint8_t  bNumDeviceCaps{};
     };
 
     namespace detail {
         template<typename T>
         constexpr std::size_t getActualSize() {
             // For std::array, use tuple_size to get the actual element count
-            if constexpr(requires { std::tuple_size<T>::value; }) {
-                return std::tuple_size<T>::value;
+            if constexpr(requires { typename std::tuple_size<T>::type; }) {
+                return std::tuple_size_v<T>;
             } else {
                 return sizeof(T);
             }
         }
+    }   // namespace detail
 
-        template<typename... Ts>
-        constexpr auto generateArray(Ts const&... args) {
-            std::array<std::byte, (getActualSize<Ts>() + ...)> buffer{};
-            std::size_t                                        offset = 0;
+    /// The descriptors laid end to end as bytes (each stamped with its bLength): a configuration block.
+    template<typename... Ts>
+    constexpr auto generateArray(Ts const&... args) {
+        std::array<std::byte, (detail::getActualSize<Ts>() + ...)> buffer{};
+        std::size_t                                                offset = 0;
 
-            auto copyOne = [&]<typename T>(T const& arg) {
-                constexpr std::size_t actual_size = getActualSize<T>();
-                if constexpr(actual_size > 0) {
-                    auto byte_array = [&] {
-                        if constexpr(requires { T::descriptorLength(); }) {
-                            T stamped       = arg;
-                            stamped.bLength = T::descriptorLength();
-                            return std::bit_cast<std::array<std::byte, sizeof(T)>>(stamped);
-                        } else {
-                            return std::bit_cast<std::array<std::byte, sizeof(T)>>(arg);
-                        }
-                    }();
-                    for(std::size_t i = 0; i < actual_size; ++i) {
-                        buffer[offset + i] = byte_array[i];
+        auto const copyOne = [&]<typename T>(T const& arg) {
+            constexpr std::size_t actual_size = detail::getActualSize<T>();
+            if constexpr(actual_size > 0) {
+                auto byteArray = [&] {
+                    if constexpr(requires { T::descriptorLength(); }) {
+                        T stamped       = arg;
+                        stamped.bLength = T::descriptorLength();
+                        return std::bit_cast<std::array<std::byte, sizeof(T)>>(stamped);
+                    } else {
+                        return std::bit_cast<std::array<std::byte, sizeof(T)>>(arg);
                     }
-                    offset += actual_size;
-                }
-            };
+                }();
+                for(std::size_t i = 0; i < actual_size; ++i) { buffer[offset + i] = byteArray[i]; }
+                offset += actual_size;
+            }
+        };
 
-            (copyOne(args), ...);
-            return buffer;
-        }
+        (copyOne(args), ...);
+        return buffer;
+    }
 
+    namespace detail {
         // Calls f(descriptor) for each descriptor of a bLength-chained block, e.g. a whole
         // configuration descriptor.
         template<typename F>
@@ -278,7 +296,7 @@ namespace Descriptors {
           // EF/02/01 is the interface association triple; a device that leaves the class to its
           // interfaces has protocol 0 with it.
           .bDeviceProtocol{Class == DeviceClass::Miscellaneous ? std::uint8_t{1} : std::uint8_t{0}},
-          .bMaxPacketSize0{Kvasir::USB::detail::MaxPacketSize},
+          .bMaxPacketSize0{Kvasir::USB::MaxPacketSize},
           .idVendor{VendorID},
           .idProduct{ProductID},
           .bcdDevice{DeviceVersion},
@@ -286,26 +304,26 @@ namespace Descriptors {
           .iProduct{ProductStringID},
           .iSerialNumber{SerialNumberStringID},
           .bNumConfigurations{1}};
-        return detail::generateArray(DeviceDescriptor);
+        return generateArray(DeviceDescriptor);
     }
 
     template<typename... Interfaces>
-    consteval auto makeConfigDescriptorArray(std::uint16_t BusPower,
-                                             bool          BusPowered,
-                                             std::uint8_t  NumInterfaces,
+    consteval auto makeConfigDescriptorArray(std::uint16_t busPower,
+                                             bool          busPowered,
+                                             std::uint8_t  numInterfaces,
                                              Interfaces const&... interfaces) {
-        assert(500 >= BusPower);
-        auto remainingConfig = detail::generateArray(interfaces...);
+        assert(500 >= busPower);
+        auto const remainingConfig = generateArray(interfaces...);
 
-        USB::Descriptors::Configuration ConfigDescriptor{
+        USB::Descriptors::Configuration const configDescriptor{
           .wTotalLength{sizeof(remainingConfig) + sizeof(USB::Descriptors::Configuration)},
-          .bNumInterfaces{NumInterfaces},
+          .bNumInterfaces{numInterfaces},
           .bConfigurationValue{1},
-          .bmAttributes{BusPowered ? ConfigurationAttributes::BusPowered
+          .bmAttributes{busPowered ? ConfigurationAttributes::BusPowered
                                    : ConfigurationAttributes::SelfPowered},
-          .bMaxPower{static_cast<std::uint8_t>(BusPower / 2)}};
+          .bMaxPower{static_cast<std::uint8_t>(busPower / 2)}};
 
-        return detail::generateArray(ConfigDescriptor, remainingConfig);
+        return generateArray(configDescriptor, remainingConfig);
     }
 
 }   // namespace Descriptors
@@ -325,7 +343,7 @@ struct DescriptorString {
 
         assert(buffer.size() == s.size() * 2);
         auto pos = buffer.begin();
-        for(auto c : s) {
+        for(auto const c : s) {
             *pos = static_cast<std::byte>(c);
             ++pos;
             *pos = std::byte{0};
@@ -333,15 +351,15 @@ struct DescriptorString {
         }
     }
 
-    constexpr std::size_t size() const { return buffer.size(); }
+    [[nodiscard]] constexpr std::size_t size() const { return buffer.size(); }
 
-    constexpr std::byte const* begin() const { return buffer.data(); }
+    [[nodiscard]] constexpr std::byte const* begin() const { return buffer.data(); }
 
-    constexpr std::byte const* end() const { return buffer.data() + buffer.size(); }
+    [[nodiscard]] constexpr std::byte const* end() const { return buffer.data() + buffer.size(); }
 
-    constexpr std::byte const* data() const { return buffer.data(); }
+    [[nodiscard]] constexpr std::byte const* data() const { return buffer.data(); }
 
-    constexpr DescriptorString const& get() const { return *this; }
+    [[nodiscard]] constexpr DescriptorString const& get() const { return *this; }
 };
 
 template<std::size_t ByteCount>
@@ -356,10 +374,10 @@ DescriptorString(char const (&)[N])
                                  checkedDescriptorStringSize<(N - 1) * 2>()>>;
 DescriptorString(std::string_view s) -> DescriptorString<Kvasir::StaticVector<std::byte,
                                                                               252>>;
-template<char... chars>
-DescriptorString(sc::StringConstant<chars...> sc)
+template<char... Chars>
+DescriptorString(sc::StringConstant<Chars...> sc)
   -> DescriptorString<std::array<std::byte,
-                                 checkedDescriptorStringSize<sizeof...(chars) * 2>()>>;
+                                 checkedDescriptorStringSize<sizeof...(Chars) * 2>()>>;
 
 template<typename F>
 struct RuntimeDescriptorString {
@@ -386,7 +404,9 @@ struct RuntimeDescriptorString {
           }()} {}
     };
 
-    RuntimeDescriptorStringImpl get() const { return RuntimeDescriptorStringImpl{f()}; }
+    [[nodiscard]] RuntimeDescriptorStringImpl get() const {
+        return RuntimeDescriptorStringImpl{f()};
+    }
 };
 
 template<typename F>
@@ -440,7 +460,7 @@ IT insertStringDescriptor(std::size_t index,
 
 // Last in the file, and before any header that logs a SetupPacket: an explicit specialization
 // has to be seen before its first use.
-#if __has_include("remote_fmt/remote_fmt.hpp")
+#if defined(KVASIR_LOG_FORMATTERS) && __has_include("remote_fmt/remote_fmt.hpp")
     #include "remote_fmt/remote_fmt.hpp"
 
 namespace remote_fmt {

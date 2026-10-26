@@ -10,9 +10,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <kvasir/Devices/I2C/Adapters/Watch.hpp>
 #include <kvasir/Devices/I2C/Bus.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/Watch.hpp>
 #include <kvasir/Devices/I2C/chips/All.hpp>
 #include <map>
 #include <memory>
@@ -26,6 +26,7 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
@@ -38,21 +39,23 @@ namespace PresenceTest {
         static constexpr std::string_view Name          = "PROBE";
         static constexpr Address7         Address       = 0x21;
         static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Value {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Value>;
+        using Reads = Kvasir::Engine::List<Value>;
     };
 
     struct NeverPark {
-        static constexpr std::uint8_t AbsentAfterNaks = 0;
+        static constexpr std::uint8_t absentAfterNaks = 0;
     };
 
     /// Probe without an Init: nothing is sent at bring-up, so its first read is what answers.
@@ -62,11 +65,11 @@ namespace PresenceTest {
         static constexpr std::size_t      RegisterBytes = 1;
 
         using Value = Probe::Value;
-        using Reads = List<Value>;
+        using Reads = Kvasir::Engine::List<Value>;
     };
 
     struct ShortNet {
-        static constexpr auto InFlightTimeout = std::chrono::milliseconds{50};
+        static constexpr auto inFlightTimeout = std::chrono::milliseconds{50};
     };
 
     /// Transactions to `address` whose first sent byte is `reg`: how often a register was
@@ -85,8 +88,7 @@ namespace PresenceTest {
 void presence() {
     using namespace PresenceTest;
 
-    testCase("presence: three NAKs park the device, and nothing goes out while parked");
-    fresh();
+    I2cCase testcase{"presence: three NAKs park the device, and nothing goes out while parked"};
     FakeBus::respond = alwaysNak;
     Dev<Probe> d{};
     check(runUntil(d, [&] { return d.absent(); }, 100ms), "parked");
@@ -99,13 +101,13 @@ void presence() {
         check(!d.answering() && !d.valid(), "and not up");
     }
 
-    testCase("presence: probes at 1, 2, 4, 8, 16, then every 30 s");
+    testcase.step("presence: probes at 1, 2, 4, 8, 16, then every 30 s");
     {
         // From here on the clock steps 100 ms a turn; a probe is one transaction, NAKed.
         std::vector<std::size_t> probeTurns;
         auto                     seen = FakeBus::log.size();
         for(std::size_t t = 0; t < 1200; ++t) {   // 120 s
-            d.handler();
+            d.turn();
             FakeBus::complete();
             FakeClock::current += 100ms;
             if(FakeBus::log.size() != seen) {
@@ -124,20 +126,22 @@ void presence() {
         checkEq(Log::warnings, 1, "and still said once");
     }
 
-    testCase("presence: an ACK unparks at once, and the next turns are ordinary");
+    testcase.step("presence: an ACK unparks at once, and the next turns are ordinary");
     {
-        FakeBus::respond = zeros;
-        auto const infos = Log::infos;
+        FakeBus::respond  = zeros;
+        auto const infos  = Log::infos;
+        auto const debugs = Log::debugs;
         // The next probe is up to 30 s away: step to it.
         check(runUntil(d, [&] { return !d.absent(); }, 31s), "present again");
         check(runUntil(d, [&] { return d.valid(); }, 500ms), "and sampling");
         checkEq(d.consecutiveNaks(), 0U, "streak cleared");
-        check(Log::infos >= infos + 2, "'present again' and 'up' were logged");
+        // "present again" is info; "up", an ordinary bring-up, is debug (EngineLog.hpp)
+        check(Log::infos >= infos + 1 && Log::debugs >= debugs + 1,
+              "'present again' and 'up' were logged");
         checkEq(Log::warnings, 1, "no new warning");
     }
 
-    testCase("presence: bus faults do not park; a NAK streak survives a fault between");
-    fresh();
+    testcase.next("presence: bus faults do not park; a NAK streak survives a fault between");
     FakeBus::respond = alwaysFault;
     Dev<Probe> f{};
     runFor(f, 300ms);
@@ -145,10 +149,10 @@ void presence() {
     check(f.errors() > 5, "which were all counted");
     checkEq(Log::warnings, 0, "and none of them was 'not responding'");
     {
-        int  n      = 0;
-        auto script = [&](std::uint8_t, std::span<std::byte const>, std::span<std::byte>) {
+        int        n      = 0;
+        auto const script = [&](std::uint8_t, std::span<std::byte const>, std::span<std::byte>) {
             ++n;
-            return n == 2 ? FakeBus::Result::failed : FakeBus::Result::notAcknowledged;
+            return n == 2 ? FakeBus::Result::failed : FakeBus::Result::nack;
         };
         FakeBus::respond = script;
         Dev<Probe> e{};
@@ -156,39 +160,37 @@ void presence() {
         checkEq(n, 4, "in four transactions");
     }
 
-    testCase("presence: AbsentAfterNaks = 0 never parks");
-    fresh();
+    testcase.next("presence: AbsentAfterNaks = 0 never parks");
     FakeBus::respond = alwaysNak;
     Dev<Probe, NeverPark> np{};
     runFor(np, 300ms);
     check(!np.absent(), "present through 300 NAKs");
     checkEq(Log::warnings, 0, "nothing said");
 
-    testCase("presence: a parked chip with no Init is up again only once it has answered");
-    fresh();
+    testcase.next("presence: a parked chip with no Init is up again only once it has answered");
     FakeBus::respond = alwaysNak;
     {
         Dev<NoInit> n{};
         check(runUntil(n, [&] { return n.absent(); }, 1s), "parked");
-        auto const infos = Log::infos;   // power-up said "up": nothing had failed yet
-        runFor(n, 70s);                  // 70 s: seven probes
+        auto const debugs = Log::debugs;   // power-up said "up" (debug): nothing had failed yet
+        runFor(n, 70s);                    // 70 s: seven probes
         check(!n.answering() && !n.valid(), "never up while nothing answers");
-        checkEq(Log::infos, infos, "and never said 'up'");
+        checkEq(Log::debugs, debugs, "and never said 'up'");
         FakeBus::respond = zeros;
         check(runUntil(n, [&] { return n.answering(); }, 31s), "up at the first ACK");
         check(!n.absent(), "and present");
         check(runUntil(n, [&] { return n.valid(); }, 500ms), "and sampling");
     }
 
-    testCase("presence: a flapping device does not flood the log");
-    fresh();
+    testcase.next("presence: a flapping device does not flood the log");
     {
         // Answers exactly one probe, then NAKs again -- twenty times.
-        bool answer = false;
-        FakeBus::respond
-          = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-                return answer ? zeros(a, s, r) : alwaysNak(a, s, r);
-            };
+        bool             answer = false;
+        ScopedHook const answering{
+          FakeBus::respond,
+          [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+              return answer ? zeros(a, s, r) : alwaysNak(a, s, r);
+          }};
         Dev<Probe> flap{};
         for(int i = 0; i < 20; ++i) {
             answer = false;
@@ -197,16 +199,16 @@ void presence() {
             answer = true;
             check(runUntil(flap, [&] { return !flap.absent(); }, 31s), "probed and back");
         }
-        // Twenty flaps in some 25 s. Every return logs "up" (one info each); what the
-        // presence limiter lets through on top -- "not responding" and "present again" share
-        // one backoff schedule -- is a handful, not forty.
-        auto const presenceLines = Log::warnings + Log::infos - 20;
+        // Twenty flaps in some 25 s. Every return logs "up" (one debug line each); what the
+        // presence limiter lets through -- "not responding" and "present again" share one
+        // backoff schedule -- is a handful, not forty.
+        auto const presenceLines = Log::warnings + Log::infos;
+        check(Log::debugs >= 20, "every return is brought up again");
         check(Log::warnings >= 1, "the parking line was said");
         check(presenceLines >= 2 && presenceLines <= 8, "and the presence lines are rate-limited");
     }
 
-    testCase("engine: a request the bus never answers is given up on after InFlightTimeout");
-    fresh();
+    testcase.next("engine: a request the bus never answers is given up on after InFlightTimeout");
     FakeBus::respond = zeros;
     Dev<Probe, ShortNet> lost{};
     check(runUntil(lost, [&] { return lost.valid(); }, 500ms), "up");
@@ -214,7 +216,7 @@ void presence() {
         // Wait for a turn that submits, then drop the request: no callback, ever.
         bool dropped = false;
         for(int i = 0; i < 200 && !dropped; ++i) {
-            lost.handler();
+            lost.turn();
             if(!FakeBus::pending.empty()) {
                 FakeBus::pending.clear();
                 dropped = true;
@@ -236,8 +238,7 @@ void presence() {
               "the device carries on");
     }
 
-    testCase("engine: five faults in a row past the bring-up run the Init script again");
-    fresh();
+    testcase.next("engine: five faults in a row past the bring-up run the Init script again");
     FakeBus::respond = zeros;
     Dev<Probe> re{};
     check(runUntil(re, [&] { return re.valid(); }, 500ms), "up");
@@ -250,7 +251,6 @@ void presence() {
     check(runUntil(re, [&] { return re.valid(); }, 500ms), "up again once the bus answers");
     checkEq(readsOf(Probe::Address, 0x00), std::size_t{2}, "through the Init script");
     checkEq(Log::warnings, 0, "with nothing to warn about");
-    if(failures != 0) { dump(); }
 }
 
 // -- Link: where a device is with its part ---------------------------------------------------
@@ -266,69 +266,74 @@ namespace LinkTest {
 
         struct Fast {
             static constexpr auto       Period = std::chrono::milliseconds{10};
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
         struct Slow {
             static constexpr auto       Period = std::chrono::milliseconds{50};
-            static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads   = List<Fast, Slow>;
+        using Reads   = Kvasir::Engine::List<Fast, Slow>;
         using Primary = Fast;
     };
 
 }   // namespace LinkTest
 
 namespace FeaturesTest {
-    using Kvasir::I2C::EngineFeatures;
-    using Kvasir::I2C::WithFeatures;
-    namespace D = Kvasir::I2C::detail;
+    using Kvasir::Engine::EngineFeatures;
+    using Kvasir::Engine::WithFeatures;
+    namespace D = Kvasir::Engine::detail;
 
     /// The fake with every feature off, and one with only the in-flight net off.
-    using MinBus
-      = WithFeatures<FakeBus,
-                     EngineFeatures{.switchable = false, .presence = false, .inFlightNet = false}>;
-    using NoNetBus
-      = WithFeatures<FakeBus,
-                     EngineFeatures{.switchable = true, .presence = true, .inFlightNet = false}>;
+    using MinBus = Kvasir::Engine::WithFeatures<
+      FakeBus,
+      Kvasir::Engine::EngineFeatures{.switchable = false, .presence = false, .inFlightNet = false}>;
+    using NoNetBus = Kvasir::Engine::WithFeatures<
+      FakeBus,
+      Kvasir::Engine::EngineFeatures{.switchable = true, .presence = true, .inFlightNet = false}>;
 
     struct NoFeaturesMember {
         using Request = FakeBus::Request;
         using Result  = FakeBus::Result;
     };
 
-    static_assert(D::featuresOf<NoFeaturesMember>() == EngineFeatures{},
+    static_assert(D::featuresOf<NoFeaturesMember>() == Kvasir::Engine::EngineFeatures{},
                   "a bus that says nothing gets the defaults");
-    static_assert(!EngineFeatures{}.switchable && EngineFeatures{}.presence
-                  && EngineFeatures{}.inFlightNet);
+    static_assert(!Kvasir::Engine::EngineFeatures{}.switchable
+                  && Kvasir::Engine::EngineFeatures{}.presence
+                  && Kvasir::Engine::EngineFeatures{}.inFlightNet);
     static_assert(!std::is_same_v<D::PortOf<MinBus>,
                                   D::PortOf<FakeBus>>,
                   "other features, another port");
-    static_assert(std::is_same_v<D::PortOf<WithFeatures<FakeBus,
-                                                        Kvasir::I2C::AllEngineFeatures>>,
-                                 D::PortOf<FakeBus>>,
-                  "the same features, the same port: one engine");
+    static_assert(
+      std::is_same_v<D::PortOf<Kvasir::Engine::WithFeatures<FakeBus,
+                                                            Kvasir::Engine::AllEngineFeatures>>,
+                     D::PortOf<FakeBus>>,
+      "the same features, the same port: one engine");
     // What a feature that is off leaves out of every device's state.
     static_assert(sizeof(D::EngineState<D::PortOf<MinBus>,
                                         FakeClock>)
-                    + sizeof(Kvasir::I2C::Presence<FakeClock>) + sizeof(D::BridgeState)
+                    + sizeof(Kvasir::Engine::Presence<FakeClock>) + sizeof(D::OfflineReasons)
                   <= sizeof(D::EngineState<D::PortOf<FakeBus>,
                                            FakeClock>));
 
     /// Everything but the statistics.
-    using NoStatsBus = WithFeatures<FakeBus,
-                                    EngineFeatures{.switchable  = true,
-                                                   .presence    = true,
-                                                   .inFlightNet = true,
-                                                   .timestamps  = true,
-                                                   .stats       = false}>;
+    using NoStatsBus
+      = Kvasir::Engine::WithFeatures<FakeBus,
+                                     Kvasir::Engine::EngineFeatures{.switchable  = true,
+                                                                    .presence    = true,
+                                                                    .inFlightNet = true,
+                                                                    .timestamps  = true,
+                                                                    .stats       = false}>;
     template<typename Dv>
     concept HasCounters = requires(Dv const& d) {
         d.samples();
@@ -343,7 +348,8 @@ namespace FeaturesTest {
     // enable, its argument and generation, and the bridge's offline hook.
     static_assert(sizeof(D::DeviceKnobs<D::PortOf<MinBus>,
                                         FakeClock>)
-                      + sizeof(void*) + sizeof(Kvasir::I2C::PresenceKnobs) + sizeof(std::uint32_t)
+                      + sizeof(void*) + sizeof(Kvasir::Engine::PresenceKnobs)
+                      + sizeof(std::uint32_t)
                     <= sizeof(D::DeviceKnobs<D::PortOf<FakeBus>,
                                              FakeClock>),
                   "the knobs have no fields for the features that are off");
@@ -353,17 +359,65 @@ namespace FeaturesTest {
                     <= sizeof(D::DeviceOps<D::PortOf<FakeBus>,
                                            FakeClock>),
                   "the per-device table has no switch fields when nothing is switchable");
+    // The layout of the three tables, pinned: the chip table is generated from one list (Hooks.hpp) and its
+    // order is the order of that list; the per-device tables are written by hand in a measured order with their
+    // feature tags. Host (64-bit) values. A change here is a change of every device's flash table.
+#if defined(__x86_64__) || defined(__aarch64__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Winvalid-offsetof"
+    using OpsT   = D::Ops<D::PortOf<FakeBus>, FakeClock>;
+    using KnobsT = D::DeviceKnobs<D::PortOf<FakeBus>, FakeClock>;
+    using DevT   = D::DeviceOps<D::PortOf<FakeBus>, FakeClock>;
+    static_assert(sizeof(OpsT) == 296
+                    && offsetof(OpsT,
+                                script)
+                         == 0
+                    && offsetof(OpsT,
+                                startupDelayMs)
+                         == 128
+                    && offsetof(OpsT,
+                                name)
+                         == 272
+                    && offsetof(OpsT,
+                                registerBytes)
+                         == 288
+                    && offsetof(OpsT,
+                                initEmpty)
+                         == 289,
+                  "the chip table's layout");
+    static_assert(sizeof(KnobsT) == 80
+                    && offsetof(KnobsT,
+                                gateGeneration)
+                         == 16
+                    && offsetof(KnobsT,
+                                bridgeUnpowered)
+                         == 70,
+                  "the shared knobs' layout, the bridge fields included");
+    static_assert(sizeof(DevT) == 56
+                    && offsetof(DevT,
+                                enabled)
+                         == 16
+                    && offsetof(DevT,
+                                gateOffline)
+                         == 40
+                    && offsetof(DevT,
+                                address)
+                         == 48,
+                  "the per-device table's layout, the enable and bridge fields included");
+    #pragma GCC diagnostic pop
+#endif
     /// Without a run-time period: no period<G>(ms) and no check of a stored one per reschedule.
     /// ReadSlotBase alone does not shrink (the 8-byte time point's padding takes the 5 bytes),
     /// but a device's slot does: its own members move into the base's freed tail - a
     /// feature matrix measured -32 B of Bus RAM for 8 devices.
-    using FixedBus = WithFeatures<FakeBus,
-                                  EngineFeatures{.switchable    = true,
-                                                 .presence      = true,
-                                                 .inFlightNet   = true,
-                                                 .timestamps    = true,
-                                                 .stats         = true,
-                                                 .runtimePeriod = false}>;
+    using FixedBus
+      = Kvasir::Engine::WithFeatures<FakeBus,
+                                     Kvasir::Engine::EngineFeatures{.switchable    = true,
+                                                                    .presence      = true,
+                                                                    .inFlightNet   = true,
+                                                                    .timestamps    = true,
+                                                                    .stats         = true,
+                                                                    .runtimePeriod = false}>;
     template<typename Dv>
     concept HasPeriodSetter = requires(Dv& d) {
         d.template period<PresenceTest::Probe::Value>(std::chrono::milliseconds{5});
@@ -383,8 +437,8 @@ void features() {
     using namespace PresenceTest;
     using namespace FeaturesTest;
 
-    testCase("features: without presence, a part that NAKs is never parked and is asked on");
-    fresh();
+    I2cCase testcase{
+      "features: without presence, a part that NAKs is never parked and is asked on"};
     FakeBus::respond = alwaysNak;
     Kvasir::I2C::Device<MinBus, FakeClock, Probe> d{};
     runFor(d, 500ms);
@@ -396,15 +450,15 @@ void features() {
         check(FakeBus::log.size() > sent, "still asked");
     }
 
-    testCase("features: without the in-flight net, a request the bus never answers is waited for");
-    fresh();
+    testcase.next(
+      "features: without the in-flight net, a request the bus never answers is waited for");
     FakeBus::respond = zeros;
     Kvasir::I2C::Device<NoNetBus, FakeClock, Probe, ShortNet> lost{};
     check(runUntil(lost, [&] { return lost.valid(); }, 500ms), "up");
     {
         bool dropped = false;
         for(int i = 0; i < 200 && !dropped; ++i) {
-            lost.handler();
+            lost.turn();
             if(!FakeBus::pending.empty()) {
                 FakeBus::pending.clear();
                 dropped = true;
@@ -418,7 +472,7 @@ void features() {
         checkEq(Log::warnings, 0, "and nothing said");
     }
 
-    testCase(
+    testcase.step(
       "features: a bus with request deadlines replaces the in-flight net: the engine stamps the "
       "deadline");
     {
@@ -431,35 +485,37 @@ void features() {
         Kvasir::I2C::Device<DeadlineBus, FakeClock, Probe, ShortNet> dd{};
         for(int i = 0; i < 500 && !dd.valid();
             ++i) {   // the harness's turn() knows tagged buses only
-            dd.handler();
+            dd.turn();
             DeadlineBus::complete();
             FakeClock::current += 1ms;
         }
         check(dd.valid(), "up");
         for(int i = 0; i < 200 && DeadlineBus::pending.empty(); ++i) {
-            dd.handler();
+            dd.turn();
             FakeClock::current += 1ms;
         }
         check(!DeadlineBus::pending.empty(), "a read is on the wire");
         auto const left = DeadlineBus::pending.front().deadline - FakeClock::now();
-        check(left > 0ms && left <= ShortNet::InFlightTimeout,
+        check(left > 0ms && left <= ShortNet::inFlightTimeout,
               "deadline = submit + the in-flight timeout");
-        auto late = DeadlineBus::lose();   // the bus answers it at its deadline, not the engine
+        auto const late
+          = DeadlineBus::lose();   // the bus answers it at its deadline, not the engine
         auto const errors = dd.errors();
         for(int i = 0; i < 200; ++i) {
-            dd.handler();
+            dd.turn();
             FakeClock::current += 1ms;
         }
         checkEq(dd.errors(), errors, "the engine's own net does not give up on it");
         late.callback(DeadlineBus::Result::failed);   // the bus's timedOut, as the engine sees it
-        dd.handler();
+        dd.turn();
         checkEq(dd.errors(), errors + 1, "the bus's answer is the one failure");
         DeadlineBus::reset();
     }
 
-    testCase("features: without resting turns every loop turn is a full turn");
+    testcase.step("features: without resting turns every loop turn is a full turn");
     {
-        using NoRestBus = WithFeatures<FakeBus, EngineFeatures{.switchable = true, .rest = false}>;
+        using NoRestBus = Kvasir::Engine::
+          WithFeatures<FakeBus, Kvasir::Engine::EngineFeatures{.switchable = true, .rest = false}>;
         fresh();
         FakeBus::respond = zeros;
         Kvasir::I2C::Device<NoRestBus, FakeClock, Probe> busy{};
@@ -476,10 +532,12 @@ void features() {
         check(calm.turns() - calmTurns < 10U, "with it: the turns with nothing due are skipped");
     }
 
-    testCase("features: without fault back-off a failing bring-up is tried again at once");
+    testcase.step("features: without fault back-off a failing bring-up is tried again at once");
     {
         using NoBackoffBus
-          = WithFeatures<FakeBus, EngineFeatures{.switchable = true, .faultBackoff = false}>;
+          = Kvasir::Engine::WithFeatures<FakeBus,
+                                         Kvasir::Engine::EngineFeatures{.switchable   = true,
+                                                                        .faultBackoff = false}>;
         fresh();
         FakeBus::respond = alwaysFault;   // bus faults: presence does not park for them
         Kvasir::I2C::Device<NoBackoffBus, FakeClock, Probe> eager{};
@@ -495,31 +553,30 @@ void features() {
               "more than twice the tries without the back-off");
     }
 
-    testCase("features: without statistics a device comes up, reads, and logs its health");
-    fresh();
+    testcase.next("features: without statistics a device comes up, reads, and logs its health");
     FakeBus::respond = zeros;
     UncountedProbe quiet{};
     check(runUntil(quiet, [&] { return quiet.valid(); }, 500ms), "up and reading");
-    auto const infos = Log::infos;
+    auto const debugs = Log::debugs;
     quiet.logHealth();
-    checkEq(Log::infos, infos + 1, "one health line, without counters");
+    checkEq(Log::debugs, debugs + 1, "one health line, without counters");
 }
 
 void linkState() {
     using LinkTest::TwoGroups;
 
-    testCase("Link: a chip without Init is starting until its part acknowledges something");
-    fresh();
+    I2cCase const testcase{
+      "Link: a chip without Init is starting until its part acknowledges something"};
     RegisterModel<1, 1> model{TwoGroups::Address};
     model.set(0x00, {7, 9});
     bool             answer = false;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          return answer ? model(a, sent, recv) : FakeBus::Result::notAcknowledged;
+          return answer ? model(a, sent, recv) : FakeBus::Result::nack;
       }};
     Dev<TwoGroups> d{};
-    check(d.link() == Link::starting, "starting before anything happened");
+    check(d.link() == Kvasir::Link::starting, "starting before anything happened");
     turn(d);
     turn(d);
     check(!d.answering() && !d.absent(), "brought up, but nothing acknowledged: starting");
@@ -530,7 +587,7 @@ void linkState() {
     checkEq(d.latest(), std::uint8_t{7}, "latest() without a group is the Primary's");
     checkEq(d.seq(), d.seq<TwoGroups::Fast>(), "and so is seq()");
 
-    testCase("Link: a bring-up forgets the readings from before it, and bringUps() counts it");
+    testcase.step("Link: a bring-up forgets the readings from before it, and bringUps() counts it");
     auto const ups = d.bringUps();
     answer         = false;
     check(runUntil(d, [&] { return d.absent(); }, 200ms), "parked again");
@@ -545,7 +602,7 @@ void linkState() {
             200ms),
           "and valid again on samples from after it");
 
-    testCase("Link: fresh(seen) gives every reader every sample");
+    testcase.step("Link: fresh(seen) gives every reader every sample");
     std::uint32_t first  = 0;
     std::uint32_t second = 0;
     check(d.fresh(first) && d.fresh(second), "both readers see the newest sample");
@@ -568,24 +625,28 @@ namespace TicketTest {
         static constexpr std::size_t      RegisterBytes = 1;
 
         struct Page {
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0}),
-                                              Step::check(2ms),
-                                              Step::read({.reg = 0x01, .count = 1, .offset = 1})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
+              Kvasir::Engine::Step::check(2ms),
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr bool ready(Bytes data) { return (data.u8(0) & 1U) != 0; }
+            [[nodiscard]] static constexpr bool ready(Kvasir::Bytes data) {
+                return (data.u8(0) & 1U) != 0;
+            }
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(1); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(1); }
         };
 
         struct Level {
             using Value                        = std::uint8_t;
             static constexpr std::size_t Bytes = 1;
 
-            [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                       std::span<std::byte> buffer) {
+            [[nodiscard]] static constexpr Kvasir::Engine::Step
+            encode(Value const&         value,
+                   std::span<std::byte> buffer) {
                 buffer[0] = std::byte{value};
-                return Step::writeBuffer({.reg = 0x10, .offset = 0, .count = 1});
+                return Kvasir::Engine::Step::writeBuffer({.reg = 0x10, .offset = 0, .count = 1});
             }
         };
 
@@ -594,15 +655,16 @@ namespace TicketTest {
             static constexpr std::size_t Bytes       = 1;
             static constexpr bool        AlwaysWrite = true;
 
-            [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                       std::span<std::byte> buffer) {
+            [[nodiscard]] static constexpr Kvasir::Engine::Step
+            encode(Value const&         value,
+                   std::span<std::byte> buffer) {
                 buffer[0] = std::byte{value};
-                return Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 1});
+                return Kvasir::Engine::Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 1});
             }
         };
 
-        using Reads  = List<Page>;
-        using Writes = List<Level, Clear>;
+        using Reads  = Kvasir::Engine::List<Page>;
+        using Writes = Kvasir::Engine::List<Level, Clear>;
     };
 
 }   // namespace TicketTest
@@ -613,58 +675,79 @@ void ticketsAndWrites() {
     using L = OnDemand::Level;
     using C = OnDemand::Clear;
 
-    testCase("request: a ticket is pending until its run ends, then says how it went");
-    fresh();
+    I2cCase testcase{"request: a ticket is pending until its run ends, then says how it went"};
     RegisterModel<1, 1> model{OnDemand::Address};
     model.set(0x00, {0x01, 42});
-    bool nak = false;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            return nak ? FakeBus::Result::notAcknowledged : model(a, sent, recv);
-        };
+    bool             nak = false;
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          return nak ? FakeBus::Result::nack : model(a, sent, recv);
+      }};
     Dev<OnDemand> d{};
     auto const    t1 = d.request<P>();
-    check(d.answer<P>(t1) == Answer::pending, "pending before the run");
-    check(runUntil(d, [&] { return d.answer<P>(t1) != Answer::pending; }, 50ms), "answered");
-    check(d.answer<P>(t1) == Answer::ok && d.latest() == 42, "ok, with the sample");
-    check(d.answer<P>(Ticket{}) == Answer::pending, "a ticket nobody was given is never answered");
+    check(d.answer<P>(t1) == Kvasir::Engine::Answer::pending, "pending before the run");
+    check(runUntil(
+            d,
+            [&] { return d.answer<P>(t1) != Kvasir::Engine::Answer::pending; },
+            50ms),
+          "answered");
+    check(d.answer<P>(t1) == Kvasir::Engine::Answer::ok && d.latest() == 42, "ok, with the sample");
+    check(d.answer<P>(Kvasir::Engine::Ticket{}) == Kvasir::Engine::Answer::pending,
+          "a ticket nobody was given is never answered");
 
-    testCase("request: two requests made before the run are served by that one run");
+    testcase.step("request: two requests made before the run are served by that one run");
     auto const reads = model.reads;
     auto const t2    = d.request<P>();
     auto const t3    = d.request<P>();
-    check(runUntil(d, [&] { return d.answer<P>(t3) != Answer::pending; }, 50ms), "answered");
-    check(d.answer<P>(t2) == Answer::ok && d.answer<P>(t3) == Answer::ok, "both ok");
+    check(runUntil(
+            d,
+            [&] { return d.answer<P>(t3) != Kvasir::Engine::Answer::pending; },
+            50ms),
+          "answered");
+    check(d.answer<P>(t2) == Kvasir::Engine::Answer::ok
+            && d.answer<P>(t3) == Kvasir::Engine::Answer::ok,
+          "both ok");
     checkEq(model.reads - reads, 2, "one run: its two reads");
 
-    testCase("request: a run whose check never passes answers rejected");
+    testcase.step("request: a run whose check never passes answers rejected");
     model.set(0x00, {0x00});
     auto const t4 = d.request<P>();
-    check(runUntil(d, [&] { return d.answer<P>(t4) != Answer::pending; }, 300ms), "answered");
-    check(d.answer<P>(t4) == Answer::rejected, "rejected once the retries ran out");
+    check(runUntil(
+            d,
+            [&] { return d.answer<P>(t4) != Kvasir::Engine::Answer::pending; },
+            300ms),
+          "answered");
+    check(d.answer<P>(t4) == Kvasir::Engine::Answer::rejected, "rejected once the retries ran out");
     model.set(0x00, {0x01});
 
-    testCase("request: a NAK answers failed, and one made while the part is away waits for it");
+    testcase.step(
+      "request: a NAK answers failed, and one made while the part is away waits for it");
     nak = true;
     for(int k = 0; k < 3; ++k) {
         auto const t = d.request<P>();
-        check(runUntil(d, [&] { return d.answer<P>(t) != Answer::pending; }, 50ms), "answered");
-        check(d.answer<P>(t) == Answer::failed, "failed");
+        check(runUntil(
+                d,
+                [&] { return d.answer<P>(t) != Kvasir::Engine::Answer::pending; },
+                50ms),
+              "answered");
+        check(d.answer<P>(t) == Kvasir::Engine::Answer::failed, "failed");
     }
     check(runUntil(d, [&] { return d.absent(); }, 50ms), "three NAKs park it");
     auto const t5 = d.request<P>();
     runFor(d, 100ms);
-    check(d.answer<P>(t5) == Answer::pending, "still pending while the part is away");
+    check(d.answer<P>(t5) == Kvasir::Engine::Answer::pending,
+          "still pending while the part is away");
     nak = false;
     check(runUntil(
             d,
-            [&] { return d.answer<P>(t5) != Answer::pending; },
+            [&] { return d.answer<P>(t5) != Kvasir::Engine::Answer::pending; },
             5s),
           "answered once it is back");
-    check(d.answer<P>(t5) == Answer::ok && d.answering(),
+    check(d.answer<P>(t5) == Kvasir::Engine::Answer::ok && d.answering(),
           "ok: the probe was the request's own run");
 
-    testCase("set: the value the chip holds is not sent again; rewrite() and modify() behave");
+    testcase.step("set: the value the chip holds is not sent again; rewrite() and modify() behave");
     auto const w0 = model.writes;
     check(d.set<L>(5), "a new value is set");
     check(d.pending<L>(), "and owed");
@@ -681,7 +764,7 @@ void ticketsAndWrites() {
     check(runUntil(d, [&] { return !d.pending<L>(); }, 50ms), "written");
     checkEq(model.writes - w0, 3, "a third write");
 
-    testCase("set: an AlwaysWrite group sends every value, the one it holds too");
+    testcase.step("set: an AlwaysWrite group sends every value, the one it holds too");
     auto const w1 = model.writes;
     check(d.set<C>(1) && runUntil(d, [&] { return !d.pending<C>(); }, 50ms), "set and written");
     check(d.set<C>(1)
@@ -692,20 +775,23 @@ void ticketsAndWrites() {
           "the same value, set and written again");
     checkEq(model.writes - w1, 2, "two writes");
 
-    testCase(
+    testcase.next(
       "StallWatch: a part that answers and delivers nothing new is caught, and not every turn");
-    fresh();
     RegisterModel<1, 1> quietModel{OnDemand::Address};
     quietModel.set(0x00, {0x01, 7});
     FakeBus::respond = std::ref(quietModel);
     Dev<OnDemand> quiet{};
     auto const    first = quiet.request<P>();
-    check(runUntil(quiet, [&] { return quiet.answer<P>(first) == Answer::ok; }, 50ms), "answering");
+    check(runUntil(
+            quiet,
+            [&] { return quiet.answer<P>(first) == Kvasir::Engine::Answer::ok; },
+            50ms),
+          "answering");
     StallWatch<Dev<OnDemand>, P> watch{std::chrono::seconds{3}, std::chrono::seconds{10}};
     int                          fired = 0;
     auto const                   run   = [&](int ms) {
         for(int i = 0; i < ms; ++i) {
-            if(watch.handler(quiet, FakeClock::now())) { ++fired; }
+            if(watch.turn(quiet, FakeClock::now())) { ++fired; }
             turn(quiet);
         }
     };
@@ -724,18 +810,21 @@ void ticketsAndWrites() {
     run(2900);
     checkEq(fired, before, "a new sample starts the count over");
 
-    testCase(
+    testcase.next(
       "AbsentWatch: a part that stops answering is reported after a while, and not every turn");
-    fresh();
     FakeBus::respond = std::ref(quietModel);
     Dev<OnDemand> there{};
     auto const    asked = there.request<P>();
-    check(runUntil(there, [&] { return there.answer<P>(asked) == Answer::ok; }, 50ms), "answering");
+    check(runUntil(
+            there,
+            [&] { return there.answer<P>(asked) == Kvasir::Engine::Answer::ok; },
+            50ms),
+          "answering");
     AbsentWatch<Dev<OnDemand>> lost{std::chrono::seconds{2}, std::chrono::seconds{10}};
     int                        gone   = 0;
     auto const                 watch2 = [&](int ms) {
         for(int i = 0; i < ms; ++i) {
-            if(lost.handler(there, FakeClock::now())) { ++gone; }
+            if(lost.turn(there, FakeClock::now())) { ++gone; }
             static_cast<void>(there.request<P>());
             turn(there);
         }
@@ -769,17 +858,19 @@ struct VerifyChip {
     static constexpr Address7         Address       = 0x40;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+    static constexpr std::array Init{
+      Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Status {
         static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t v{};
         };
 
-        static constexpr Sample decode(Bytes b) { return {b.u8(0)}; }
+        static constexpr Sample decode(Kvasir::Bytes b) { return {b.u8(0)}; }
     };
 
     struct Config {
@@ -788,15 +879,15 @@ struct VerifyChip {
         static constexpr auto        VerifyDelay    = std::chrono::milliseconds{10};
         static constexpr auto        VerifyInterval = std::chrono::milliseconds{500};
 
-        static constexpr Step encode(Value const&         v,
-                                     std::span<std::byte> buf) {
+        static constexpr Kvasir::Engine::Step encode(Value const&         v,
+                                                     std::span<std::byte> buf) {
             buf[0] = static_cast<std::byte>(v);
-            return Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
+            return Kvasir::Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Status>;
-    using Writes = List<Config>;
+    using Reads  = Kvasir::Engine::List<Status>;
+    using Writes = Kvasir::Engine::List<Config>;
 };
 
 /// The same, but the top bit of the register is a status flag the chip owns, so a
@@ -806,27 +897,28 @@ struct VerifyMaskChip {
     static constexpr Address7         Address       = 0x41;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+    static constexpr std::array Init{
+      Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Config {
         using Value                              = std::uint8_t;
         static constexpr std::size_t Bytes       = 1;
         static constexpr auto        VerifyDelay = std::chrono::milliseconds{10};
 
-        static constexpr Step encode(Value const&         v,
-                                     std::span<std::byte> buf) {
+        static constexpr Kvasir::Engine::Step encode(Value const&         v,
+                                                     std::span<std::byte> buf) {
             buf[0] = static_cast<std::byte>(v);
-            return Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
+            return Kvasir::Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1});
         }
 
         // Bytes the type has to be spelt out: a write group's own Bytes member shadows it.
-        static constexpr bool verify(Kvasir::I2C::Bytes want,
-                                     Kvasir::I2C::Bytes got) {
+        static constexpr bool verify(Kvasir::Bytes want,
+                                     Kvasir::Bytes got) {
             return (want.u8(0) & 0x7FU) == (got.u8(0) & 0x7FU);
         }
     };
 
-    using Writes = List<Config>;
+    using Writes = Kvasir::Engine::List<Config>;
 };
 
 /// A memory whose read length is part of the request: one description serves a four-byte
@@ -843,7 +935,7 @@ struct MemChip {
         };
 
         static constexpr std::array Steps{
-          Step::readIndirect({.regOffset = 0, .count = 64, .offset = 1})};
+          Kvasir::Engine::Step::readIndirect({.regOffset = 0, .count = 64, .offset = 1})};
 
         static constexpr std::size_t prepare(Request const&       r,
                                              std::span<std::byte> buf) {
@@ -856,7 +948,7 @@ struct MemChip {
             std::array<std::uint8_t, 64> data{};
         };
 
-        static constexpr Sample decode(Kvasir::I2C::Bytes b) {
+        static constexpr Sample decode(Kvasir::Bytes b) {
             Sample s{};
             s.length = static_cast<std::uint8_t>(b.size() - 1);
             for(std::size_t i = 0; i + 1 < b.size(); ++i) { s.data[i] = b.u8(1 + i); }
@@ -864,7 +956,7 @@ struct MemChip {
         }
     };
 
-    using Reads = List<Page>;
+    using Reads = Kvasir::Engine::List<Page>;
 };
 
 /// The page's gap in the test that asks for one.
@@ -877,7 +969,7 @@ struct FiveMsGap {
 /// commands. `Timing::Gap` is the delay the description asks for between them. `Contrast` is an
 /// ordinary single-step group on the same chip and `Status` a cyclic read, so the tests can
 /// show that nothing gets between the two transactions of a page.
-template<typename Timing = DefaultTiming>
+template<typename Timing = Kvasir::Engine::DefaultTiming>
 struct PageChip {
     static constexpr std::chrono::milliseconds Gap = [] {
         if constexpr(requires { Timing::Gap; }) {
@@ -891,18 +983,18 @@ struct PageChip {
     static constexpr Address7         Address       = 0x3C;
     static constexpr std::size_t      RegisterBytes = 0;
 
-    static constexpr std::array Init{Step::command({.payload = {0xAE}}),
-                                     Step::command({.payload = {0xAF}})};
+    static constexpr std::array Init{Kvasir::Engine::Step::command({.payload = {0xAE}}),
+                                     Kvasir::Engine::Step::command({.payload = {0xAF}})};
 
     struct Status {
         static constexpr auto       Period = std::chrono::milliseconds{2};
-        static constexpr std::array Steps{Step::receive({.count = 1})};
+        static constexpr std::array Steps{Kvasir::Engine::Step::receive({.count = 1})};
 
         struct Sample {
             std::uint8_t v{};
         };
 
-        static constexpr Sample decode(Kvasir::I2C::Bytes b) { return {b.u8(0)}; }
+        static constexpr Sample decode(Kvasir::Bytes b) { return {b.u8(0)}; }
     };
 
     struct Page {
@@ -910,7 +1002,7 @@ struct PageChip {
         static constexpr std::size_t Items = 2;
         static constexpr std::size_t Bytes = 4 + 1 + 8;
 
-        static constexpr std::array<Step,
+        static constexpr std::array<Kvasir::Engine::Step,
                                     2>
         encode(Value const&         v,
                std::size_t          page,
@@ -921,8 +1013,8 @@ struct PageChip {
             buf[3] = std::byte{0x10};                        // column, high nibble
             buf[4] = std::byte{0x40};                        // the data stream
             for(std::size_t i = 0; i < 8; ++i) { buf[5 + i] = std::byte{v[i]}; }
-            return {Step::commandBuffer({.offset = 0, .count = 4, .delay = Gap}),
-                    Step::commandBuffer({.offset = 4, .count = 9})};
+            return {Kvasir::Engine::Step::commandBuffer({.offset = 0, .count = 4, .delay = Gap}),
+                    Kvasir::Engine::Step::commandBuffer({.offset = 4, .count = 9})};
         }
     };
 
@@ -930,23 +1022,23 @@ struct PageChip {
         using Value                        = std::uint8_t;
         static constexpr std::size_t Bytes = 3;
 
-        static constexpr Step encode(Value const&         v,
-                                     std::span<std::byte> buf) {
+        static constexpr Kvasir::Engine::Step encode(Value const&         v,
+                                                     std::span<std::byte> buf) {
             buf[0] = std::byte{0x00};
             buf[1] = std::byte{0x81};
             buf[2] = static_cast<std::byte>(v);
-            return Step::commandBuffer({.offset = 0, .count = 3});
+            return Kvasir::Engine::Step::commandBuffer({.offset = 0, .count = 3});
         }
     };
 
-    using Reads  = List<Status>;
-    using Writes = List<Page, Contrast>;
+    using Reads  = Kvasir::Engine::List<Status>;
+    using Writes = Kvasir::Engine::List<Page, Contrast>;
 };
 
 // A chip whose writes are one transaction each carries no script store at all: the empty
 // [[no_unique_address]] member, the same trick verify_ uses on a chip that does not verify.
-static_assert(std::is_empty_v<Kvasir::I2C::detail::WriteScript<false,
-                                                               1>>);
+static_assert(std::is_empty_v<Kvasir::Engine::detail::WriteScript<false,
+                                                                  1>>);
 static_assert(Dev<Chips::Ht16k33>::MaxWriteSteps == 1);
 static_assert(Dev<PageChip<>>::MaxWriteSteps == 2);
 
@@ -955,18 +1047,17 @@ FakeBus::Result pageOk(std::uint8_t               addr,
                        std::span<std::byte const> sent,
                        std::span<std::byte>       recv) {
     static_cast<void>(sent);
-    if(addr != 0x3C) { return FakeBus::Result::notAcknowledged; }
+    if(addr != 0x3C) { return FakeBus::Result::nack; }
     for(auto& b : recv) { b = std::byte{0x5A}; }
-    return FakeBus::Result::succeeded;
+    return FakeBus::Result::ok;
 }
 
 void engine() {
-    testCase("engine: absent device parked, probe is the first bring-up step");
-    fresh();
+    I2cCase testcase{"engine: absent device parked, probe is the first bring-up step"};
     FakeBus::respond = {};
     Dev<Chips::Bme280> d{};
     check(runUntil(d, [&] { return d.absent(); }, 100ms), "parked after three NAKs");
-    auto n = FakeBus::submitted;
+    auto const n = FakeBus::submitted;
     runFor(d, 500ms);
     check(FakeBus::submitted <= n + 1, "at most one probe in half a second");
     // The BME280 names its oracle, so its bring-up opens with the identity read of 0xD0 -- and
@@ -975,19 +1066,17 @@ void engine() {
             && FakeBus::log.back().sent == std::vector<std::uint8_t>{0xD0},
           "the probe is the identity read, which changes nothing on whatever answers");
 
-    testCase("engine: a NAK in a read group loses that sample, the period continues");
-    fresh();
-    RegisterModel<1> m{0x20};
-    bool             nak = false;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(nak) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                return addr == 0x20 ? FakeBus::Result::succeeded : FakeBus::Result::notAcknowledged;
-            }
-            recv[0] = std::byte{0x55};
-            return FakeBus::Result::succeeded;
-        };
+    testcase.next("engine: a NAK in a read group loses that sample, the period continues");
+    RegisterModel<1> const m{0x20};
+    bool                   nak = false;
+    ScopedHook const       answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(nak) { return FakeBus::Result::nack; }
+          if(!sent.empty()) { return addr == 0x20 ? FakeBus::Result::ok : FakeBus::Result::nack; }
+          recv[0] = std::byte{0x55};
+          return FakeBus::Result::ok;
+      }};
     Dev<Chips::Pcf8574> p{};
     check(runUntil(p, [&] { return p.samples() == 2; }, 200ms), "two samples");
     nak = true;
@@ -998,20 +1087,20 @@ void engine() {
     check(!p.absent(), "not parked by one lost read");
     check(runUntil(p, [&] { return p.samples() == 4; }, 200ms), "and back to sampling");
 
-    testCase("engine: a failed write stays owed");
-    fresh();
-    nak               = false;
-    std::uint8_t port = 0;
-    FakeBus::respond
-      = [&](std::uint8_t, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(nak) { return FakeBus::Result::notAcknowledged; }
-            if(!sent.empty()) {
-                port = static_cast<std::uint8_t>(sent[0]);
-                return FakeBus::Result::succeeded;
-            }
-            recv[0] = std::byte{0};
-            return FakeBus::Result::succeeded;
-        };
+    testcase.next("engine: a failed write stays owed");
+    nak                   = false;
+    std::uint8_t     port = 0;
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(nak) { return FakeBus::Result::nack; }
+          if(!sent.empty()) {
+              port = static_cast<std::uint8_t>(sent[0]);
+              return FakeBus::Result::ok;
+          }
+          recv[0] = std::byte{0};
+          return FakeBus::Result::ok;
+      }};
     Dev<Chips::Pcf8574> q{};
     check(runUntil(q, [&] { return q.samples() == 1; }, 100ms), "up");
     nak = true;
@@ -1021,8 +1110,7 @@ void engine() {
     nak = false;
     check(runUntil(q, [&] { return port == 0x3C; }, 100ms), "written once it answers");
 
-    testCase("engine: request() runs a group at once");
-    fresh();
+    testcase.next("engine: request() runs a group at once");
     RegisterModel<1> rtc{0x68};
     FakeBus::respond = std::ref(rtc);
     rtc.set(0x00, {0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00});
@@ -1045,23 +1133,23 @@ void engine() {
 
     // A reset puts the chip back at its defaults. Anything the application has set since is
     // owed again, so what value<W>() reports stays what is on the chip.
-    testCase("engine: a write group without Initial is re-sent after a reset");
-    fresh();
+    testcase.next("engine: a write group without Initial is re-sent after a reset");
     RegisterModel<1, 2> lim{0x18};
     lim.set(0x06, {0x00, 0x54, 0x04, 0x00});
     lim.set(0x05, {0x01, 0x90});
-    lim.readOnly = {0x05, 0x06, 0x07};
-    bool limNak  = false;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(limNak) { return FakeBus::Result::notAcknowledged; }
-            if(addr == 0x18 && sent.size() == 2 && recv.empty()
-               && static_cast<std::uint8_t>(sent[0]) == 0x08)
-            {
-                return FakeBus::Result::succeeded;   // the one 8-bit register
-            }
-            return lim(addr, sent, recv);
-        };
+    lim.readOnly            = {0x05, 0x06, 0x07};
+    bool             limNak = false;
+    ScopedHook const answeringThird{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(limNak) { return FakeBus::Result::nack; }
+          if(addr == 0x18 && sent.size() == 2 && recv.empty()
+             && static_cast<std::uint8_t>(sent[0]) == 0x08)
+          {
+              return FakeBus::Result::ok;   // the one 8-bit register
+          }
+          return lim(addr, sent, recv);
+      }};
     Dev<Chips::Mcp9808> t{};
     check(runUntil(t, [&] { return t.valid(); }, 500ms), "up");
     t.set<Chips::Mcp9808::Limits>(Chips::Mcp9808::High,
@@ -1082,16 +1170,16 @@ void engine() {
             3000,
             "value<W>() agrees");
 
-    testCase("engine: a Transient write group is not replayed");
-    fresh();
+    testcase.next("engine: a Transient write group is not replayed");
     RegisterModel<1> rtc2{0x68};
     rtc2.set(0x00, {0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00});
-    bool rtcNak = false;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(rtcNak) { return FakeBus::Result::notAcknowledged; }
-            return rtc2(addr, sent, recv);
-        };
+    bool             rtcNak = false;
+    ScopedHook const answeringFourth{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(rtcNak) { return FakeBus::Result::nack; }
+          return rtc2(addr, sent, recv);
+      }};
     Dev<Chips::Ds1307> c2{};
     check(runUntil(c2, [&] { return c2.valid(); }, 500ms), "up");
     c2.set<Chips::Ds1307::SetTime>(Chips::Ds1307::Time{0, 30, 13, 4, 9, 9, 26, false});
@@ -1107,16 +1195,16 @@ void engine() {
     runFor(c2, 200ms);
     checkEq(c2.writes<Chips::Ds1307::SetTime>(), 1U, "the stale time was not written again");
 
-    testCase("engine: a Transient write survives the base's error-threshold reset");
-    fresh();
+    testcase.next("engine: a Transient write survives the base's error-threshold reset");
     RegisterModel<1> rtc4{0x68};
     rtc4.set(0x00, {0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00});
-    bool wireBroken = false;
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(wireBroken) { return FakeBus::Result::failed; }
-            return rtc4(addr, sent, recv);
-        };
+    bool             wireBroken = false;
+    ScopedHook const answeringFifth{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(wireBroken) { return FakeBus::Result::failed; }
+          return rtc4(addr, sent, recv);
+      }};
     Dev<Chips::Ds1307> c4{};
     check(runUntil(c4, [&] { return c4.valid(); }, 500ms), "up");
     // The wire breaks, then the time is set: every attempt is a bus fault, and the sixth
@@ -1136,8 +1224,7 @@ void engine() {
           "written once the wire is back");
     checkEq(rtc4.word(0x02), 0x13U, "and 13:00 reached the chip");
 
-    testCase("engine: modify<W>() edits one field and leaves the rest");
-    fresh();
+    testcase.next("engine: modify<W>() edits one field and leaves the rest");
     RegisterModel<1> rtc3{0x68};
     rtc3.set(0x00, {0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00});
     FakeBus::respond = std::ref(rtc3);
@@ -1162,8 +1249,7 @@ void engine() {
     checkEq(rtc3.word(0x06), 0x26U, "and so is the year");
     checkEq(c3.value<Chips::Ds1307::SetTime>().minute, 30U, "value<W>() kept the rest too");
 
-    testCase("engine: a written register is read back and matches");
-    fresh();
+    testcase.next("engine: a written register is read back and matches");
     RegisterModel<1> vm{0x40};
     vm.set(0x00, {0x00});
     FakeBus::respond = std::ref(vm);
@@ -1178,8 +1264,7 @@ void engine() {
     checkEq(v.mismatches<VerifyChip::Config>(), 0U, "no mismatch");
     checkEq(v.writes<VerifyChip::Config>(), 1U, "and it was written exactly once");
 
-    testCase("engine: a register that lost its value is written again");
-    fresh();
+    testcase.next("engine: a register that lost its value is written again");
     RegisterModel<1> vc{0x40};
     vc.set(0x00, {0x00});
     bool corrupt = true;
@@ -1202,8 +1287,7 @@ void engine() {
     runFor(w, 300ms);
     checkEq(w.mismatches<VerifyChip::Config>(), 1U, "and it matched from then on");
 
-    testCase("engine: a register that never holds its value is not rewritten for ever");
-    fresh();
+    testcase.next("engine: a register that never holds its value is not rewritten for ever");
     RegisterModel<1> vs{0x40};
     vs.set(0x00, {0x00});
     vs.onWrite = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const&) {
@@ -1224,8 +1308,7 @@ void engine() {
             600ms),
           "until the 500 ms verify interval comes round");
 
-    testCase("engine: verify() decides what counts as a match");
-    fresh();
+    testcase.next("engine: verify() decides what counts as a match");
     RegisterModel<1> vk{0x41};
     vk.set(0x00, {0x00});
     vk.onWrite = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const& val) {
@@ -1241,8 +1324,7 @@ void engine() {
     checkEq(y.mismatches<VerifyMaskChip::Config>(), 0U, "the status bit is not a mismatch");
     checkEq(y.writes<VerifyMaskChip::Config>(), 1U, "so nothing was rewritten");
 
-    testCase("engine: an on-demand group does not hold valid() down");
-    fresh();
+    testcase.next("engine: an on-demand group does not hold valid() down");
     RegisterModel<1> od{0x5A};
     od.set(0x00, {0x00, 0x00});
     od.set(0x5C, {0x10, 0x24});   // CDC and CDT as a reset leaves them
@@ -1259,8 +1341,7 @@ void engine() {
             200ms),
           "and runs when asked");
 
-    testCase("engine: prepare() sizes the read");
-    fresh();
+    testcase.next("engine: prepare() sizes the read");
     RegisterModel<1> mem{0x50};
     for(std::uint32_t i = 0; i < 64; ++i) { mem.set(i, {static_cast<std::uint8_t>(0xA0 + i)}); }
     FakeBus::respond = std::ref(mem);
@@ -1286,8 +1367,7 @@ void engine() {
     using P0   = PageChip<>;
     using Wire = std::vector<std::vector<std::uint8_t>>;
 
-    testCase("engine: a write group that encodes to two Steps goes out as two transactions");
-    fresh();
+    testcase.next("engine: a write group that encodes to two Steps goes out as two transactions");
     FakeBus::respond = pageOk;
     Dev<P0> pg{};
     check(runUntil(pg, [&] { return pg.answering(); }, 200ms), "up");
@@ -1300,7 +1380,7 @@ void engine() {
     checkEq(pg.writes<P0::Page>(), 1U, "one item written once, counted after the last step");
     checkEq(pg.errors(), 0U, "no errors");
 
-    testCase("engine: each dirty item is a whole sequence before any other group runs");
+    testcase.step("engine: each dirty item is a whole sequence before any other group runs");
     base = FakeBus::log.size();
     // Page 0 holds these bytes already, which set() would skip: rewrite() sends them anyway.
     pg.rewrite<P0::Page>(0, {1, 2, 3, 4, 5, 6, 7, 8});
@@ -1317,25 +1397,25 @@ void engine() {
     checkEq(pg.writes<P0::Page>(), 3U, "three items written in all");
     checkEq(pg.writes<P0::Contrast>(), 1U, "and the single-step group once");
 
-    testCase("engine: a single-step group on the same chip is unaffected");
+    testcase.step("engine: a single-step group on the same chip is unaffected");
     base = FakeBus::log.size();
     pg.set<P0::Contrast>(0x20);
     check(runUntil(pg, [&] { return !pg.pending(); }, 200ms), "contrast written");
     check(writes(base) == Wire{{0x00, 0x81, 0x20}}, "exactly one transaction");
 
-    testCase("engine: a failure on the second step retries the item from the first");
-    fresh();
-    int nakData = 1;   // NAK the data transaction once
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr == 0x3C && !sent.empty() && static_cast<std::uint8_t>(sent[0]) == 0x40
-               && nakData > 0)
-            {
-                --nakData;
-                return FakeBus::Result::notAcknowledged;
-            }
-            return pageOk(addr, sent, recv);
-        };
+    testcase.next("engine: a failure on the second step retries the item from the first");
+    int              nakData = 1;   // NAK the data transaction once
+    ScopedHook const answeringSixth{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr == 0x3C && !sent.empty() && static_cast<std::uint8_t>(sent[0]) == 0x40
+             && nakData > 0)
+          {
+              --nakData;
+              return FakeBus::Result::nack;
+          }
+          return pageOk(addr, sent, recv);
+      }};
     Dev<P0> pf{};
     check(runUntil(pf, [&] { return pf.answering(); }, 200ms), "up");
     auto const failBase = FakeBus::log.size();
@@ -1354,8 +1434,7 @@ void engine() {
     checkEq(pf.errors(), 1U, "one error");
     check(!pf.pending(), "and nothing left owed");
 
-    testCase("engine: a delay between the two steps is honoured, and nothing gets between");
-    fresh();
+    testcase.next("engine: a delay between the two steps is honoured, and nothing gets between");
     FakeBus::respond = pageOk;
     using P5         = PageChip<FiveMsGap>;
     Dev<P5> pd{};
@@ -1380,7 +1459,6 @@ void engine() {
     auto const gap = FakeBus::log[windowAt + 1].at - FakeBus::log[windowAt].at;
     check(gap >= 5ms, "the step's 5 ms was waited out");
     check(gap <= 7ms, "and not much more (one turn of slack)");
-    if(failures != 0) { dump(); }
 }
 
 // -- the nets under a script, and the knobs a run-time caller has ----------------------------
@@ -1396,19 +1474,21 @@ namespace NetTest {
         static constexpr std::string_view Name          = "THREE";
         static constexpr Address7         Address       = 0x2D;
         static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{Step::read({.reg = 0x00, .count = 1, .offset = 0}),
-                                               Step::write({.reg = 0x01, .payload = {0x11}}),
-                                               Step::write({.reg = 0x02, .payload = {0x22}})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0x11}}),
+          Kvasir::Engine::Step::write({.reg = 0x02, .payload = {0x22}})};
 
         struct Value {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x03, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x03, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Value>;
+        using Reads = Kvasir::Engine::List<Value>;
     };
 
     /// A decode that always asks to be run again: a busy bit that never clears.
@@ -1419,19 +1499,20 @@ namespace NetTest {
 
         struct Data {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes) {
-                return Outcome<Sample>::retry(1ms);
+            [[nodiscard]] static constexpr Kvasir::Engine::Outcome<Sample> decode(Kvasir::Bytes) {
+                return Kvasir::Engine::Outcome<Sample>::retry(1ms);
             }
         };
 
-        using Reads = List<Data>;
+        using Reads = Kvasir::Engine::List<Data>;
     };
 
     struct TwoRetries {
-        static constexpr std::uint8_t MaxRetries = 2;
+        static constexpr std::uint8_t maxRetries = 2;
     };
 
     /// Four registers the application may set one at a time, with no Initial.
@@ -1439,7 +1520,8 @@ namespace NetTest {
         static constexpr std::string_view Name          = "LEVELS";
         static constexpr Address7         Address       = 0x2F;
         static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         using Value = Probe::Value;
 
@@ -1448,17 +1530,18 @@ namespace NetTest {
             static constexpr std::size_t Items = 4;
             static constexpr std::size_t Bytes = 1;
 
-            [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                       std::size_t          item,
-                                                       std::span<std::byte> buffer) {
+            [[nodiscard]] static constexpr Kvasir::Engine::Step
+            encode(Value const&         value,
+                   std::size_t          item,
+                   std::span<std::byte> buffer) {
                 buffer[0] = std::byte{value};
-                return Step::writeBuffer(
+                return Kvasir::Engine::Step::writeBuffer(
                   {.reg = static_cast<std::uint16_t>(0x10 + item), .offset = 0, .count = 1});
             }
         };
 
-        using Reads  = List<Value>;
-        using Writes = List<Level>;
+        using Reads  = Kvasir::Engine::List<Value>;
+        using Writes = Kvasir::Engine::List<Level>;
     };
 
     /// The same four registers with an Initial every item starts from.
@@ -1466,7 +1549,8 @@ namespace NetTest {
         static constexpr std::string_view Name          = "INITLEVELS";
         static constexpr Address7         Address       = 0x2C;
         static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         using Value = Probe::Value;
 
@@ -1476,17 +1560,18 @@ namespace NetTest {
             static constexpr std::size_t Bytes = 1;
             static constexpr Value       Initial{0x55};
 
-            [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                       std::size_t          item,
-                                                       std::span<std::byte> buffer) {
+            [[nodiscard]] static constexpr Kvasir::Engine::Step
+            encode(Value const&         value,
+                   std::size_t          item,
+                   std::span<std::byte> buffer) {
                 buffer[0] = std::byte{value};
-                return Step::writeBuffer(
+                return Kvasir::Engine::Step::writeBuffer(
                   {.reg = static_cast<std::uint16_t>(0x10 + item), .offset = 0, .count = 1});
             }
         };
 
-        using Reads  = List<Value>;
-        using Writes = List<Level>;
+        using Reads  = Kvasir::Engine::List<Value>;
+        using Writes = Kvasir::Engine::List<Level>;
     };
 
     /// A bus type that says what its callback slot holds, so the engine's check of it is on.
@@ -1502,13 +1587,69 @@ namespace NetTest {
                     <= SizedBus::CallbackSize,
                   "and fits a bus that says what it holds");
 
+    /// The fault backoff knobs (EngineDefaults::faultBackoff, faultBackoffLongest, faultBackoffResetOn).
+    struct FirstPause2ms {
+        static constexpr auto faultBackoff = std::chrono::milliseconds{2};
+    };
+
+    struct Ceiling15ms {
+        static constexpr auto faultBackoffLongest = std::chrono::milliseconds{15};
+    };
+
+    struct ResetOnAck {
+        static constexpr Kvasir::Engine::BackoffReset faultBackoffResetOn
+          = Kvasir::Engine::BackoffReset::anyAck;
+    };
+
+    /// A ThreeStep whose last Init step is NAKed @p naks times: the pause between each NAKed write and the read
+    /// that starts the bring-up over (each bring-up ACKs its first two steps before the NAK).
+    template<typename Config = Kvasir::Engine::DefaultConfig>
+    std::vector<std::chrono::milliseconds> bringUpPauses(int naks);
+
+    /// A measured gap is the pause plus the turns that see the NAK and leave the reset (3 ms here).
+    constexpr bool pauseOf(std::chrono::milliseconds gap,
+                           std::chrono::milliseconds pause) {
+        return gap >= pause && gap < pause + 4ms;
+    }
+
+    template<typename Config>
+    std::vector<std::chrono::milliseconds> bringUpPauses(int naks) {
+        RegisterModel<1> model{ThreeStep::Address};
+        ScopedHook const failing{
+          FakeBus::respond,
+          [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+              if(naks > 0 && recv.empty() && !sent.empty()
+                 && static_cast<std::uint8_t>(sent[0]) == 0x02)
+              {
+                  --naks;
+                  return FakeBus::Result::nack;
+              }
+              return model(a, sent, recv);
+          }};
+        FakeBus::log.clear();
+        Dev<ThreeStep, Config> d{};
+        check(runUntil(d, [&] { return d.answering(); }, 2s), "up after the NAKed bring-ups");
+        std::vector<std::chrono::milliseconds> gaps{};
+        for(std::size_t i = 0; i + 1 < FakeBus::log.size(); ++i) {
+            auto const& w = FakeBus::log[i];
+            if(w.recvLen == 0 && !w.sent.empty() && w.sent[0] == 0x02
+               && FakeBus::log[i + 1].recvLen != 0 && !FakeBus::log[i + 1].sent.empty()
+               && FakeBus::log[i + 1].sent[0]
+                    == 0x00) {   // a NAKed last step, then the restart's first read
+                gaps.push_back(std::chrono::duration_cast<std::chrono::milliseconds>(
+                  FakeBus::log[i + 1].at - w.at));
+            }
+        }
+        return gaps;
+    }
+
 }   // namespace NetTest
 
 /// Found by a feature matrix on hardware, not by these tests: a verified write group decided
 /// by its `writes` counter, which the statistics feature had taken away.
 void statsOffVerify() {
-    testCase("features: without statistics a verified write is written once, read back, and kept");
-    fresh();
+    I2cCase const testcase{
+      "features: without statistics a verified write is written once, read back, and kept"};
     RegisterModel<1> vs{0x40};
     vs.set(0x00, {0x00});
     FakeBus::respond = std::ref(vs);
@@ -1524,20 +1665,21 @@ void statsOffVerify() {
 void nets() {
     using namespace NetTest;
 
-    testCase("engine: a NAK on a later Init step starts the bring-up over, after FaultBackoff");
-    fresh();
+    I2cCase testcase{
+      "engine: a NAK on a later Init step starts the bring-up over, after FaultBackoff"};
     RegisterModel<1> three{ThreeStep::Address};
     int              nakLeft = 1;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(nakLeft > 0 && recv.empty() && !sent.empty()
-               && static_cast<std::uint8_t>(sent[0]) == 0x02)
-            {
-                --nakLeft;
-                return FakeBus::Result::notAcknowledged;
-            }
-            return three(a, sent, recv);
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(nakLeft > 0 && recv.empty() && !sent.empty()
+             && static_cast<std::uint8_t>(sent[0]) == 0x02)
+          {
+              --nakLeft;
+              return FakeBus::Result::nack;
+          }
+          return three(a, sent, recv);
+      }};
     Dev<ThreeStep> d{};
     check(runUntil(d, [&] { return d.answering(); }, 500ms), "up despite the NAK");
     check(writes() == std::vector<std::vector<std::uint8_t>>{{0x01, 0x11}, {0x02, 0x22}, {0x01, 0x11}, {0x02, 0x22}},
@@ -1554,21 +1696,66 @@ void nets() {
     check(!d.absent(), "one NAK does not park");
     checkEq(d.consecutiveNaks(), 0U, "and the ACKs after it cleared the streak");
 
-    testCase("engine: a decode that keeps asking for a retry is rejected at MaxRetries");
-    fresh();
+    testcase.next(
+      "engine: a bring-up that keeps failing waits twice as long each time, a completed one starts "
+      "over");
+    {
+        auto const gaps = bringUpPauses(3);
+        check(gaps.size() == 3, "three NAKed bring-ups");
+        if(gaps.size() == 3) {
+            check(pauseOf(gaps[0], 5ms), "the first pause: FaultBackoff");
+            check(pauseOf(gaps[1], 10ms),
+                  "the second: twice that, the ACKs before the NAK do not reset it");
+            check(pauseOf(gaps[2], 20ms), "the third: twice again");
+        }
+    }
+
+    testcase.next("engine: Config::faultBackoff sets the first pause the doubling starts from");
+    {
+        auto const gaps = bringUpPauses<FirstPause2ms>(3);
+        check(gaps.size() == 3, "three NAKed bring-ups");
+        if(gaps.size() == 3) {
+            check(pauseOf(gaps[0], 2ms), "2 ms");
+            check(pauseOf(gaps[1], 4ms), "4 ms");
+            check(pauseOf(gaps[2], 8ms), "8 ms");
+        }
+    }
+
+    testcase.next("engine: Config::faultBackoffLongest is the ceiling the pause doubles up to");
+    {
+        auto const gaps = bringUpPauses<Ceiling15ms>(4);
+        check(gaps.size() == 4, "four NAKed bring-ups");
+        if(gaps.size() == 4) {
+            check(pauseOf(gaps[0], 5ms) && pauseOf(gaps[1], 10ms), "5, then 10 ms");
+            check(pauseOf(gaps[2], 15ms), "then 15 ms, not 20");
+            check(pauseOf(gaps[3], 15ms), "and 15 ms from there on");
+        }
+    }
+
+    testcase.next(
+      "engine: Config::faultBackoffResetOn = anyAck starts the pause over at every ACK");
+    {
+        auto const gaps = bringUpPauses<ResetOnAck>(3);
+        check(gaps.size() == 3, "three NAKed bring-ups");
+        for(auto const g : gaps) {
+            check(pauseOf(g, 5ms), "each bring-up ACKs its first steps: 5 ms every time");
+        }
+    }
+
+    testcase.next("engine: a decode that keeps asking for a retry is rejected at MaxRetries");
     FakeBus::respond = zeros;
     Dev<Retrying> r{};
     auto const    ticket = r.request<Retrying::Data>();
     check(runUntil(
             r,
-            [&] { return r.answer<Retrying::Data>(ticket) != Answer::pending; },
+            [&] { return r.answer<Retrying::Data>(ticket) != Kvasir::Engine::Answer::pending; },
             500ms),
           "answered");
-    check(r.answer<Retrying::Data>(ticket) == Answer::rejected, "rejected");
+    check(r.answer<Retrying::Data>(ticket) == Kvasir::Engine::Answer::rejected, "rejected");
     checkEq(r.rejected(), 1U, "counted once");
     checkEq(r.samples(), 0U, "no sample");
     checkEq(readsOf(Retrying::Address, 0x00),
-            std::size_t{EngineDefaults::MaxRetries} + 1,
+            std::size_t{Kvasir::Engine::EngineDefaults::maxRetries} + 1,
             "the run, then MaxRetries runs again, a millisecond apart");
     runFor(r, 100ms);
     check(r.rejected() >= 2, "and the period goes on: the next run is rejected the same way");
@@ -1582,39 +1769,37 @@ void nets() {
                 "the run and two retries: Config::MaxRetries");
     }
 
-    testCase("engine: the late answer to a request given up on is not taken for the next one");
-    fresh();
+    testcase.next("engine: the late answer to a request given up on is not taken for the next one");
     FakeBus::respond = zeros;
     Dev<Probe, ShortNet> lost{};
     check(runUntil(lost, [&] { return lost.valid(); }, 500ms), "up");
     {
         for(int i = 0; i < 200 && FakeBus::pending.empty(); ++i) {
-            lost.handler();
+            lost.turn();
             FakeClock::current += 1ms;
         }
         check(!FakeBus::pending.empty(), "a read is on the wire");
-        auto       late    = FakeBus::lose();   // the bus never answers it
+        auto const late    = FakeBus::lose();   // the bus never answers it
         auto const errors  = lost.errors();
         auto const samples = lost.samples();
         runFor(lost, 60ms);
         checkEq(lost.errors(), errors + 1, "given up on after InFlightTimeout");
         for(int i = 0; i < 200 && FakeBus::pending.empty(); ++i) {
-            lost.handler();
+            lost.turn();
             FakeClock::current += 1ms;
         }
         check(!FakeBus::pending.empty(), "the next read is on the wire");
-        late.callback(FakeBus::Result::succeeded);   // and now the lost one answers
-        lost.handler();
+        late.callback(FakeBus::Result::ok);   // and now the lost one answers
+        lost.turn();
         FakeClock::current += 1ms;
         checkEq(lost.samples(), samples, "which is not taken for the read on the wire");
         FakeBus::complete();
-        lost.handler();
+        lost.turn();
         checkEq(lost.samples(), samples + 1, "that one is answered when the bus answers it");
         checkEq(lost.errors(), errors + 1, "and the one error stands");
     }
 
-    testCase("engine: a full bus queue is not a fault: the request goes next turn");
-    fresh();
+    testcase.next("engine: a full bus queue is not a fault: the request goes next turn");
     FakeBus::respond    = zeros;
     FakeBus::refuseNext = 3;
     Dev<Probe> full{};
@@ -1626,14 +1811,14 @@ void nets() {
     checkEq(full.errors(), 0U, "none of the refusals was an error");
     checkEq(Log::warnings, 0, "nor a line");
 
-    testCase("engine: a bring-up again writes the items the application set, and only those");
-    fresh();
+    testcase.next("engine: a bring-up again writes the items the application set, and only those");
     RegisterModel<1> levels{Levels::Address};
     bool             away = false;
-    FakeBus::respond
-      = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            return away ? FakeBus::Result::notAcknowledged : levels(a, sent, recv);
-        };
+    ScopedHook const answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          return away ? FakeBus::Result::nack : levels(a, sent, recv);
+      }};
     Dev<Levels> l{};
     check(runUntil(l, [&] { return l.valid(); }, 500ms), "up");
     l.set<Levels::Level>(1, 0xA1);
@@ -1649,8 +1834,7 @@ void nets() {
     check(writes(from) == std::vector<std::vector<std::uint8_t>>{{0x11, 0xA1}, {0x13, 0xA3}},
           "items 1 and 3 again, and neither of the two the application never set");
 
-    testCase("engine: one item set before the bring-up leaves the others their Initial");
-    fresh();
+    testcase.next("engine: one item set before the bring-up leaves the others their Initial");
     RegisterModel<1> initial{InitialLevels::Address};
     FakeBus::respond = std::ref(initial);
     Dev<InitialLevels> il{};
@@ -1661,32 +1845,39 @@ void nets() {
           "the other three their Initial, not a default-constructed Value");
     check(il.value<InitialLevels::Level>(0) == 0x55 && il.value<InitialLevels::Level>(2) == 0x2C,
           "value<W>() agrees");
-    if(failures != 0) { dump(); }
 }
 
 void knobs() {
     using namespace NetTest;
     using G = Probe::Value;
 
-    testCase("Ticket: none() is false and never answered; a real one is true");
-    fresh();
+    I2cCase testcase{"Ticket: none() is false and never answered; a real one is true"};
     FakeBus::respond = zeros;
-    Dev<Probe> d{};
-    Ticket     none{};
-    check(!none && none == Ticket::none(), "a value-initialised ticket is none()");
-    check(d.answer<G>(none) == Answer::pending, "and stays pending");
+    Dev<Probe>                   d{};
+    Kvasir::Engine::Ticket const none{};
+    check(!none && none == Kvasir::Engine::Ticket::none(), "a value-initialised ticket is none()");
+    check(d.answer<G>(none) == Kvasir::Engine::Answer::pending, "and stays pending");
     auto const t1 = d.request<G>();
-    check(static_cast<bool>(t1) && t1 != Ticket::none(), "request() hands out a real one");
-    check(runUntil(d, [&] { return d.answer<G>(t1) == Answer::ok; }, 500ms), "answered");
+    check(static_cast<bool>(t1) && t1 != Kvasir::Engine::Ticket::none(),
+          "request() hands out a real one");
+    check(runUntil(
+            d,
+            [&] { return d.answer<G>(t1) == Kvasir::Engine::Answer::ok; },
+            500ms),
+          "answered");
 
-    testCase("Device: the group as a tag, for generic code");
+    testcase.step("Device: the group as a tag, for generic code");
     check(d.valid(G{}) && d.latest(G{}) == d.latest<G>(), "valid() and latest()");
     check(d.seq(G{}) == d.seq<G>(), "seq()");
     std::uint32_t seen = 0;
     check(d.fresh(G{}, seen) && !d.fresh(G{}, seen), "fresh(seen)");
     check(d.fresh(G{}) && !d.fresh(G{}), "fresh()");
     auto const t2 = d.request(G{});
-    check(runUntil(d, [&] { return d.answer<G>(t2) == Answer::ok; }, 500ms), "request()");
+    check(runUntil(
+            d,
+            [&] { return d.answer<G>(t2) == Kvasir::Engine::Answer::ok; },
+            500ms),
+          "request()");
     {
         RegisterModel<1> model{Levels::Address};
         FakeBus::respond = std::ref(model);
@@ -1697,8 +1888,7 @@ void knobs() {
         check(model.word(0x10) == 0x20 && model.word(0x12) == 0x22, "both landed");
     }
 
-    testCase("Device: period<G>() is the description's until period<G>(ms) says otherwise");
-    fresh();
+    testcase.next("Device: period<G>() is the description's until period<G>(ms) says otherwise");
     FakeBus::respond = zeros;
     Dev<Probe> p{};
     check(p.period<G>() == 100ms, "the description's Period");
@@ -1720,7 +1910,7 @@ void knobs() {
         auto const t = p.request<G>();
         check(runUntil(
                 p,
-                [&] { return p.answer<G>(t) == Answer::ok; },
+                [&] { return p.answer<G>(t) == Kvasir::Engine::Answer::ok; },
                 100ms),
               "until request<G>() asks");
         runFor(p, 200ms);
@@ -1734,8 +1924,7 @@ void knobs() {
         check(perSecond >= 9 && perSecond <= 11, "and ten a second once it is set again");
     }
 
-    testCase("Device: broughtUp(seen) is true once per bring-up, and logHealth() is one line");
-    fresh();
+    testcase.next("Device: broughtUp(seen) is true once per bring-up, and logHealth() is one line");
     bool             away = false;
     ScopedHook const answering{
       FakeBus::respond,
@@ -1755,11 +1944,10 @@ void knobs() {
           "and once again after the bring-up that brought it back");
     checkEq(up, b.bringUps(), "the cursor is the count");
     {
-        auto const infos = Log::infos;
+        auto const debugs = Log::debugs;
         b.logHealth();
-        checkEq(Log::infos, infos + 1, "one info line");
+        checkEq(Log::debugs, debugs + 1, "one debug line");
     }
-    if(failures != 0) { dump(); }
 }
 
 // -- counted reads: a length an earlier step of the run read -------------------------------
@@ -1776,8 +1964,8 @@ namespace CountedTest {
         struct Short {
             static constexpr auto       Period = std::chrono::milliseconds{100};
             static constexpr std::array Steps{
-              Step::read({.reg = 0x10, .count = 1, .offset = 0}),
-              Step::readCounted(
+              Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
+              Kvasir::Engine::Step::readCounted(
                 {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 4, .offset = 1})};
 
             struct Sample {
@@ -1785,7 +1973,7 @@ namespace CountedTest {
                 std::uint8_t last{};
             };
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) {
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) {
                 return {data.size(), data.u8(data.size() - 1)};
             }
         };
@@ -1793,21 +1981,25 @@ namespace CountedTest {
         struct Long {
             static constexpr auto       Period = std::chrono::milliseconds{100};
             static constexpr std::array Steps{
-              Step::read({.reg = 0x30, .count = 2, .offset = 0}),
-              Step::receiveCounted(
+              Kvasir::Engine::Step::read({.reg = 0x30, .count = 2, .offset = 0}),
+              Kvasir::Engine::Step::receiveCounted(
                 {.countOffset = 0, .countBytes = 2, .maxCount = 200, .offset = 2})};
 
             struct Sample {
                 std::size_t size{};
             };
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return {data.size()}; }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) {
+                return {data.size()};
+            }
         };
 
-        using Reads = List<Short, Long>;
+        using Reads = Kvasir::Engine::List<Short, Long>;
     };
 
-    static_assert(bufferBytes(std::span<Step const>{Counted::Short::Steps}) == 5,
+    static_assert(Kvasir::Engine::bufferBytes(std::span<Kvasir::Engine::Step const>{
+                    Counted::Short::Steps})
+                    == 5,
                   "a counted read's buffer is reckoned at its most");
     static_assert(detail::stepBits(Counted::Long::Steps[1],
                                    1)
@@ -1815,48 +2007,48 @@ namespace CountedTest {
                   "and so is its bus load");
 
     // What the script checks turn down.
-    static constexpr std::array WideCount{
-      Step::read({.reg = 0x10, .count = 3, .offset = 0}),
-      Step::readCounted(
+    constexpr std::array WideCount{
+      Kvasir::Engine::Step::read({.reg = 0x10, .count = 3, .offset = 0}),
+      Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 3, .maxCount = 4, .offset = 3})};
-    static constexpr std::array CountNotRead{
-      Step::read({.reg = 0x10, .count = 1, .offset = 0}),
-      Step::readCounted(
+    constexpr std::array CountNotRead{
+      Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
+      Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 1, .countBytes = 1, .maxCount = 4, .offset = 2})};
-    static constexpr std::array CountAfter{
-      Step::readCounted(
+    constexpr std::array CountAfter{
+      Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 4, .offset = 1}),
-      Step::read({.reg = 0x10, .count = 1, .offset = 0})};
-    static constexpr std::array CountFromCounted{
-      Step::read({.reg = 0x10, .count = 1, .offset = 0}),
-      Step::readCounted(
+      Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0})};
+    constexpr std::array CountFromCounted{
+      Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
+      Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 4, .offset = 1}),
-      Step::readCounted(
+      Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 1, .countBytes = 1, .maxCount = 4, .offset = 5})};
-    static constexpr std::array PastBuffer{
-      Step::read({.reg = 0x10, .count = 1, .offset = 0}),
-      Step::readCounted(
+    constexpr std::array PastBuffer{
+      Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
+      Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 250, .offset = 10})};
-    static_assert(scriptFault(WideCount,
-                              1)
-                  == ScriptFault::countWidth);
-    static_assert(scriptFault(CountNotRead,
-                              1)
-                  == ScriptFault::countNotReadBefore);
-    static_assert(scriptFault(CountAfter,
-                              1)
-                  == ScriptFault::countNotReadBefore);
-    static_assert(scriptFault(CountFromCounted,
-                              1)
-                    == ScriptFault::countNotReadBefore,
+    static_assert(Kvasir::Engine::scriptFault(WideCount,
+                                              1)
+                  == Kvasir::Engine::ScriptFault::countWidth);
+    static_assert(Kvasir::Engine::scriptFault(CountNotRead,
+                                              1)
+                  == Kvasir::Engine::ScriptFault::countNotReadBefore);
+    static_assert(Kvasir::Engine::scriptFault(CountAfter,
+                                              1)
+                  == Kvasir::Engine::ScriptFault::countNotReadBefore);
+    static_assert(Kvasir::Engine::scriptFault(CountFromCounted,
+                                              1)
+                    == Kvasir::Engine::ScriptFault::countNotReadBefore,
                   "a counted read may not have filled the bytes a later count names");
-    static_assert(scriptFault(PastBuffer,
-                              1)
-                  == ScriptFault::countedPastBuffer);
-    static_assert(wellFormed(Counted::Short::Steps,
-                             1)
-                  && wellFormed(Counted::Long::Steps,
-                                1));
+    static_assert(Kvasir::Engine::scriptFault(PastBuffer,
+                                              1)
+                  == Kvasir::Engine::ScriptFault::countedPastBuffer);
+    static_assert(Kvasir::Engine::wellFormed(Counted::Short::Steps,
+                                             1)
+                  && Kvasir::Engine::wellFormed(Counted::Long::Steps,
+                                                1));
 
 }   // namespace CountedTest
 
@@ -1865,13 +2057,14 @@ void countedReads() {
     using Short = Counted::Short;
     using Long  = Counted::Long;
 
-    fresh();
+    I2cCase const testcase{
+      "counted read: a count of 0 sends nothing after the count, decode sees the count alone"};
     std::uint8_t     shortCount = 0;
     std::uint16_t    longCount  = 0;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(a != Counted::Address) { return FakeBus::Result::notAcknowledged; }
+          if(a != Counted::Address) { return FakeBus::Result::nack; }
           auto const reg = sent.empty() ? -1 : static_cast<int>(static_cast<std::uint8_t>(sent[0]));
           if(reg == 0x10) { recv[0] = std::byte{shortCount}; }
           if(reg == 0x30) {
@@ -1883,7 +2076,7 @@ void countedReads() {
                   recv[i] = std::byte{static_cast<std::uint8_t>(0xA0 + i)};
               }
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     auto const readsOf = [](int reg) {
         std::vector<std::size_t> lengths;
@@ -1896,8 +2089,6 @@ void countedReads() {
         return lengths;
     };
 
-    testCase(
-      "counted read: a count of 0 sends nothing after the count, decode sees the count alone");
     Dev<Counted> d{};
     check(runUntil(
             d,
@@ -1910,7 +2101,7 @@ void countedReads() {
     checkEq(d.latest<Long>().size, std::size_t{2}, "Long's the two");
     checkEq(d.errors(), 0U, "and nothing failed");
 
-    testCase("counted read: the count in range is what is read, and what decode sees");
+    testcase.step("counted read: the count in range is what is read, and what decode sees");
     shortCount = 3;
     FakeBus::log.clear();
     {
@@ -1921,7 +2112,7 @@ void countedReads() {
     checkEq(d.latest<Short>().size, std::size_t{4}, "offset 1 + 3");
     checkEq(d.latest<Short>().last, 0xA2U, "the third byte read last");
 
-    testCase("counted read: a count past the step's most is clamped to it");
+    testcase.step("counted read: a count past the step's most is clamped to it");
     shortCount = 9;
     FakeBus::log.clear();
     {
@@ -1931,7 +2122,7 @@ void countedReads() {
     check(!readsOf(0x20).empty() && readsOf(0x20).back() == 4, "four, not nine");
     checkEq(d.latest<Short>().size, std::size_t{5}, "offset 1 + 4");
 
-    testCase("counted read: a two-byte count is big-endian");
+    testcase.step("counted read: a two-byte count is big-endian");
     longCount = 0x0081;   // 129; little-endian it would be 0x8100
     FakeBus::log.clear();
     {
@@ -1949,7 +2140,7 @@ void countedReads() {
     check(!readsOf(-1).empty() && readsOf(-1).back() == 200, "clamped to 200");
     checkEq(d.latest<Long>().size, std::size_t{202}, "offset 2 + 200");
 
-    testCase("counted read: back to 0, decode sees the count alone again");
+    testcase.step("counted read: back to 0, decode sees the count alone again");
     shortCount = 0;
     FakeBus::log.clear();
     {
@@ -1958,7 +2149,6 @@ void countedReads() {
     }
     check(readsOf(0x20).empty(), "nothing read after the count");
     checkEq(d.latest<Short>().size, std::size_t{1}, "not what the last run read");
-    if(failures != 0) { dump(); }
 }
 
 // -- wake retries: a part that NAKs until it is awake --------------------------------------
@@ -1971,17 +2161,19 @@ namespace WakeTest {
         static constexpr std::size_t      RegisterBytes  = 1;
         static constexpr std::uint8_t     WakeRetries    = 3;
         static constexpr auto             WakeRetryDelay = std::chrono::milliseconds{4};
-        static constexpr std::array       Init{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Value {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Value>;
+        using Reads = Kvasir::Engine::List<Value>;
     };
 
     static_assert(Dev<Sleepy>::WakeRetries == 3 && Dev<PresenceTest::Probe>::WakeRetries == 0);
@@ -1995,20 +2187,20 @@ void wakeRetries() {
     auto const sleepy = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
         if(naksLeft > 0) {
             --naksLeft;
-            return FakeBus::Result::notAcknowledged;
+            return FakeBus::Result::nack;
         }
         return zeros(a, s, r);
     };
 
-    testCase("wake retries: N NAKs, then the ACK: no error, N retries, WakeRetryDelay apart");
-    fresh();
+    I2cCase testcase{
+      "wake retries: N NAKs, then the ACK: no error, N retries, WakeRetryDelay apart"};
     naksLeft         = 3;
     FakeBus::respond = sleepy;
     {
         Dev<Sleepy> d{};
         check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
         checkEq(d.errors(), 0U, "no error");
-        checkEq(d.wakeRetries(), 3U, "three retries");
+        checkEq(d.wakeRetryCount(), 3U, "three retries");
         checkEq(d.consecutiveNaks(), 0U, "no NAK towards parking");
         checkEq(d.bringUps(), 1U, "one bring-up");
         check(FakeBus::log.size() >= 4, "the Init read four times");
@@ -2017,46 +2209,42 @@ void wakeRetries() {
         }
     }
 
-    testCase("wake retries: N + 1 NAKs are one NAK");
-    fresh();
+    testcase.next("wake retries: N + 1 NAKs are one NAK");
     naksLeft         = 4;
     FakeBus::respond = sleepy;
     {
         Dev<Sleepy> d{};
         check(runUntil(d, [&] { return d.valid(); }, 500ms), "up after the bring-up again");
         checkEq(d.errors(), 1U, "one error");
-        checkEq(d.wakeRetries(), 3U, "after three retries");
+        checkEq(d.wakeRetryCount(), 3U, "after three retries");
         checkEq(d.bringUps(), 1U, "and one bring-up that finished");
     }
 
-    testCase("wake retries: a parked part's probe gets them too");
-    fresh();
+    testcase.next("wake retries: a parked part's probe gets them too");
     FakeBus::respond = alwaysNak;
     {
         Dev<Sleepy> d{};
         check(runUntil(d, [&] { return d.absent(); }, 500ms), "parked");
         checkEq(d.errors(), 3U, "after three NAKs");
-        checkEq(d.wakeRetries(), 9U, "each after its three retries");
+        checkEq(d.wakeRetryCount(), 9U, "each after its three retries");
         auto const sent  = FakeBus::log.size();
         naksLeft         = 2;
         FakeBus::respond = sleepy;
         check(runUntil(d, [&] { return !d.absent(); }, 2s), "the probe brought it back");
-        checkEq(d.wakeRetries(), 11U, "through two retries");
+        checkEq(d.wakeRetryCount(), 11U, "through two retries");
         checkEq(FakeBus::log.size() - sent, std::size_t{3}, "the probe: two NAKs and the ACK");
         checkEq(d.errors(), 3U, "and no new error");
         check(runUntil(d, [&] { return d.valid(); }, 500ms), "sampling");
     }
 
-    testCase("wake retries: a chip without them counts none");
-    fresh();
+    testcase.next("wake retries: a chip without them counts none");
     FakeBus::respond = alwaysNak;
     {
         Dev<PresenceTest::Probe> d{};
         check(runUntil(d, [&] { return d.absent(); }, 500ms), "parked");
-        checkEq(d.wakeRetries(), 0U, "none");
+        checkEq(d.wakeRetryCount(), 0U, "none");
         checkEq(d.errors(), 3U, "three NAKs, three errors");
     }
-    if(failures != 0) { dump(); }
 }
 
 namespace MayNakTest {
@@ -2067,36 +2255,38 @@ namespace MayNakTest {
         static constexpr std::string_view Name          = "RESETS";
         static constexpr Address7         Address       = 0x24;
         static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{Step::read({.reg = 0x06, .count = 1, .offset = 0}),
-                                               Step::write({.reg     = 0x00,
-                                                            .payload = {0x10},
-                                                            .delay   = std::chrono::milliseconds{5},
-                                                            .mayNak  = true}),
-                                               Step::write({.reg = 0x04, .payload = {0x22}})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x06, .count = 1, .offset = 0}),
+          Kvasir::Engine::Step::write({.reg     = 0x00,
+                                       .payload = {0x10},
+                                       .delay   = std::chrono::milliseconds{5},
+                                       .mayNak  = true}),
+          Kvasir::Engine::Step::write({.reg = 0x04, .payload = {0x22}})};
 
         struct Value {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Value>;
+        using Reads = Kvasir::Engine::List<Value>;
     };
 
-    static constexpr std::array ProbeMayNak{
-      Step::write({.reg = 0x00, .payload = {0x10}, .mayNak = true}),
-      Step::read({.reg = 0x06, .count = 1})};
-    static_assert(scriptFault(ProbeMayNak,
-                              1,
-                              false)
-                    == ScriptFault::mayNakProbe,
+    constexpr std::array ProbeMayNak{
+      Kvasir::Engine::Step::write({.reg = 0x00, .payload = {0x10}, .mayNak = true}),
+      Kvasir::Engine::Step::read({.reg = 0x06, .count = 1})};
+    static_assert(Kvasir::Engine::scriptFault(ProbeMayNak,
+                                              1,
+                                              false)
+                    == Kvasir::Engine::ScriptFault::mayNakProbe,
                   "Init's first transaction is the probe and may not be one that NAKs");
-    static_assert(scriptFault(ProbeMayNak,
-                              1,
-                              true)
-                    == ScriptFault::none,
+    static_assert(Kvasir::Engine::scriptFault(ProbeMayNak,
+                                              1,
+                                              true)
+                    == Kvasir::Engine::ScriptFault::none,
                   "a read group has no probe to protect");
 
     /// A two-step Init with a 1 ms gap, for the rounding of a delay to the clock's tick.
@@ -2105,8 +2295,9 @@ namespace MayNakTest {
         static constexpr Address7         Address       = 0x25;
         static constexpr std::size_t      RegisterBytes = 1;
         static constexpr std::array       Init{
-          Step::write({.reg = 0x00, .payload = {0x01}, .delay = std::chrono::milliseconds{1}}),
-          Step::write({.reg = 0x01, .payload = {0x02}})};
+          Kvasir::Engine::Step::write(
+            {.reg = 0x00, .payload = {0x01}, .delay = std::chrono::milliseconds{1}}),
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0x02}})};
     };
 
     /// A WHO_AM_I read, identify, then configuration writes.
@@ -2114,27 +2305,28 @@ namespace MayNakTest {
         static constexpr std::string_view Name          = "IDENT";
         static constexpr Address7         Address       = 0x26;
         static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{Step::read({.reg = 0x0F, .count = 1, .offset = 0}),
-                                               Step::identify(),
-                                               Step::write({.reg = 0x20, .payload = {0x57}})};
+        static constexpr std::array       Init{
+          Kvasir::Engine::Step::read({.reg = 0x0F, .count = 1, .offset = 0}),
+          Kvasir::Engine::Step::identify(),
+          Kvasir::Engine::Step::write({.reg = 0x20, .payload = {0x57}})};
 
         struct State {
             std::uint8_t id{};
         };
 
-        [[nodiscard]] static constexpr bool setup(Bytes  data,
-                                                  State& state) {
+        [[nodiscard]] static constexpr bool setup(Kvasir::Bytes data,
+                                                  State&        state) {
             state.id = data.u8(0);
             return state.id == 0x33;
         }
     };
 
-    static constexpr std::array IdentifyInRead{Step::read({.reg = 0x06, .count = 1}),
-                                               Step::identify()};
-    static_assert(scriptFault(IdentifyInRead,
-                              1,
-                              true)
-                    == ScriptFault::identifyOutsideInit,
+    constexpr std::array IdentifyInRead{Kvasir::Engine::Step::read({.reg = 0x06, .count = 1}),
+                                        Kvasir::Engine::Step::identify()};
+    static_assert(Kvasir::Engine::scriptFault(IdentifyInRead,
+                                              1,
+                                              true)
+                    == Kvasir::Engine::ScriptFault::identifyOutsideInit,
                   "identify belongs to Init, whose setup() it runs");
 
 }   // namespace MayNakTest
@@ -2142,11 +2334,10 @@ namespace MayNakTest {
 void mayNak() {
     using namespace MayNakTest;
 
-    testCase("mayNak: the NAK of a write the part never acknowledges is not an error");
-    fresh();
+    I2cCase testcase{"mayNak: the NAK of a write the part never acknowledges is not an error"};
     FakeBus::respond = [](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a != 0x24) { return FakeBus::Result::notAcknowledged; }
-        if(s.size() == 2 && s[0] == std::byte{0x00}) { return FakeBus::Result::notAcknowledged; }
+        if(a != 0x24) { return FakeBus::Result::nack; }
+        if(s.size() == 2 && s[0] == std::byte{0x00}) { return FakeBus::Result::nack; }
         return zeros(a, s, r);
     };
     {
@@ -2163,10 +2354,9 @@ void mayNak() {
               "after the step's delay");
     }
 
-    testCase("mayNak: a bus fault on that write is no error either");
-    fresh();
+    testcase.next("mayNak: a bus fault on that write is no error either");
     FakeBus::respond = [](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(a != 0x24) { return FakeBus::Result::notAcknowledged; }
+        if(a != 0x24) { return FakeBus::Result::nack; }
         // the part resets inside the byte and lets go of SDA: a lost arbitration, not a NAK
         if(s.size() == 2 && s[0] == std::byte{0x00}) { return FakeBus::Result::failed; }
         return zeros(a, s, r);
@@ -2179,8 +2369,7 @@ void mayNak() {
         check(hasWrite({0x04, 0x22}), "the script went on past it");
     }
 
-    testCase("mayNak: the same write acknowledged is just as good");
-    fresh();
+    testcase.next("mayNak: the same write acknowledged is just as good");
     FakeBus::respond = zeros;
     {
         Dev<Resets> d{};
@@ -2188,8 +2377,7 @@ void mayNak() {
         checkEq(d.errors(), 0U, "no error");
     }
 
-    testCase("identify: a part that is not this chip is not written to");
-    fresh();
+    testcase.next("identify: a part that is not this chip is not written to");
     {
         RegisterModel<1> other{0x26};
         other.set(0x0F, {0x44});
@@ -2209,8 +2397,7 @@ void mayNak() {
         check(hasWrite({0x20, 0x57}), "and is configured");
     }
 
-    testCase("delay: a 1 ms step delay is more than one tick of a millisecond clock");
-    fresh();
+    testcase.next("delay: a 1 ms step delay is more than one tick of a millisecond clock");
     FakeBus::respond = zeros;
     {
         Dev<OneMs> d{};
@@ -2221,7 +2408,6 @@ void mayNak() {
                 && FakeBus::log[second].at - FakeBus::log[first].at >= 2ms,
               "the completion's tick is not counted as the whole millisecond");
     }
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace
@@ -2241,13 +2427,14 @@ namespace ConfirmTest {
         struct Pins {
             static constexpr auto         Period        = std::chrono::milliseconds{100};
             static constexpr std::uint8_t ConfirmChange = 3;
-            static constexpr std::array   Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array   Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Pins>;
+        using Reads = Kvasir::Engine::List<Pins>;
     };
 
     /// One scripted value per read, then the last again; negative: fails on the wire.
@@ -2258,18 +2445,18 @@ namespace ConfirmTest {
         FakeBus::Result operator()(std::uint8_t,
                                    std::span<std::byte const>,
                                    std::span<std::byte> r) {
-            if(r.empty()) { return FakeBus::Result::succeeded; }   // a write: acked
+            if(r.empty()) { return FakeBus::Result::ok; }   // a write: acked
             int const v = values.empty() ? 0 : values[std::min(reads, values.size() - 1)];
             ++reads;
             if(v < 0) { return FakeBus::Result::failed; }
             std::ranges::fill(r, static_cast<std::byte>(v));
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         }
     };
 
     struct Confirmed {
-        using Confirm                               = List<Chips::Tca9555::Pins>;
-        static constexpr std::uint8_t ConfirmChange = 3;
+        using Confirm                               = Kvasir::Engine::List<Chips::Tca9555::Pins>;
+        static constexpr std::uint8_t confirmChange = 3;
     };
 
     /// Two read groups: a level register worth confirming and a count the Config leaves alone.
@@ -2280,54 +2467,56 @@ namespace ConfirmTest {
 
         struct Levels {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
         struct Count {
             static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Levels, Count>;
+        using Reads = Kvasir::Engine::List<Levels, Count>;
     };
 
     struct LevelsOnly {
-        using Confirm                               = List<TwoGroups::Levels>;
-        static constexpr std::uint8_t ConfirmChange = 2;
+        using Confirm                               = Kvasir::Engine::List<TwoGroups::Levels>;
+        static constexpr std::uint8_t confirmChange = 2;
     };
 
     // What a Config may say, as the Device's static_asserts see it.
-    using Kvasir::I2C::detail::checkConfirmConfig;
-    using Kvasir::I2C::detail::ConfirmConfig;
+    using Kvasir::Engine::detail::checkConfirmConfig;
+    using Kvasir::Engine::detail::ConfirmConfig;
 
     struct Unnamed {
-        static constexpr std::uint8_t ConfirmChange = 3;
+        static constexpr std::uint8_t confirmChange = 3;
     };
 
     struct Uncounted {
-        using Confirm = List<TwoGroups::Levels>;
+        using Confirm = Kvasir::Engine::List<TwoGroups::Levels>;
     };
 
     struct Foreign {
-        using Confirm                               = List<Chips::Tca9555::Pins>;
-        static constexpr std::uint8_t ConfirmChange = 3;
+        using Confirm                               = Kvasir::Engine::List<Chips::Tca9555::Pins>;
+        static constexpr std::uint8_t confirmChange = 3;
     };
 
     struct Stream {
-        using Confirm                               = List<Chips::SamM8q<>::Stream>;
-        static constexpr std::uint8_t ConfirmChange = 3;
+        using Confirm                               = Kvasir::Engine::List<Chips::SamM8q<>::Stream>;
+        static constexpr std::uint8_t confirmChange = 3;
     };
 
     static_assert(checkConfirmConfig<LevelsOnly,
                                      TwoGroups::Reads>()
                   == ConfirmConfig::ok);
-    static_assert(checkConfirmConfig<Kvasir::I2C::DefaultConfig,
+    static_assert(checkConfirmConfig<Kvasir::Engine::DefaultConfig,
                                      TwoGroups::Reads>()
                   == ConfirmConfig::ok);
     static_assert(checkConfirmConfig<Unnamed,
@@ -2362,8 +2551,7 @@ void confirmChange() {
         FakeBus::respond = std::ref(script);
     };
 
-    testCase("confirm: the first reading after a bring-up is read twice");
-    fresh();
+    I2cCase testcase{"confirm: the first reading after a bring-up is read twice"};
     {
         Script script;
         run(script, {0x0F});
@@ -2374,8 +2562,7 @@ void confirmChange() {
         checkEq(d.disagreements<Port::Pins>(), 0U, "nothing contradicted");
     }
 
-    testCase("confirm: a glitch between two good reads is never taken");
-    fresh();
+    testcase.next("confirm: a glitch between two good reads is never taken");
     {
         Script script;
         run(script, {0x0F, 0x0F, 0xFF, 0x0F});
@@ -2392,8 +2579,7 @@ void confirmChange() {
         checkEq(d.disagreements<Port::Pins>(), 1U, "the glitch counted");
     }
 
-    testCase("confirm: a change that the next read repeats is taken");
-    fresh();
+    testcase.next("confirm: a change that the next read repeats is taken");
     {
         Script script;
         run(script, {0x0F, 0x0F, 0x0E});
@@ -2403,8 +2589,7 @@ void confirmChange() {
         checkEq(d.disagreements<Port::Pins>(), 0U, "nothing contradicted");
     }
 
-    testCase("confirm: an input moving faster than two reads is taken after ConfirmChange");
-    fresh();
+    testcase.next("confirm: an input moving faster than two reads is taken after ConfirmChange");
     {
         Script script;
         run(script, {1, 2, 3, 4, 5});
@@ -2414,8 +2599,7 @@ void confirmChange() {
         checkEq(d.disagreements<Port::Pins>(), 3U, "three contradicted");
     }
 
-    testCase("confirm: a failed transfer drops the reading waiting for its confirmation");
-    fresh();
+    testcase.next("confirm: a failed transfer drops the reading waiting for its confirmation");
     {
         Script script;
         run(script, {0x0F, 0x0F, 0x0E, -1, 0x0E, 0x0E});
@@ -2424,8 +2608,7 @@ void confirmChange() {
         checkEq(script.reads, std::size_t{6}, "0x0E read twice again after the fault");
     }
 
-    testCase("confirm: a Config turns it on for a description that does not say it");
-    fresh();
+    testcase.next("confirm: a Config turns it on for a description that does not say it");
     {
         // TCA9555: the Init read, then the input pair every 100 ms; one glitch to 0xFFFF.
         Script script;
@@ -2443,19 +2626,18 @@ void confirmChange() {
         checkEq(d.disagreements<Chips::Tca9555::Pins>(), 1U, "one contradicted reading");
     }
 
-    testCase("confirm: only the groups the Config names");
-    fresh();
+    testcase.next("confirm: only the groups the Config names");
     {
         // both registers read 0x10, and once 0xFF each (the third read of each)
         std::array<std::size_t, 2> reads{};
         ScopedHook const           answering{
           FakeBus::respond,
           [&](std::uint8_t, std::span<std::byte const> sent, std::span<std::byte> r) {
-              if(r.empty()) { return FakeBus::Result::succeeded; }
+              if(r.empty()) { return FakeBus::Result::ok; }
               auto const reg = static_cast<std::size_t>(std::to_integer<unsigned>(sent[0]));
               auto const n   = reads[reg]++;
               std::ranges::fill(r, n == 2 ? std::byte{0xFF} : std::byte{0x10});
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }};
         Dev<TwoGroups, LevelsOnly> d{};
         bool                       levelsGlitched = false;
@@ -2471,8 +2653,7 @@ void confirmChange() {
         checkEq(d.disagreements<TwoGroups::Levels>(), 1U, "one contradicted reading");
     }
 
-    testCase("confirm: after a restart the value is confirmed again");
-    fresh();
+    testcase.next("confirm: after a restart the value is confirmed again");
     {
         Script script;
         run(script, {0x0F});
@@ -2494,7 +2675,7 @@ void withdrawWrites() {
     /// Acks everything, and answers the EUI-48 read with a real one (not all 0x00 / 0xFF).
     auto const eeprom = [](std::uint8_t, std::span<std::byte const>, std::span<std::byte> r) {
         std::ranges::fill(r, std::byte{0x42});
-        return FakeBus::Result::succeeded;
+        return FakeBus::Result::ok;
     };
     auto const pageWrites = [](std::size_t from) {
         std::size_t n = 0;
@@ -2509,8 +2690,7 @@ void withdrawWrites() {
       .length  = 2
     };
 
-    testCase("withdraw: a page owed while the part is away is never written");
-    fresh();
+    I2cCase testcase{"withdraw: a page owed while the part is away is never written"};
     FakeBus::respond = eeprom;
     {
         Dev<Eeprom> d{};
@@ -2530,14 +2710,13 @@ void withdrawWrites() {
         check(!d.withdraw<Page>(), "and nothing owed to withdraw");
     }
 
-    testCase("withdraw: a page on the wire that then fails is not written again");
-    fresh();
+    testcase.next("withdraw: a page on the wire that then fails is not written again");
     FakeBus::respond = eeprom;
     {
         Dev<Eeprom> d{};
         check(runUntil(d, [&] { return d.answering(); }, 500ms), "up");
         d.set<Page>(data);
-        d.handler();   // the page goes on the wire
+        d.turn();   // the page goes on the wire
         check(!FakeBus::pending.empty(), "on the wire");
         check(d.withdraw<Page>(), "the one on the wire counts");
         FakeBus::respond = [](std::uint8_t, std::span<std::byte const>, std::span<std::byte>) {
@@ -2551,8 +2730,7 @@ void withdrawWrites() {
         check(!d.pending<Page>(), "not owed");
     }
 
-    testCase("withdraw: a later set() of the same group is written as usual");
-    fresh();
+    testcase.next("withdraw: a later set() of the same group is written as usual");
     FakeBus::respond = eeprom;
     {
         Dev<Eeprom> d{};
@@ -2591,10 +2769,10 @@ namespace RestTest {
     /// With a generation: enabled() is asked only after the counter moved. `stepWhileAsked`
     /// plays an interrupt that changes the answer and steps the counter while enabled() runs,
     /// after it has read the old answer.
-    inline bool          genEnabled = true;
-    inline std::uint32_t generation{};
-    inline int           asked{};
-    inline bool          stepWhileAsked{};
+    inline bool                       genEnabled = true;
+    inline std::atomic<std::uint32_t> generation{};
+    inline int                        asked{};
+    inline bool                       stepWhileAsked{};
 
     struct GenSwitched {
         static bool enabled() {
@@ -2608,7 +2786,7 @@ namespace RestTest {
             return answer;
         }
 
-        static constexpr std::uint32_t const* enabledGeneration = &generation;
+        static constexpr std::atomic<std::uint32_t> const* enabledGeneration = &generation;
     };
 }   // namespace RestTest
 
@@ -2617,8 +2795,7 @@ void resting() {
     using PresenceTest::readsOf;
     using TicketTest::OnDemand;
 
-    testCase("resting: between two periods a device runs no turn, and still reads on time");
-    fresh();
+    I2cCase testcase{"resting: between two periods a device runs no turn, and still reads on time"};
     FakeBus::respond = zeros;
     Dev<Probe> d{};
     check(runUntil(d, [&] { return d.valid(); }, 50ms), "up");
@@ -2630,7 +2807,7 @@ void resting() {
         check(d.turns() - turns <= 30, "a few full turns per read, not a thousand");
     }
 
-    testCase("resting: a request from outside the turn is served on the very next turn");
+    testcase.step("resting: a request from outside the turn is served on the very next turn");
     {
         auto const reads = readsOf(Probe::Address, 0x01);
         runFor(d, 20ms);   // well inside the period
@@ -2639,12 +2816,12 @@ void resting() {
         checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "on the wire at once");
         check(runUntil(
                 d,
-                [&] { return d.answer<Probe::Value>(t) == Answer::ok; },
+                [&] { return d.answer<Probe::Value>(t) == Kvasir::Engine::Answer::ok; },
                 10ms),
               "and answered");
     }
 
-    testCase("resting: a shorter period takes effect at once");
+    testcase.step("resting: a shorter period takes effect at once");
     {
         runFor(d, 5ms);
         d.period<Probe::Value>(10ms);
@@ -2654,7 +2831,8 @@ void resting() {
         d.period<Probe::Value>(100ms);
     }
 
-    testCase("resting: a clock that jumps past several periods gets one read, then the period");
+    testcase.step(
+      "resting: a clock that jumps past several periods gets one read, then the period");
     {
         runFor(d, 5ms);
         auto const reads = readsOf(Probe::Address, 0x01);
@@ -2665,8 +2843,7 @@ void resting() {
         checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "not a burst");
     }
 
-    testCase("resting: set() on a resting device is written on the next turn");
-    fresh();
+    testcase.next("resting: set() on a resting device is written on the next turn");
     {
         RegisterModel<1, 1> model{OnDemand::Address};
         model.set(0x00, {0x01, 7});
@@ -2682,8 +2859,8 @@ void resting() {
         checkEq(model.writes - writes, 1, "written on the next turn");
     }
 
-    testCase("resting: Config::enabled() going false takes the part offline at once, and back");
-    fresh();
+    testcase.next(
+      "resting: Config::enabled() going false takes the part offline at once, and back");
     {
         FakeBus::respond  = zeros;
         RestTest::enabled = true;
@@ -2700,8 +2877,7 @@ void resting() {
         check(runUntil(s, [&] { return s.valid(); }, 50ms), "back up once enabled");
     }
 
-    testCase("resting: an enable given as a shared function and an argument works the same");
-    fresh();
+    testcase.next("resting: an enable given as a shared function and an argument works the same");
     {
         FakeBus::respond = zeros;
         Dev<Probe, RestTest::SharedSwitched> s{};
@@ -2714,8 +2890,7 @@ void resting() {
         check(runUntil(s, [&] { return s.valid(); }, 50ms), "its own flag, not another's");
     }
 
-    testCase("resting: with an enabled generation, enabled() is asked only after it moved");
-    fresh();
+    testcase.next("resting: with an enabled generation, enabled() is asked only after it moved");
     {
         FakeBus::respond     = zeros;
         RestTest::genEnabled = true;
@@ -2748,8 +2923,7 @@ void resting() {
         check(runUntil(s, [&] { return s.valid(); }, 50ms), "back up after the next step");
     }
 
-    testCase("resting: a generation step while enabled() runs is not taken for its answer");
-    fresh();
+    testcase.next("resting: a generation step while enabled() runs is not taken for its answer");
     {
         FakeBus::respond     = zeros;
         RestTest::genEnabled = true;
@@ -2786,8 +2960,8 @@ namespace OpsKindsTest {
     /// FakeBus drives them through their table, the default.
     struct DirectTag {};
 
-    using DirectBus = WithFeatures<FakeBusFor<DirectTag>, [] {
-        auto f      = AllEngineFeatures;
+    using DirectBus = Kvasir::Engine::WithFeatures<FakeBusFor<DirectTag>, [] {
+        auto f      = Kvasir::Engine::AllEngineFeatures;
         f.directOps = true;
         return f;
     }()>;
@@ -2855,7 +3029,12 @@ namespace OpsKindsTest {
 
 void opsKinds() {
     using namespace OpsKindsTest;
-    testCase("ops: a device through its table does on the bus what a set of one does");
+    // scenario() runs each side on its own clean bus; the transcripts of both on failure
+    Case const testcase{"ops: a device through its table does on the bus what a set of one does",
+                        [] {
+                            dump();
+                            dump<DirectTag>();
+                        }};
     auto const table  = scenario<void, FakeBus>();
     auto const direct = scenario<DirectTag, DirectBus>();
     checkEq(table.log.size(), direct.log.size(), "as many transactions");
@@ -2873,9 +3052,128 @@ void opsKinds() {
     checkEq(table.writes, direct.writes, "as many limit writes");
     checkEq(table.mismatches, direct.mismatches, "the same read-back mismatches");
     check(table.writes >= 4, "the limits re-sent after the restart");
-    if(failures != 0) {
-        dump();
-        dump<DirectTag>();
+}
+
+// -- the faults a model cannot cause, injected on the request on the wire -----------------
+
+namespace InjectedFaults {
+
+    /// One four-byte cyclic read: a partly landed one can be told from a whole one.
+    struct Wide {
+        static constexpr std::string_view Name          = "WIDE";
+        static constexpr Address7         Address       = 0x23;
+        static constexpr std::size_t      RegisterBytes = 1;
+
+        struct Value {
+            static constexpr auto       Period = std::chrono::milliseconds{100};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x02, .count = 4, .offset = 0})};
+            using Sample = std::uint32_t;
+
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) {
+                return data.be32(0);
+            }
+        };
+
+        using Reads = Kvasir::Engine::List<Value>;
+    };
+
+    /// The part's answer: 0x11223344 to every read, ACK to every write.
+    FakeBus::Result answer(std::uint8_t a,
+                           std::span<std::byte const>,
+                           std::span<std::byte> recv) {
+        if(a != Wide::Address && a != PresenceTest::Probe::Address) {
+            return FakeBus::Result::nack;
+        }
+        std::array<std::byte, 4> const v{std::byte{0x11},
+                                         std::byte{0x22},
+                                         std::byte{0x33},
+                                         std::byte{0x44}};
+        for(std::size_t i = 0; i < recv.size() && i < v.size(); ++i) { recv[i] = v[i]; }
+        return FakeBus::Result::ok;
+    }
+
+    /// Turns until the device has a request on the wire; whether it has.
+    template<typename D>
+    bool onTheWire(D& d) {
+        for(int i = 0; i < 500 && FakeBus::pending.empty(); ++i) {
+            d.turn();
+            FakeClock::current += 1ms;
+        }
+        return !FakeBus::pending.empty();
+    }
+
+}   // namespace InjectedFaults
+
+void injectedFaults() {
+    using namespace InjectedFaults;
+    using PresenceTest::Probe;
+    using PresenceTest::ShortNet;
+
+    I2cCase testcase{"faults: a data NAK is a fault, not a missing part, and sampling goes on"};
+    FakeBus::respond = answer;
+    {
+        Dev<Probe> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        auto const errors  = d.errors();
+        auto const samples = d.samples();
+        // more in a row than the NAKs that park a part (AbsentAfterNaks, 3 by default)
+        for(int i = 0; i < 4; ++i) {
+            check(onTheWire(d), "a read is on the wire");
+            check(FakeBus::dataNak(), "its data byte is not acknowledged");
+            d.turn();
+        }
+        checkEq(d.errors(), errors + 4, "each one counted as an error");
+        checkEq(d.samples(), samples, "no sample from them");
+        check(!d.absent(), "and not parked: the address was acknowledged every time");
+        check(runUntil(d, [&] { return d.samples() > samples; }, 500ms), "the next read is taken");
+    }
+
+    testcase.next(
+      "faults: a transfer the bus times out fails once, and the in-flight net does not fail it "
+      "again");
+    FakeBus::respond = answer;
+    {
+        Dev<Probe, ShortNet> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        check(onTheWire(d), "a read is on the wire");
+        auto const errors  = d.errors();
+        auto const samples = d.samples();
+        auto const before  = FakeClock::now();
+        check(FakeBus::timeout(), "the bus's transfer timeout");
+        checkEq(FakeClock::now() - before,
+                FakeClock::duration{FakeBus::TransferTimeout},
+                "after 25 ms");
+        d.turn();
+        checkEq(d.errors(), errors + 1, "one error");
+        // past the device's own 50 ms net, measured from when the read went out
+        check(runUntil(d, [&] { return d.samples() > samples; }, 500ms), "read again");
+        runFor(d, 200ms);
+        checkEq(d.errors(),
+                errors + 1,
+                "and still the one error: the net had nothing left to give up on");
+    }
+
+    testcase.next(
+      "faults: a read that failed after two of its four bytes is not taken for an answer");
+    FakeBus::respond = answer;
+    {
+        Dev<Wide> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 500ms), "up");
+        checkEq(d.latest(), std::uint32_t{0x11223344}, "the whole answer");
+        check(onTheWire(d), "a read is on the wire");
+        auto const errors  = d.errors();
+        auto const samples = d.samples();
+        check(FakeBus::partialRead(2), "two bytes land, then the transfer fails");
+        d.turn();
+        checkEq(d.samples(), samples, "no sample from the half-filled buffer");
+        checkEq(d.latest(), std::uint32_t{0x11223344}, "the last whole answer stands");
+        checkEq(d.errors(), errors + 1, "counted as an error");
+        check(runUntil(
+                d,
+                [&] { return d.samples() > samples; },
+                500ms),
+              "the next whole read is taken");
     }
 }
 
@@ -2897,5 +3195,6 @@ int main() {
     withdrawWrites();
     resting();
     opsKinds();
+    injectedFaults();
     return finish();
 }

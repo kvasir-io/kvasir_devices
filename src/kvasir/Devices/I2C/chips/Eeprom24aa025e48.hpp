@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,8 +33,7 @@ struct Eeprom24aa025e48 {
     static constexpr Address7         Address       = 0x50;
     static constexpr std::size_t      RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57};
+    static constexpr auto Addresses = addressRun<0x50, 8>();
 
     /// The part's write buffer is 16 bytes; a write past its page boundary wraps to the start
     /// of the same page and overwrites it (6.2), so a page here must fit the part's whole.
@@ -48,7 +48,7 @@ struct Eeprom24aa025e48 {
     /// Everything at or above this is write protected.
     static constexpr std::uint8_t UserAreaBytes = 0x80;
 
-    static constexpr std::array Init{Step::read({.reg = 0xFA, .count = 6, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0xFA, .count = 6, .offset = 0})};
 
     struct State {
         std::array<std::uint8_t, 6> eui48{};
@@ -75,7 +75,7 @@ struct Eeprom24aa025e48 {
         };
 
         static constexpr std::array Steps{
-          Step::readIndirect({.regOffset = 0, .count = ChunkBytes, .offset = 1})};
+          Engine::Step::readIndirect({.regOffset = 0, .count = ChunkBytes, .offset = 1})};
 
         /// How many bytes a request reads: its length, at most a chunk, and never past the
         /// end of the array (the part would wrap to address 0).
@@ -134,11 +134,11 @@ struct Eeprom24aa025e48 {
             return static_cast<std::uint8_t>(n);
         }
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             auto const n = fits(value);
             for(std::size_t i = 0; i < n; ++i) { buffer[i] = std::byte{value.data[i]}; }
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg    = value.address,
                .offset = 0,
                .count  = n,
@@ -154,8 +154,8 @@ struct Eeprom24aa025e48 {
     static constexpr std::size_t WriteChunkBytes = PageBytes;
     static constexpr std::size_t WritePageBytes  = PageBytes;
 
-    using Reads  = List<Block>;
-    using Writes = List<Page>;
+    using Reads  = Engine::List<Block>;
+    using Writes = Engine::List<Page>;
 };
 
 }   // namespace Kvasir::I2C::Chips

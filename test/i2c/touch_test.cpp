@@ -9,8 +9,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <kvasir/Devices/Engine/DeviceSet.hpp>
+#include <kvasir/Devices/I2C/Adapters/TouchController.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/TouchController.hpp>
 #include <map>
 #include <memory>
 #include <ranges>
@@ -45,10 +46,10 @@ namespace TouchFakes {   // not "Touch": that is Kvasir::I2C::Touch, visible her
         FakeBus::Result operator()(std::uint8_t               addr,
                                    std::span<std::byte const> sent,
                                    std::span<std::byte>       recv) {
-            if(addr != address) { return FakeBus::Result::notAcknowledged; }
+            if(addr != address) { return FakeBus::Result::nack; }
             if(nak > 0) {
                 --nak;
-                return FakeBus::Result::notAcknowledged;
+                return FakeBus::Result::nack;
             }
             std::uint16_t reg = 0;
             for(std::size_t i = 0; i < regBytes && i < sent.size(); ++i) {
@@ -58,13 +59,13 @@ namespace TouchFakes {   // not "Touch": that is Kvasir::I2C::Touch, visible her
                 std::vector<std::uint8_t> w;
                 for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
                 writes.push_back(w);
-                return FakeBus::Result::succeeded;
+                return FakeBus::Result::ok;
             }
             auto const& src = reg == dataReg ? frame : regs[reg];
             for(std::size_t i = 0; i < recv.size(); ++i) {
                 recv[i] = static_cast<std::byte>(i < src.size() ? src[i] : 0);
             }
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         }
     };
 
@@ -74,18 +75,22 @@ namespace TouchFakes {   // not "Touch": that is Kvasir::I2C::Touch, visible her
     };
 
     struct FlippedCfg : Cfg {
-        static constexpr auto FlipX = Kvasir::I2C::Touch::Mirror::mirrored;
-        static constexpr auto FlipY = Kvasir::I2C::Touch::Mirror::mirrored;
+        static constexpr auto flipX = Kvasir::I2C::Touch::Mirror::mirrored;
+        static constexpr auto flipY = Kvasir::I2C::Touch::Mirror::mirrored;
     };
 
     struct SwappedCfg : Kvasir::I2C::Touch::Defaults {
         static constexpr std::uint16_t Width  = 200;
         static constexpr std::uint16_t Height = 100;
-        static constexpr auto          SwapXY = Kvasir::I2C::Touch::Axes::swapped;
+        static constexpr auto          swapXY = Kvasir::I2C::Touch::Axes::swapped;
     };
 
     template<typename Ctrl, typename C = Cfg>
     using TouchDev = Kvasir::I2C::Touch::Controller<FakeBus, FakeClock, Ctrl, C, FakeResetLine>;
+
+    // A DeviceSet member as a driver with its device inside (DeviceSet.hpp).
+    static_assert(Kvasir::Engine::WrapsDevice<TouchDev<TD::Cst9217>>
+                  && !Kvasir::Engine::DeviceLike<TouchDev<TD::Cst9217>>);
 
     // The transform is pure and Config-driven, so it is checked at compile time.
     static_assert(TouchDev<TD::Cst9217>::transform(10,
@@ -140,9 +145,8 @@ namespace TouchFakes {   // not "Touch": that is Kvasir::I2C::Touch, visible her
 void touch() {
     using namespace TouchFakes;
 
-    testCase("CST9217: reset, init script, identification");
-    fresh();
-    Model m9217{0x5A, 2, 0xD000};
+    I2cCase testcase{"CST9217: reset, init script, identification"};
+    Model   m9217{0x5A, 2, 0xD000};
     m9217.regs[0xD1FC] = {0x20, 0x4E, 0xCA, 0x00};   // checkcode
     m9217.regs[0xD1F8] = {0xD2, 0x01, 0xD2, 0x01};   // 466 x 466
     m9217.regs[0xD204] = {0x08, 0x00, 0x17, 0x92};   // project id, 0x9217
@@ -161,15 +165,15 @@ void touch() {
     check(t9217.chipInfo().ok && t9217.chipInfo().chip == 0x9217, "identified");
     checkEq(t9217.chipInfo().width, std::uint16_t{466}, "and its own resolution");
     check(t9217.identified(), "the policy accepts the chip");
-    if(failures != 0) { std::printf("    wire:%s\n", wire().c_str()); }
+    if(testcase.failed()) { std::printf("    wire:%s\n", wire().c_str()); }
 
-    testCase("CST9217: the resting frame is no finger, and says nothing new");
+    testcase.step("CST9217: the resting frame is no finger, and says nothing new");
     check(runUntil(t9217, [&] { return t9217.quiet() >= 2; }, 500ms), "quiet frames counted");
     checkEq(t9217.reports(), 0U, "nothing reported: the glass was never touched");
     checkEq(t9217.latest().seq, 0U, "so seq never stepped");
     checkEq(t9217.malformed(), 0U, "and the resting frame is not malformed");
 
-    testCase("CST9217: a finger, a move, then the lift frame");
+    testcase.step("CST9217: a finger, a move, then the lift frame");
     // status 6 (touching), x = 0x12 << 4 | 0x3 = 0x123 (291), y = 0x1C << 4 | 0x2 = 0x1C2 (450)
     m9217.frame
       = {0x06, 0x12, 0x1C, 0x32, 0x00, 0x01, 0xAB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -194,14 +198,13 @@ void touch() {
     checkEq(t9217.latest().seq, liftSeq, "and the frames after it say nothing new");
     check(t9217.quiet() > quietBefore, "counted as quiet, not as reports");
 
-    testCase("CST9217: poll cadence follows the reading");
-    fresh();
+    testcase.next("CST9217: poll cadence follows the reading");
     FakeBus::respond = std::ref(m9217);
     m9217.frame
       = {0xFF, 0xFF, 0xFF, 0xFF, 0x08, 0x00, 0x08, 0x00, 0xD2, 0x01, 0xD2, 0x01, 0x20, 0x4E, 0xCA};
     TouchDev<TD::Cst9217> tc{};
     check(runUntil(tc, [&] { return tc.answering(); }, 500ms), "up");
-    auto reads = [](std::size_t from) {
+    auto const reads = [](std::size_t from) {
         std::size_t n = 0;
         for(std::size_t i = from; i < FakeBus::log.size(); ++i) {
             if(FakeBus::log[i].isRead()) { ++n; }
@@ -220,7 +223,7 @@ void touch() {
     auto const held = reads(base);
     check(held >= 18 && held <= 21, "and about twenty a second while it is down");
 
-    testCase("CST9217: the INT line asks for a read between polls");
+    testcase.step("CST9217: the INT line asks for a read between polls");
     base = FakeBus::log.size();
     turn(tc);
     tc.interrupt();
@@ -228,8 +231,7 @@ void touch() {
     turn(tc);
     check(reads(base) >= 1, "a read went out without waiting for the period");
 
-    testCase("GT911: the stale bit, and the acknowledge write after every frame read");
-    fresh();
+    testcase.next("GT911: the stale bit, and the acknowledge write after every frame read");
     Model mgt{0x5D, 2, 0x814E};
     mgt.regs[0x8140] = {'9', '1', '1', 0x00, 0x60, 0x10};
     mgt.regs[0x8048] = {0xD2, 0x01, 0xD2, 0x01};
@@ -257,14 +259,13 @@ void touch() {
               [](auto const& w) { return w == std::vector<std::uint8_t>{0x81, 0x4E, 0x00}; }),
           "814E is written 00 after a frame, or the chip never raises INT again");
 
-    testCase("GT911: a frame that cannot be right is counted and changes nothing");
+    testcase.step("GT911: a frame that cannot be right is counted and changes nothing");
     mgt.frame         = {0x8F, 0, 0, 0, 0, 0, 0, 0, 0};   // fifteen fingers on a five-point chip
     auto const wasSeq = gt.latest().seq;
     check(runUntil(gt, [&] { return gt.malformed() >= 1; }, 500ms), "counted as malformed");
     checkEq(gt.latest().seq, wasSeq, "and nothing was published");
 
-    testCase("CST816S and FT6x36: bring-up and one finger");
-    fresh();
+    testcase.next("CST816S and FT6x36: bring-up and one finger");
     Model m816{0x15, 1, 0x02};
     m816.regs[0xA7]  = {0xB4};
     m816.regs[0xA9]  = {0x03};
@@ -288,14 +289,16 @@ void touch() {
     check(t636.chipInfo().ok && t636.chipInfo().extra == 0x11, "identified by the vendor id");
     // an FT5x06-style panel: a panel maker's model code in A8, a FocalTech chip id in A3
     static_assert([] {
-        auto const panel = TD::Ft6x36::identify(Bytes{frame(0x64, 0x00, 0x00, 0x10, 0x00, 0x43)});
-        auto const other = TD::Ft6x36::identify(Bytes{frame(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)});
+        auto const panel
+          = TD::Ft6x36::identify(Kvasir::Bytes{frame(0x64, 0x00, 0x00, 0x10, 0x00, 0x43)});
+        auto const other
+          = TD::Ft6x36::identify(Kvasir::Bytes{frame(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)});
         return panel.ok && !other.ok;
     }());
     check(runUntil(t636, [&] { return t636.latest().points != 0; }, 500ms), "a finger");
     checkEq(t636.latest().x, std::uint16_t{0x123}, "x");
 
-    testCase("touch: one lost data read costs one report, not the bring-up");
+    testcase.step("touch: one lost data read costs one report, not the bring-up");
     auto const beforeErr   = t636.errors();
     auto const beforeSeq   = t636.latest().seq;
     auto const holdsBefore = std::ranges::count_if(FakeBus::log, [](auto const& t) {
@@ -313,7 +316,6 @@ void touch() {
             [&] { return t636.latest().seq > beforeSeq; },
             500ms),
           "the next read reports as usual");
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

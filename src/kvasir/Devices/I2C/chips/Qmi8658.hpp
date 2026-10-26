@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -123,7 +124,7 @@ struct Qmi8658 {
     static constexpr std::string_view Name = "QMI8658";
     /// QST QMI8658. qmi8658a.md:882, :1033: WHO_AM_I (0x00) is 0x05.
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x00, 1, true, 0xFF, 0x05},
+      Engine::RegisterCheck{"who-am-i", 0x00, 1, true, 0xFF, 0x05},
     };
     static constexpr Address7                Address = 0x6A;
     static constexpr std::array<Address7, 2> Addresses{0x6A, 0x6B};
@@ -168,17 +169,17 @@ struct Qmi8658 {
     }
 
     static constexpr std::array Init{
-      Step::write(
+      Engine::Step::write(
         {.reg = 0x60, .payload = {0xB0}, .delay = SoftResetSettle}),   // RESET, then the settle
-      Step::read({.reg = 0x4D, .count = 1, .offset = 0}),              // the reset result
-      Step::write({.reg = 0x02, .payload = {0x40}}),
-      Step::write({.reg = 0x03, .payload = {Ctrl2}}),
-      Step::write({.reg = 0x04, .payload = {Ctrl3}}),
-      Step::write({.reg = 0x06, .payload = {0x00}}),
-      Step::write({.reg     = 0x08,
-                   .payload = {0x03},
-                   .delay   = std::chrono::milliseconds{150} + 3 * sixDofPeriod(Rate)
-                            + std::chrono::milliseconds{10}}),
+      Engine::Step::read({.reg = 0x4D, .count = 1, .offset = 0}),      // the reset result
+      Engine::Step::write({.reg = 0x02, .payload = {0x40}}),
+      Engine::Step::write({.reg = 0x03, .payload = {Ctrl2}}),
+      Engine::Step::write({.reg = 0x04, .payload = {Ctrl3}}),
+      Engine::Step::write({.reg = 0x06, .payload = {0x00}}),
+      Engine::Step::write({.reg     = 0x08,
+                           .payload = {0x03},
+                           .delay   = std::chrono::milliseconds{150} + 3 * sixDofPeriod(Rate)
+                                    + std::chrono::milliseconds{10}}),
     };
 
     using State = Qmi8658Detail::State;
@@ -206,8 +207,9 @@ struct Qmi8658 {
 
         /// STATUS0, then twelve bytes from 0x35 in one go, which the auto-increment set at
         /// bring-up allows.
-        static constexpr std::array Steps{Step::read({.reg = 0x2E, .count = 1, .offset = 0}),
-                                          Step::read({.reg = 0x35, .count = 12, .offset = 1})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x2E, .count = 1, .offset = 0}),
+          Engine::Step::read({.reg = 0x35, .count = 12, .offset = 1})};
 
         struct Sample {
             std::array<MicroG, 3>         accel{};
@@ -227,16 +229,18 @@ struct Qmi8658 {
         }
 
         /// At the ranges the part holds now.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(0) & 0x03U) == 0) { return Outcome<Sample>::unchanged(); }   // aDA, gDA
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(0) & 0x03U) == 0) {
+                return Engine::Outcome<Sample>::unchanged();
+            }   // aDA, gDA
             auto const a = [&](std::size_t i) {
                 return Qmi8658Detail::toAccel(data.s16le(1 + 2 * i), state.accelRange);
             };
             auto const g = [&](std::size_t i) {
                 return Qmi8658Detail::toRate(data.s16le(7 + 2 * i), state.gyroRange);
             };
-            return Outcome<Sample>::ok({
+            return Engine::Outcome<Sample>::ok({
               {a(0), a(1), a(2)},
               {g(0), g(1), g(2)}
             });
@@ -249,10 +253,10 @@ struct Qmi8658 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x03, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x03, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -267,10 +271,10 @@ struct Qmi8658 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl3;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -279,8 +283,8 @@ struct Qmi8658 {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<AccelConfig, GyroConfig>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<AccelConfig, GyroConfig>;
 };
 
 }   // namespace Kvasir::I2C::Chips

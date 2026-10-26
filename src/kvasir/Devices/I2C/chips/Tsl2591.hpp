@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -63,7 +64,7 @@ struct Tsl2591 {
     /// ams TSL2591. TSL2591.md:488..494, ID register 0x12 = 0x50. The part is addressed through its
     /// command register: 0xA0 (CMD, normal operation) | 0x12.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0xA0 | 0x12, 1, true, 0xFF, 0x50},
+      Engine::RegisterCheck{"id", 0xA0 | 0x12, 1, true, 0xFF, 0x50},
     };
     static constexpr Address7                Address = 0x29;
     static constexpr std::array<Address7, 1> Addresses{0x29};
@@ -87,8 +88,8 @@ struct Tsl2591 {
     static constexpr auto StartupDelay = std::chrono::milliseconds{10};
 
     static constexpr std::array Init{
-      Step::write({.reg = cmd(0x01), .payload = {Config}}),
-      Step::write(
+      Engine::Step::write({.reg = cmd(0x01), .payload = {Config}}),
+      Engine::Step::write(
         {.reg     = cmd(0x00),
          .payload = {0x03},
          .delay
@@ -114,13 +115,14 @@ struct Tsl2591 {
         static constexpr auto Period = std::chrono::milliseconds{500};
 
         /// A new result every integration time; never faster than the part converts.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             auto const p = Tsl2591Detail::integrationTime(state.integration);
             return p > std::chrono::milliseconds{500} ? p : std::chrono::milliseconds{500};
         }
 
         /// STATUS, then CH0 and CH1 (each 16-bit little endian) in one burst.
-        static constexpr std::array Steps{Step::read({.reg = cmd(0x13), .count = 5, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = cmd(0x13), .count = 5, .offset = 0})};
 
         struct Sample {
             std::uint16_t full{};          ///< CH0: visible + infrared
@@ -149,10 +151,11 @@ struct Tsl2591 {
             }
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(0) & 0x01U) == 0) { return Outcome<Sample>::reject(); }   // AVALID
-            return Outcome<Sample>::ok({data.le16(1), data.le16(3), state.gain, state.integration});
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(0) & 0x01U) == 0) { return Engine::Outcome<Sample>::reject(); }   // AVALID
+            return Engine::Outcome<Sample>::ok(
+              {data.le16(1), data.le16(3), state.gain, state.integration});
         }
     };
 
@@ -167,10 +170,10 @@ struct Tsl2591 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Config;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg    = cmd(0x01),
                .offset = 0,
                .count  = 1,
@@ -191,15 +194,15 @@ struct Tsl2591 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = 0x03;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = cmd(0x00), .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = cmd(0x00), .offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Light>;
-    using Writes = List<Configuration, Enable>;
+    using Reads  = Engine::List<Light>;
+    using Writes = Engine::List<Configuration, Enable>;
 };
 
 }   // namespace Kvasir::I2C::Chips

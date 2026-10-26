@@ -10,13 +10,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <kvasir/Devices/Engine/DeviceSet.hpp>
+#include <kvasir/Devices/I2C/Adapters/MonoPanel.hpp>
+#include <kvasir/Devices/I2C/Adapters/Stats.hpp>
 #include <kvasir/Devices/I2C/Bus.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/DeviceSet.hpp>
-#include <kvasir/Devices/I2C/MonoPanel.hpp>
 #include <kvasir/Devices/I2C/Mux.hpp>
 #include <kvasir/Devices/I2C/Scanner.hpp>
-#include <kvasir/Devices/I2C/Stats.hpp>
 #include <kvasir/Devices/I2C/chips/All.hpp>
 #include <map>
 #include <memory>
@@ -36,12 +36,11 @@ namespace {
 
 /// A scan that gives up sooner than ScanDefaults.
 struct QuickScan {
-    static constexpr auto ProbeTimeout = std::chrono::milliseconds{100};
+    static constexpr auto probeTimeout = std::chrono::milliseconds{100};
 };
 
 void scanner() {
-    testCase("bus scanner");
-    fresh();
+    I2cCase const testcase{"bus scanner"};
     using Cat  = Catalogue<Chips::Bh1750, Chips::Ads1115<>, Chips::Tmp1075<>>;
     using Scan = Scanner<FakeBus, FakeClock, Cat>;
     bool                      busFault = false;
@@ -51,15 +50,15 @@ void scanner() {
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
           probed.push_back(a);
           if(busFault && a == 0x50) { return FakeBus::Result::failed; }
-          if(a != 0x23 && a != 0x48) { return FakeBus::Result::notAcknowledged; }
+          if(a != 0x23 && a != 0x48) { return FakeBus::Result::nack; }
           static_cast<void>(sent);
           if(!recv.empty()) { recv[0] = std::byte{0x00}; }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Scan sc{};
     sc.start();
     for(int i = 0; i < 1000 && !sc.done(); ++i) {
-        sc.handler();
+        sc.turn();
         FakeBus::complete();
     }
     check(sc.done() && sc.scanned(), "a full scan finished");
@@ -68,8 +67,7 @@ void scanner() {
     check(!sc.found(0x50), "and nothing at 0x50");
     checkEq(probed.front(), std::uint8_t{0x08}, "the scan starts past the reserved range");
     checkEq(probed.back(), std::uint8_t{0x77}, "and stops before it");
-    check(Scan::hint(0x48).find("ADS1115") != std::string_view::npos
-            && Scan::hint(0x48).find("TMP1075") != std::string_view::npos,
+    check(Scan::hint(0x48).contains("ADS1115") && Scan::hint(0x48).contains("TMP1075"),
           "the catalogue names both candidates at 0x48");
     check(Scan::hint(0x23) == std::string_view{"BH1750"}, "and the one at 0x23");
     check(Scan::hint(0x60) == std::string_view{"unknown"}, "nothing known at 0x60");
@@ -86,15 +84,15 @@ void scanner() {
     check(packedRight, "every address's packed hint is the one the table was built with");
     using Narrow = SizedCatalogue<12, Chips::Bh1750, Chips::Ads1115<>, Chips::Tmp1075<>>;
     checkEq(Narrow::hint(0x48).size(), std::size_t{12}, "a hint is cut at its width");
-    check(Narrow::hint(0x48).ends_with("~"), "and says so");
+    check(Narrow::hint(0x48).ends_with('~'), "and says so");
     check(Narrow::hint(0x23) == std::string_view{"BH1750"}, "a short one is whole");
-    checkEq(Narrow::names(0x48).size(), Cat::names(0x48).size(), "names() is never cut");
+    checkEq(Narrow::namesAt(0x48).size(), Cat::namesAt(0x48).size(), "namesAt() is never cut");
 
     // a range
     probed.clear();
     sc.start(0x40, 0x4F);
     for(int i = 0; i < 500 && !sc.done(); ++i) {
-        sc.handler();
+        sc.turn();
         FakeBus::complete();
     }
     checkEq(probed.size(), std::size_t{16}, "sixteen addresses probed");
@@ -105,17 +103,47 @@ void scanner() {
     std::array<std::uint8_t, 3> const wanted{0x23, 0x50, 0x77};
     sc.start(std::span<std::uint8_t const>{wanted});
     for(int i = 0; i < 500 && !sc.done(); ++i) {
-        sc.handler();
+        sc.turn();
         FakeBus::complete();
     }
     check(probed == std::vector<std::uint8_t>{0x23, 0x50, 0x77}, "only the listed addresses");
     checkEq(sc.count(), std::size_t{1}, "one of them answered");
 
+    // the address set's edges: the first and the last non-reserved address are in it, their
+    // reserved neighbours and anything past 0x7F never are
+    probed.clear();
+    std::array<std::uint8_t, 6> const edges{0x07, 0x08, 0x77, 0x78, 0x7F, 0xC8};
+    sc.start(std::span<std::uint8_t const>{edges});
+    for(int i = 0; i < 100 && !sc.done(); ++i) {
+        sc.turn();
+        FakeBus::complete();
+    }
+    check(probed == std::vector<std::uint8_t>{0x08, 0x77},
+          "0x08 and 0x77 probed, 0x07/0x78/0x7F/0xC8 not");
+    check(!sc.found(0x7F) && !sc.found(0xC8) && !sc.faulted(0xC8),
+          "nothing past the range is in a set");
+    static_assert(Scan::First == 0x08 && Scan::Last == 0x77, "the one range");
+    {
+        AddressSet set{};
+        set.insert(0x00);
+        set.insert(0x3F);
+        set.insert(0x40);
+        set.insert(0x7F);
+        set.insert(0x80);
+        check(set.contains(0x00) && set.contains(0x3F) && set.contains(0x40) && set.contains(0x7F),
+              "both words of the set, at their edges");
+        check(!set.contains(0x01) && !set.contains(0x3E) && !set.contains(0x41)
+                && !set.contains(0x80),
+              "and nothing beside them");
+        set.clear();
+        check(!set.contains(0x40), "clear() empties it");
+    }
+
     // a bus fault is not a NAK
     busFault = true;
     sc.start(0x50, 0x50);
     for(int i = 0; i < 100 && !sc.done(); ++i) {
-        sc.handler();
+        sc.turn();
         FakeBus::complete();
     }
     check(!sc.found(0x50) && sc.faulted(0x50), "recorded as a fault, not as a device");
@@ -126,17 +154,17 @@ void scanner() {
     // fault, the scan goes on -- and the answer, should it turn up late, is not taken for
     // the next address's.
     sc.start(0x23, 0x48);
-    sc.handler();   // the probe for 0x23 is submitted
+    sc.turn();   // the probe for 0x23 is submitted
     auto const lost = FakeBus::pending.front();
     FakeBus::pending.clear();
-    sc.handler();
+    sc.turn();
     check(!sc.done(), "waiting on the lost probe");
     FakeClock::current += Scan::ProbeTimeout + 1ms;
-    sc.handler();                                // gives up on 0x23
-    sc.handler();                                // and submits 0x24
-    lost.callback(FakeBus::Result::succeeded);   // the late answer for 0x23
+    sc.turn();                            // gives up on 0x23
+    sc.turn();                            // and submits 0x24
+    lost.callback(FakeBus::Result::ok);   // the late answer for 0x23
     for(int i = 0; i < 100 && !sc.done(); ++i) {
-        sc.handler();
+        sc.turn();
         FakeBus::complete();
     }
     check(sc.done(), "the scan finished without the answer");
@@ -145,15 +173,15 @@ void scanner() {
     check(sc.found(0x48), "the addresses after it were still probed");
 
     // a shorter timeout, set at run time: given up on at 10 ms, not a second
-    sc.probeTimeout(10ms);
+    sc.setProbeTimeout(10ms);
     sc.start(0x23, 0x23);
-    sc.handler();
+    sc.turn();
     static_cast<void>(FakeBus::lose());
     FakeClock::current += 5ms;
-    sc.handler();
+    sc.turn();
     check(!sc.done(), "still waiting at 5 ms");
     FakeClock::current += 6ms;
-    sc.handler();
+    sc.turn();
     check(sc.done() && sc.faulted(0x23), "given up on past 10 ms, as a fault");
     // and one from a Config, at compile time
     static_assert(Scanner<FakeBus, FakeClock, Cat, AddressProbe, QuickScan>::ProbeTimeout == 100ms,
@@ -164,7 +192,7 @@ void scanner() {
     Scanner<FakeBus, FakeClock, Cat, RegisterProbe<0x0F>> rp{};
     rp.start(0x23, 0x23);
     for(int i = 0; i < 100 && !rp.done(); ++i) {
-        rp.handler();
+        rp.turn();
         FakeBus::complete();
     }
     check(rp.found(0x23), "the register probe finds it too");
@@ -177,7 +205,6 @@ void scanner() {
         }
         check(wrote, "and sends the register byte first");
     }
-    if(failures != 0) { dump(); }
 }
 
 // The two panel geometries the Bus cases below put on a Bus (panel_test.cpp has the same).
@@ -185,15 +212,15 @@ namespace Oled {
     struct Wide : Chips::Ssd1306Detail::PanelDefaults {
         static constexpr int      Width   = 128;
         static constexpr int      Height  = 32;
-        static constexpr Address7 Address = 0x3C;
+        static constexpr Address7 address = 0x3C;
     };
 
     struct Small : Chips::Ssd1306Detail::PanelDefaults {
         static constexpr int          Width        = 64;
         static constexpr int          Height       = 48;
-        static constexpr Address7     Address      = 0x3D;
-        static constexpr int          ColumnOffset = 32;
-        static constexpr std::uint8_t ComPins      = 0x12;
+        static constexpr Address7     address      = 0x3D;
+        static constexpr int          columnOffset = 32;
+        static constexpr std::uint8_t comPins      = 0x12;
     };
 }   // namespace Oled
 
@@ -204,7 +231,7 @@ concept PanelContract = requires(P& p, std::uint32_t pages) {
     { P::Height } -> std::convertible_to<int>;
     { p.ready() } -> std::same_as<bool>;
     { p.failed() } -> std::same_as<bool>;
-    { p.handler() };
+    { p.turn() };
     { p.pageRam() };
     { p.pagesChanged(pages) };
 };
@@ -219,7 +246,7 @@ namespace BusTest {
         static constexpr std::size_t   QueueDepth = 8;
     };
 
-    template<typename C, typename Cfg = DefaultConfig>
+    template<typename C, typename Cfg = Kvasir::Engine::DefaultConfig>
     using RDev = Device<RatedBus, FakeClock, C, Cfg>;
 
     using Bh   = RDev<Chips::Bh1750>;       // 0x23, receive(2)        @ 200 ms
@@ -324,12 +351,11 @@ void bus() {
     Sensors sensors{};
     Panels  panels{};
 
-    testCase("Bus: the load is the cyclic traffic as a fraction of the clock");
+    I2cCase testcase{"Bus: the load is the cyclic traffic as a fraction of the clock"};
     checkNear(Sensors::busLoad(), 810.0 / 400000.0, 1e-12, "810 bits/s on a 400 kHz bus");
     check(Sensors::busLoad() < 0.01, "four slow sensors are nowhere near saturating the bus");
 
-    testCase("Bus: one handler() turn drives every device on it");
-    fresh();
+    testcase.next("Bus: one turn() drives every device on it");
     Wiring wiring{};
     FakeBus::respond = std::ref(wiring);
     runFor(sensors, 400ms);
@@ -338,12 +364,12 @@ void bus() {
         for(auto const& t : FakeBus::log) {
             if(t.isBus() && t.address == addr) { seen = true; }
         }
-        check(seen, "every device got traffic from the one handler() call");
+        check(seen, "every device got traffic from the one turn() call");
     }
     checkEq(sensors.answeringCount(), std::size_t{4}, "all four acknowledged");
     checkEq(sensors.errors(), 0U, "and none of them faulted");
 
-    testCase("Bus: forEach walks every device once, in declaration order");
+    testcase.step("Bus: forEach walks every device once, in declaration order");
     {
         std::vector<std::uint8_t> seen{};
         sensors.forEach(
@@ -353,17 +379,16 @@ void bus() {
           "the four addresses, in the order the Bus was written");
     }
 
-    testCase("Bus: get by type and by index name the same device");
+    testcase.step("Bus: get by type and by index name the same device");
     check(&sensors.get<Bh>() == &sensors.get<0>(), "Bh1750 is device 0");
     check(&sensors.get<Sht>() == &sensors.get<3>(), "SHT3x is device 3");
     check(static_cast<void const*>(&sensors.get<Bh>())
             != static_cast<void const*>(&sensors.get<Veml>()),
           "different devices are different objects");
 
-    testCase("Bus: a device inside it drives a MonoPanel");
-    fresh();
+    testcase.next("Bus: a device inside it drives a MonoPanel");
     FakeBus::respond = [](std::uint8_t, std::span<std::byte const>, std::span<std::byte>) {
-        return FakeBus::Result::succeeded;   // the panel is write-only; it only has to ACK
+        return FakeBus::Result::ok;   // the panel is write-only; it only has to ACK
     };
     check(BusPanel::Width == 128 && BusPanel::Height == 32, "the geometry comes off the chip");
     auto busPanel = Kvasir::I2C::monoPanel<OledWide>(panels);
@@ -377,7 +402,6 @@ void bus() {
     check(hasWrite({0x00, 0xB1, 0x00, 0x10}, before), "page 1's window went out, and only it");
     check(!hasWrite({0x00, 0xB2, 0x00, 0x10}, before),
           "page 2 was not touched, so it was not sent");
-    if(failures != 0) { dump(); }
 }
 
 // -- a Bus's segments, counters and rates, and the gaps between samples -------------------------
@@ -387,20 +411,30 @@ namespace BusMetaTest {
     using MuxA = Dev<Chips::Tca9548a>;
 
     struct MuxBConfig {
-        static constexpr Address7 Address = 0x74;
+        static constexpr Address7 address = 0x74;
     };
 
     using MuxB = Device<FakeBus, FakeClock, Chips::Tca9548a, MuxBConfig>;
 
     template<typename C, typename M, std::uint8_t Ch>
-    using Behind = Device<FakeBus, FakeClock, C, DefaultConfig, NoReset, MuxGate<M, Ch>>;
+    using Behind = Device<FakeBus,
+                          FakeClock,
+                          C,
+                          Kvasir::Engine::DefaultConfig,
+                          Kvasir::NoReset,
+                          MuxGate<M, Ch>>;
 
     using Front = Dev<Chips::Bh1750>;
     using A2    = Behind<Chips::Sht3x, MuxA, 2>;
     using B5    = Behind<Chips::Sht3x, MuxB, 5>;
     // At its other address: a part in front of the switches is on every channel's wire, so the
     // one on channel 7 cannot have the address of `Front`.
-    using A7  = Device<FakeBus, FakeClock, Chips::Bh1750, At<0x5C>, NoReset, MuxGate<MuxA, 7>>;
+    using A7  = Device<FakeBus,
+                       FakeClock,
+                       Chips::Bh1750,
+                       Kvasir::Engine::At<0x5C>,
+                       Kvasir::NoReset,
+                       MuxGate<MuxA, 7>>;
     using Two = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxA, Front, A2, MuxB, B5, A7>;
 
     static_assert(Two::Switches == 2 && Two::Segments == 17,
@@ -430,13 +464,14 @@ namespace BusMetaTest {
         struct Data {
             static constexpr auto       Period      = std::chrono::milliseconds{10};
             static constexpr bool       Timestamped = true;
-            static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            static constexpr std::array Steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
-            [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
         };
 
-        using Reads = List<Data>;
+        using Reads = Kvasir::Engine::List<Data>;
     };
 
     /// What a device offers for Stamped::Data (the timestamps-off test).
@@ -452,8 +487,7 @@ namespace BusMetaTest {
 void busMetadata() {
     using namespace BusMetaTest;
 
-    testCase("Bus: counts per segment, a device by index, the counters in one snapshot");
-    fresh();
+    I2cCase    testcase{"Bus: counts per segment, a device by index, the counters in one snapshot"};
     SwitchWire wiring{
       .switches = {MuxA::Address, MuxB::Address},
       .behind   = crcZeros
@@ -499,7 +533,7 @@ void busMetadata() {
           "its samples");
     checkEq(counters[0].writes, bus->get<MuxA>().writes(), "the switch's writes");
 
-    testCase("Bus: a Broadcast is not a part");
+    testcase.step("Bus: a Broadcast is not a part");
     {
         using Call     = BusTest::RDev<Chips::GeneralCall>;
         using WithCall = Kvasir::I2C::Bus<BusTest::RatedBus, FakeClock, BusTest::Bh, Call>;
@@ -513,7 +547,8 @@ void busMetadata() {
             for(int i = 0; i < n; ++i) { turn(*withCall); }
         };
         turns(500);
-        check(withCall->get<Call>().link() == Link::starting, "nothing asked of the call yet");
+        check(withCall->get<Call>().link() == Kvasir::Link::starting,
+              "nothing asked of the call yet");
         checkEq(withCall->answeringCount(), std::size_t{1}, "one of one part answering");
         auto const c = withCall->counts();
         checkEq(c.parts[0], 1, "the call is in no segment's parts");
@@ -524,8 +559,7 @@ void busMetadata() {
         checkEq(withCall->answeringCount(), std::size_t{1}, "and is still not counted");
     }
 
-    testCase("BusRates: a part's rate against its nominal, and its segment's");
-    fresh();
+    testcase.next("BusRates: a part's rate against its nominal, and its segment's");
     FakeBus::respond   = zeros;
     auto       sensors = std::make_unique<BusTest::Sensors>();
     auto const run     = [&](int turns) {
@@ -542,14 +576,14 @@ void busMetadata() {
     check(rates.segment(0).parts >= 1 && rates.segment(0).rate >= bh.rate,
           "its segment adds it up");
 
-    testCase("takeGaps: the longest gap between a timestamped group's samples, and the late ones");
-    fresh();
+    testcase.next(
+      "takeGaps: the longest gap between a timestamped group's samples, and the late ones");
     FakeBus::respond = zeros;
     Dev<Stamped> st{};
     check(runUntil(st, [&] { return st.samples() >= 5; }, 200ms), "sampling");
     static_cast<void>(st.takeGaps<Stamped::Data>());
     for(int i = 0; i < 35; ++i) {   // 35 ms in which the bus completes nothing
-        st.handler();
+        st.turn();
         FakeClock::current += 1ms;
     }
     auto const before = st.samples();
@@ -560,15 +594,15 @@ void busMetadata() {
     check(runUntil(st, [&] { return st.samples() >= before + 10; }, 200ms), "and on");
     checkEq(st.takeGaps<Stamped::Data>().late, 0U, "none since: taken and cleared");
 
-    testCase("timestamps off: a timestamped group samples on, without the time and its gaps");
-    fresh();
+    testcase.next("timestamps off: a timestamped group samples on, without the time and its gaps");
     FakeBus::respond = zeros;
-    using NoStampBus = Kvasir::I2C::WithFeatures<FakeBus,
-                                                 Kvasir::I2C::EngineFeatures{.switchable  = true,
-                                                                             .presence    = true,
-                                                                             .inFlightNet = true,
-                                                                             .timestamps  = false}>;
-    using Unstamped  = Kvasir::I2C::Device<NoStampBus, FakeClock, Stamped>;
+    using NoStampBus
+      = Kvasir::Engine::WithFeatures<FakeBus,
+                                     Kvasir::Engine::EngineFeatures{.switchable  = true,
+                                                                    .presence    = true,
+                                                                    .inFlightNet = true,
+                                                                    .timestamps  = false}>;
+    using Unstamped = Kvasir::I2C::Device<NoStampBus, FakeClock, Stamped>;
     static_assert(!BusMetaTest::HasGaps<Unstamped>, "no gaps without timestamps");
     static_assert(!BusMetaTest::HasStamp<Unstamped>, "and no time");
     static_assert(BusMetaTest::HasUnchanged<Unstamped>, "the unchanged count stays");
@@ -606,16 +640,16 @@ namespace TwoBuses {
             for(std::size_t i = 0; i < recv.size() && i < reading.size(); ++i) {
                 recv[i] = static_cast<std::byte>(reading[i]);
             }
-            return FakeBusResult::succeeded;
+            return FakeBusResult::ok;
         }
     };
 }   // namespace TwoBuses
 
 void twoBuses() {
     using namespace TwoBuses;
-    testCase("two buses: a Bus on I2C0 and one on I2C1 run side by side, transcripts apart");
-    fresh();
-    fresh<I2c0, I2c1>();
+    // void: the untagged bus, which must see nothing
+    I2cCaseOn<void, I2c0, I2c1> const testcase{
+      "two buses: a Bus on I2C0 and one on I2C1 run side by side, transcripts apart"};
     Wire0::respond = Lux{
       {0x04, 0xB0}
     };   // 1200 counts
@@ -660,12 +694,8 @@ void twoBuses() {
           "I2C0's writes are the one BH1750's bring-up");
     check(hasWrite<I2c1>({0x01}) && hasWrite<I2c1>({0x10}), "and I2C1 has its own");
     check(FakeBus::log.empty() && FakeBus::submitted == 0, "and the untagged bus saw nothing");
-    if(failures != 0) {
-        dump<I2c0>();
-        dump<I2c1>();
-    }
 
-    testCase("two buses: a fault on one leaves the other alone");
+    testcase.step("two buses: a fault on one leaves the other alone");
     Wire0::respond         = alwaysNak;
     auto const rightBefore = right.get<0>().samples();
     runFor<I2c0, I2c1>(all(left, right), 1s);
@@ -682,21 +712,26 @@ namespace {
 void deviceSet() {
     using namespace BusTest;
     using PairBus = Kvasir::I2C::Bus<RatedBus, FakeClock, Bh, Veml>;
-    using Parts   = Kvasir::I2C::DeviceSet<PairBus, Sht>;
+    using Parts   = Kvasir::Engine::DeviceSet<PairBus, Sht>;
+    static_assert(Kvasir::Engine::BusLike<PairBus> && !Kvasir::Engine::WrapsDevice<PairBus>
+                    && !Kvasir::Engine::DeviceLike<PairBus>,
+                  "a Bus is a member by its shape (DeviceSet.hpp)");
+    static_assert(Kvasir::Engine::DeviceLike<Sht> && !Kvasir::Engine::BusLike<Sht>
+                    && !Kvasir::Engine::WrapsDevice<Sht>,
+                  "and a Device by its own");
     static_assert(Parts::SetOpsT::CoreCount == 3,
                   "one set over the Bus's chips and the lone part's");
     static_assert(
       std::is_same_v<Parts::SetOpsT,
-                     Kvasir::I2C::detail::SetOpsFor<Parts::PortT, FakeClock, Bh, Veml, Sht>>,
+                     Kvasir::Engine::detail::SetOpsFor<Parts::PortT, FakeClock, Bh, Veml, Sht>>,
       "the same set as the three devices on one Bus: one engine");
     static_assert(Parts::SetOpsT::Flags
-                    == Kvasir::I2C::detail::SetFlags{.anyGate = false, .anyReset = false},
+                    == Kvasir::Engine::detail::SetFlags{.anyGate = false, .anyReset = false},
                   "no gate, no reset line: the engine's paths for them are left out");
     static_assert(BusMetaTest::Two::Flags.anyGate, "a Bus behind a switch has gates");
 
-    testCase("DeviceSet: a Bus and a part on its own driven as one device set");
-    fresh();
-    Wiring wiring{};
+    I2cCase const testcase{"DeviceSet: a Bus and a part on its own driven as one device set"};
+    Wiring        wiring{};
     FakeBus::respond = std::ref(wiring);
     Parts parts{};
     checkEq(parts.get<Sht>().setIndex_, std::uint8_t{2}, "the lone part is the set's third chip");

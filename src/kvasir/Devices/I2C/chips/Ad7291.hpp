@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <algorithm>
@@ -86,17 +87,17 @@ struct Ad7291 {
           (static_cast<unsigned>(mirrored(ChannelMask)) << 8)
           | (TempSense == Ad7291Detail::Tsense::on ? 0x80U : 0x00U) | 0x20U);
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, value);
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 2});
         }
     };
 
     struct Voltages {
         static constexpr auto       Period = std::chrono::milliseconds{20};
         static constexpr std::array Steps{
-          Step::read({.reg = 0x01, .count = Channels * 2, .offset = 0})};
+          Engine::Step::read({.reg = 0x01, .count = Channels * 2, .offset = 0})};
 
         struct Sample {
             /// Per channel: the 12-bit code, and whether this burst carried it.
@@ -133,7 +134,8 @@ struct Ad7291 {
     /// Only meaningful with `TempSense` on; without it the part never converts the channel.
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{Step::read({.reg = 0x02, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x02, .count = 2, .offset = 0})};
 
         struct Sample {
             CentiDegC temperature{};   ///< 0.01 degC
@@ -142,16 +144,16 @@ struct Ad7291 {
         /// D15..D12 are the channel address (1000 for TSENSE), D11..D0 the reading, two's
         /// complement with bit 11 as the sign, so the 12-bit field is sign-extended from bit
         /// 11. 1 LSB is 0.25 degC. A word without the TSENSE address is not a temperature.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const w = data.be16(0);
-            if((w >> 12) != 0x8U) { return Outcome<Sample>::reject(); }
+            if((w >> 12) != 0x8U) { return Engine::Outcome<Sample>::reject(); }
             auto const value = Bytes::signExtend(w & 0x0FFFU, 12);
-            return Outcome<Sample>::ok({Units::centiDegC(value * 25)});
+            return Engine::Outcome<Sample>::ok({Units::centiDegC(value * 25)});
         }
     };
 
-    using Reads  = List<Voltages, Temperature>;
-    using Writes = List<Command>;
+    using Reads  = Engine::List<Voltages, Temperature>;
+    using Writes = Engine::List<Command>;
 };
 
 }   // namespace Kvasir::I2C::Chips

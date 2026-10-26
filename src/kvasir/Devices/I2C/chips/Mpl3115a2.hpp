@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -28,22 +29,22 @@ struct Mpl3115a2 {
     static constexpr std::string_view Name = "MPL3115A2";
     /// NXP MPL3115A2. MPL3115A2.md:670, :969: WHO_AM_I (0x0C) is 0xC4.
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0C, 1, true, 0xFF, 0xC4},
+      Engine::RegisterCheck{"who-am-i", 0x0C, 1, true, 0xFF, 0xC4},
     };
     static constexpr Address7                Address = 0x60;
     static constexpr std::array<Address7, 1> Addresses{0x60};
     static constexpr std::size_t             RegisterBytes = 1;
 
     static constexpr std::array Init{
-      Step::write({.reg     = 0x26,
-                   .payload = {0x04},
-                   .delay   = std::chrono::milliseconds{50},
-                   .mayNak  = true}),   // RST
-      Step::write({.reg = 0x13, .payload = {0x07}}),
-      Step::write(
+      Engine::Step::write({.reg     = 0x26,
+                           .payload = {0x04},
+                           .delay   = std::chrono::milliseconds{50},
+                           .mayNak  = true}),   // RST
+      Engine::Step::write({.reg = 0x13, .payload = {0x07}}),
+      Engine::Step::write(
         {.reg = 0x26, .payload = {0x00}}),   // standby first: OS is writable only with SBYB clear
-      Step::write({.reg = 0x26, .payload = {0x38}}),
-      Step::write({.reg = 0x26, .payload = {0x39}}),
+      Engine::Step::write({.reg = 0x26, .payload = {0x38}}),
+      Engine::Step::write({.reg = 0x26, .payload = {0x39}}),
     };
 
     struct State {
@@ -59,9 +60,10 @@ struct Mpl3115a2 {
 
     struct Measurement {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0}),
-                                          Step::check(std::chrono::milliseconds{100}),
-                                          Step::read({.reg = 0x01, .count = 5, .offset = 1})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
+          Engine::Step::check(std::chrono::milliseconds{100}),
+          Engine::Step::read({.reg = 0x01, .count = 5, .offset = 1})};
 
         [[nodiscard]] static constexpr bool ready(Bytes data) { return (data.u8(0) & 0x08U) != 0; }
 
@@ -71,19 +73,19 @@ struct Mpl3115a2 {
         };
 
         /// Five 0xFF bytes would be 262143.75 Pa at -0.0625 degC: a floating bus, not air.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             if(data.be24(1) == 0xFFFFFFU && data.be16(4) == 0xFFFF) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             Sample sample{};
             sample.pressure = Units::pascal((data.be24(1) >> 4) / 4);   // Q18.2
             sample.temperature
               = Units::centiDegC(static_cast<std::int32_t>(data.s16be(4) >> 4) * 100 / 16);
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
-    using Reads = List<Measurement>;
+    using Reads = Engine::List<Measurement>;
 };
 
 }   // namespace Kvasir::I2C::Chips

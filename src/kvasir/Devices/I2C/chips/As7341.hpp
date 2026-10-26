@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -88,32 +89,33 @@ namespace As7341Detail {
 /// Fixed address 0x39 -- which the APDS-9960 also uses, so the two cannot share a bus.
 /// The Sample is raw counts with no lux, so the gain written at run time (GainSetting)
 /// needs no scale here.
-template<As7341Detail::Gain Gain = As7341Detail::Gain::x256, typename Timing = DefaultTiming>
+template<As7341Detail::Gain Gain = As7341Detail::Gain::x256,
+         typename Timing         = Engine::DefaultTiming>
 struct As7341 {
     static constexpr std::string_view Name = "AS7341";
     /// ams AS7341. AS7341.md:1363..1370, ID register 0x92: part number 001001b in 7:2.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x92, 1, true, 0xFC, 0x24},
+      Engine::RegisterCheck{"id", 0x92, 1, true, 0xFC, 0x24},
     };
     static constexpr Address7                Address = 0x39;
     static constexpr std::array<Address7, 1> Addresses{0x39};
     static constexpr std::size_t             RegisterBytes = 1;
 
-    static constexpr bool ByTime  = requires { Timing::IntegrationTime; };
-    static constexpr bool ByCodes = requires { Timing::Atime; } || requires { Timing::Astep; };
+    static constexpr bool ByTime  = requires { Timing::integrationTime; };
+    static constexpr bool ByCodes = requires { Timing::atime; } || requires { Timing::astep; };
 
     static_assert(!(ByTime && ByCodes),
-                  "Timing sets IntegrationTime or Atime and Astep, not both");
-    static_assert(!ByCodes || (requires { Timing::Atime; } && requires { Timing::Astep; }),
-                  "Timing sets Atime and Astep together");
+                  "Timing sets integrationTime or atime and astep, not both");
+    static_assert(!ByCodes || (requires { Timing::atime; } && requires { Timing::astep; }),
+                  "Timing sets atime and astep together");
 
     static constexpr As7341Detail::Codes Codes = [] {
         if constexpr(ByCodes) {
-            return As7341Detail::Codes{static_cast<std::int64_t>(Timing::Atime),
-                                       static_cast<std::int64_t>(Timing::Astep)};
+            return As7341Detail::Codes{static_cast<std::int64_t>(Timing::atime),
+                                       static_cast<std::int64_t>(Timing::astep)};
         } else if constexpr(ByTime) {
             return As7341Detail::codesFor(
-              Kvasir::asDuration<std::chrono::microseconds>(Timing::IntegrationTime));
+              Kvasir::asDuration<std::chrono::microseconds>(Timing::integrationTime));
         } else {
             return As7341Detail::codesFor(std::chrono::milliseconds{50});
         }
@@ -122,7 +124,7 @@ struct As7341 {
     static_assert(Codes.atime >= 0 && Codes.atime <= 255,
                   "ATIME is one byte");
     static_assert(Codes.astep >= 0,
-                  "Timing::IntegrationTime is below half the shortest step (1.39 us)");
+                  "Timing::integrationTime is below half the shortest step (1.39 us)");
     static_assert(Codes.atime + Codes.astep > 0,
                   "ATIME and ASTEP may not both be 0 (datasheet, ATIME register)");
     static_assert(Codes.astep <= 65534,
@@ -159,24 +161,22 @@ struct As7341 {
 
     static constexpr auto StartupDelay = std::chrono::milliseconds{10};
 
+    // clang-format off
     static constexpr std::array Init{
       // CFG0: REG_BANK 0, so every register from 0x80 up is reachable -- earlier firmware may
       // have left it at 1 for 0x60..0x74 (CFG0 register) -- and LOW_POWER off
-      Step::write({.reg = 0xA9, .payload = {0x00}}
-      ),
-      Step::write({.reg = 0x80, .payload = {Pon}}
-      ), // power on
-      Step::write({.reg = 0x81, .payload = {Atime}}
-      ),
-      Step::write({.reg     = 0xCA,
-                   .payload = {static_cast<std::uint8_t>(Astep & 0xFF),
-                               static_cast<std::uint8_t>(Astep >> 8)}}
-      ), // ASTEP, low then high
-      Step::write({.reg     = 0xAA,
-                   .payload = {static_cast<std::uint8_t>(Gain)},
-                   .delay   = std::chrono::milliseconds{10}}
-      ), // CFG1: AGAIN
+      Engine::Step::write({.reg = 0xA9, .payload = {0x00}}),
+      Engine::Step::write({.reg = 0x80, .payload = {Pon}}),   // power on
+      Engine::Step::write({.reg = 0x81, .payload = {Atime}}),
+      Engine::Step::write(
+        {.reg     = 0xCA,
+         .payload = {static_cast<std::uint8_t>(Astep & 0xFF),
+                     static_cast<std::uint8_t>(Astep >> 8)}}),   // ASTEP, low then high
+      Engine::Step::write({.reg     = 0xAA,
+                           .payload = {static_cast<std::uint8_t>(Gain)},
+                           .delay   = std::chrono::milliseconds{10}}),   // CFG1: AGAIN
     };
+    // clang-format on
 
     struct State {
         std::uint8_t deviceId{};
@@ -204,21 +204,21 @@ struct As7341 {
         static constexpr std::uint8_t Status2At = 26;
 
         static constexpr auto Steps = [] {
-            std::array<Step, 20> s{};
-            std::size_t          i    = 0;
-            auto const           pass = [&](std::array<std::uint8_t, 20> const& smux,
-                                            std::uint8_t                        into,
-                                            std::uint8_t                        passIndex) {
-                s[i++] = Step::write(
+            std::array<Engine::Step, 20> s{};
+            std::size_t                  i    = 0;
+            auto const                   pass = [&](std::array<std::uint8_t, 20> const& smux,
+                                                    std::uint8_t                        into,
+                                                    std::uint8_t                        passIndex) {
+                s[i++] = Engine::Step::write(
                   {.reg = 0x80, .payload = {Pon}});   // SP_EN low while the SMUX changes
-                s[i++] = Step::write(
+                s[i++] = Engine::Step::write(
                   {.reg = 0xAF, .payload = {0x10}});   // CFG6: SMUX_CMD = write config
-                s[i++] = Step::write({
+                s[i++] = Engine::Step::write({
                   .reg = 0x00,
                   .payload
                   = {smux[0], smux[1], smux[2], smux[3], smux[4], smux[5], smux[6], smux[7]}
                 });
-                s[i++] = Step::write({
+                s[i++] = Engine::Step::write({
                   .reg     = 0x08,
                   .payload = {smux[8],
                               smux[9],
@@ -229,26 +229,26 @@ struct As7341 {
                               smux[14],
                               smux[15]}
                 });
-                s[i++] = Step::write({
+                s[i++] = Engine::Step::write({
                   .reg     = 0x10,
                   .payload = {smux[16], smux[17], smux[18], smux[19]}
                 });
-                s[i++] = Step::write({.reg     = 0x80,
-                                      .payload = {static_cast<std::uint8_t>(Pon | SmuxEn)},
-                                      .delay   = std::chrono::milliseconds{5}});
-                s[i++] = Step::read(
+                s[i++] = Engine::Step::write({.reg     = 0x80,
+                                              .payload = {static_cast<std::uint8_t>(Pon | SmuxEn)},
+                                              .delay   = std::chrono::milliseconds{5}});
+                s[i++] = Engine::Step::read(
                   {.reg    = 0x80,
                    .count  = 1,
                    .offset = static_cast<std::uint8_t>(EnableAt + passIndex)});   // SMUXEN
-                s[i++] = Step::write(
+                s[i++] = Engine::Step::write(
                   {.reg     = 0x80,
                    .payload = {static_cast<std::uint8_t>(Pon | SpEn)},
                    .delay   = AutoZeroWait + IntegrationWait + std::chrono::milliseconds{10}});
-                s[i++] = Step::read(
+                s[i++] = Engine::Step::read(
                   {.reg    = 0xA3,
                    .count  = 1,
                    .offset = static_cast<std::uint8_t>(Status2At + passIndex)});   // AVALID
-                s[i++] = Step::read({.reg = 0x95, .count = 12, .offset = into});
+                s[i++] = Engine::Step::read({.reg = 0x95, .count = 12, .offset = into});
             };
             pass(SmuxLow, 0, 0);
             pass(SmuxHigh, 12, 1);
@@ -270,12 +270,12 @@ struct As7341 {
             [[nodiscard]] constexpr std::uint16_t red() const { return f[6]; }
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             bool const smuxDone = ((data.u8(EnableAt) | data.u8(EnableAt + 1)) & SmuxEn) == 0;
             bool const valid
               = (data.u8(Status2At) & 0x40U) != 0 && (data.u8(Status2At + 1) & 0x40U) != 0;
             if(!smuxDone || !valid) {
-                return Outcome<Sample>::retry(std::chrono::milliseconds{10});
+                return Engine::Outcome<Sample>::retry(std::chrono::milliseconds{10});
             }
             Sample sample{};
             for(std::size_t c = 0; c < 4; ++c) {
@@ -285,7 +285,7 @@ struct As7341 {
             // clear and NIR are measured in both passes; the second is the fresher one
             sample.clear = data.le16(20);
             sample.nir   = data.le16(22);
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -295,15 +295,15 @@ struct As7341 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Gain;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0xAA, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0xAA, .offset = 0, .count = 1});
         }
     };
 
-    using Reads  = List<Spectrum>;
-    using Writes = List<GainSetting>;
+    using Reads  = Engine::List<Spectrum>;
+    using Writes = Engine::List<GainSetting>;
 };
 
 }   // namespace Kvasir::I2C::Chips

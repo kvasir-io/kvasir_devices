@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,7 +24,7 @@ namespace Kvasir::I2C::Chips {
 /// the end of the page the address is in and the end of the memory (`WritePage::fits`).
 /// 0x50..0x57 by A2..A0.
 ///
-/// The write cycle is `Timing::WriteTime` long (10 ms, the 2.7 V and 5 V tWR; a part run at
+/// The write cycle is `Timing::writeTime` long (10 ms, the 2.7 V and 5 V tWR; a part run at
 /// 1.8 V needs 20 ms: `struct Slow { static constexpr auto WriteTime = 20ms; };`). A part
 /// still in its write cycle does not acknowledge its address ("All inputs are disabled during
 /// this write cycle"), so a NAK is also put back on the wire a few times, 5 ms apart, rather
@@ -35,25 +37,19 @@ namespace Kvasir::I2C::Chips {
 template<std::size_t PageBytes    = 32,
          std::size_t AddressBytes = 2,
          std::size_t MemoryBytes  = 4096,
-         typename Timing          = DefaultTiming>
+         typename Timing          = Engine::DefaultTiming>
 struct At24cxx {
     static constexpr std::string_view Name          = "AT24Cxx";
     static constexpr Address7         Address       = 0x50;
     static constexpr std::size_t      RegisterBytes = AddressBytes;
 
-    static constexpr std::chrono::milliseconds WriteTime = [] {
-        if constexpr(requires { Timing::WriteTime; }) {
-            return Kvasir::asDuration(Timing::WriteTime);
-        } else {
-            return std::chrono::milliseconds{10};
-        }
-    }();
+    static constexpr std::chrono::milliseconds WriteTime
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, writeTime, std::chrono::milliseconds{10}));
 
     static constexpr std::uint8_t WakeRetries    = 4;
     static constexpr auto         WakeRetryDelay = std::chrono::milliseconds{5};
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57};
+    static constexpr auto Addresses = addressRun<0x50, 8>();
 
     static_assert(AddressBytes == 1 || AddressBytes == 2,
                   "the word address is one or two bytes");
@@ -80,7 +76,7 @@ struct At24cxx {
         }
 
         static constexpr std::array Steps{
-          Step::readIndirect({.regOffset = 0, .count = PageBytes, .offset = 2})};
+          Engine::Step::readIndirect({.regOffset = 0, .count = PageBytes, .offset = 2})};
 
         struct Sample {
             std::uint16_t                       address{};
@@ -121,17 +117,17 @@ struct At24cxx {
             return static_cast<std::uint8_t>(n);
         }
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             auto const n = fits(value);
             for(std::size_t i = 0; i < n; ++i) { buffer[i] = std::byte{value.data[i]}; }
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = value.address, .offset = 0, .count = n, .delay = WriteTime});
         }
     };
 
-    using Reads  = List<ReadPage>;
-    using Writes = List<WritePage>;
+    using Reads  = Engine::List<ReadPage>;
+    using Writes = Engine::List<WritePage>;
 };
 
 using At24c32 = At24cxx<32, 2, 4096>;

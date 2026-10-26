@@ -34,7 +34,12 @@ namespace {
 using MuxDev = Device<FakeBus, FakeClock, Chips::Tca9548a>;
 
 template<typename C, std::uint8_t Ch>
-using On = Device<FakeBus, FakeClock, C, DefaultConfig, NoReset, MuxGate<MuxDev, Ch>>;
+using On = Device<FakeBus,
+                  FakeClock,
+                  C,
+                  Kvasir::Engine::DefaultConfig,
+                  Kvasir::NoReset,
+                  MuxGate<MuxDev, Ch>>;
 
 /// A part that is always due: a one-byte register read every millisecond.
 struct BusyChip {
@@ -44,13 +49,14 @@ struct BusyChip {
 
     struct Data {
         static constexpr auto       Period = std::chrono::milliseconds{1};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
         using Sample = std::uint8_t;
 
-        [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }
+        [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
     };
 
-    using Reads = List<Data>;
+    using Reads = Kvasir::Engine::List<Data>;
 };
 
 using Light = Device<FakeBus, FakeClock, Chips::Bh1750>;   // 0x23, in front of the switch
@@ -78,8 +84,8 @@ struct Wiring {
     std::uint8_t              switchValue{};
     bool                      switchAnswers{true};
     bool                      switchFaults{};   ///< every transaction to it is a bus fault
-    std::vector<Probe>        probes{};
-    std::vector<std::uint8_t> shtReads{};   ///< the switch at every SHT4x result read
+    std::vector<Probe>        probes;
+    std::vector<std::uint8_t> shtReads;   ///< the switch at every SHT4x result read
 
     FakeBus::Result operator()(std::uint8_t               address,
                                std::span<std::byte const> sent,
@@ -88,21 +94,21 @@ struct Wiring {
         auto const open   = [&](unsigned ch) { return ((switchValue >> ch) & 1U) != 0; };
         auto const answer = [&](bool present) {
             if(probe) { probes.push_back({address, switchValue, present}); }
-            if(!present) { return FakeBus::Result::notAcknowledged; }
+            if(!present) { return FakeBus::Result::nack; }
             // Sensirion words of zero with their CRC, which the other parts do not mind.
             for(std::size_t i = 0; i < recv.size(); ++i) {
                 recv[i] = std::byte{static_cast<std::uint8_t>(i % 3 == 2 ? 0x81 : 0x00)};
             }
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         };
         if(address == MuxDev::Address) {
             // The switch: a write sets it, and it answers the engine's read-back with its
             // control byte -- which is not a probe of the scan's.
-            if(!switchAnswers) { return FakeBus::Result::notAcknowledged; }
+            if(!switchAnswers) { return FakeBus::Result::nack; }
             if(switchFaults) { return FakeBus::Result::failed; }
             if(!sent.empty()) { switchValue = static_cast<std::uint8_t>(sent[0]); }
             for(auto& b : recv) { b = std::byte{switchValue}; }
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         }
         if(address == 0x44 && recv.size() == 6) { shtReads.push_back(switchValue); }
         switch(address) {
@@ -120,7 +126,7 @@ struct Rig {
     Wiring                wiring{};
     std::unique_ptr<Wire> bus = std::make_unique<Wire>();
     MuxArbiter            arbiter{};
-    std::unique_ptr<Scan> scan{};
+    std::unique_ptr<Scan> scan;
     int                   turns{};
 
     Rig() {
@@ -139,11 +145,11 @@ struct Rig {
     /// One loop turn: the parts (or only the switch, before they start), then the scan.
     void turn(bool parts) {
         if(parts) {
-            bus->handler();
+            bus->turn();
         } else {
-            bus->get<MuxDev>().handler();
+            bus->get<MuxDev>().turn();
         }
-        scan->handler();
+        scan->turn();
         FakeBus::complete();
         FakeClock::current += 1ms;
         ++turns;
@@ -160,7 +166,8 @@ struct Rig {
 };
 
 void whileTheyRun() {
-    testCase("BusScan: among running parts, every segment in order, their addresses left alone");
+    Case const testcase{
+      "BusScan: among running parts, every segment in order, their addresses left alone"};
     Rig rig{};
     for(int i = 0; i < 300; ++i) { rig.turn(true); }
     check(rig.bus->get<Sht>().answering() && rig.bus->get<Light>().answering(), "the parts are up");
@@ -206,8 +213,7 @@ void whileTheyRun() {
         seen[segment]      = true;
     }
     check(inOrder, "every probe went out with the switch on the segment being scanned, in order");
-    check(std::all_of(seen.begin(), seen.end(), [](bool s) { return s; }),
-          "and every segment was probed");
+    check(std::ranges::all_of(seen, [](bool s) { return s; }), "and every segment was probed");
 
     bool shtOpen = !rig.wiring.shtReads.empty();
     for(auto const v : rig.wiring.shtReads) { shtOpen = shtOpen && v == 0x04; }
@@ -215,7 +221,7 @@ void whileTheyRun() {
     checkEq(rig.bus->get<Sht>().errors(), 0U, "the SHT4x lost nothing to the scan");
     check(busyReads * 10U >= static_cast<unsigned>(scanTurns),
           "the always-due part kept reading through it");
-    if(failures != 0) {
+    if(testcase.failed()) {
         std::printf("    %d turns, %zu probes, %u reads of the always-due part\n",
                     scanTurns,
                     rig.wiring.probes.size(),
@@ -246,7 +252,7 @@ void withoutTheSwitch() {
 
 /// A scan that gives up on a switch sooner than ScanDefaults.
 struct QuickScan {
-    static constexpr auto SelectTimeout = std::chrono::milliseconds{50};
+    static constexpr auto selectTimeout = std::chrono::milliseconds{50};
 };
 
 static_assert(BusScan<Wire,
@@ -263,7 +269,7 @@ void aSwitchThatIsNeverSet() {
       "selectTimeout");
     Rig rig{};
     rig.wiring.switchFaults = true;
-    rig.scan->selectTimeout(50ms);
+    rig.scan->setSelectTimeout(50ms);
     auto const t0 = FakeClock::now();
     rig.scan->start(Scan::Owned::probe);
     check(rig.runScan(false, 30000), "the scan finished");
@@ -293,7 +299,7 @@ void plainBus() {
 
 /// A second switch at 0x74, and a part behind it at another address.
 struct MuxBConfig {
-    static constexpr Address7 Address = 0x74;
+    static constexpr Address7 address = 0x74;
 };
 
 using MuxB = Device<FakeBus, FakeClock, Chips::Tca9548a, MuxBConfig>;
@@ -303,7 +309,12 @@ struct BusyChipB : BusyChip {
     static constexpr Address7         Address = 0x62;
 };
 
-using BusyB   = Device<FakeBus, FakeClock, BusyChipB, DefaultConfig, NoReset, MuxGate<MuxB, 1>>;
+using BusyB   = Device<FakeBus,
+                       FakeClock,
+                       BusyChipB,
+                       Kvasir::Engine::DefaultConfig,
+                       Kvasir::NoReset,
+                       MuxGate<MuxB, 1>>;
 using TwoWire = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, MuxB, Light, Sht, Busy, BusyB>;
 using TwoScan = BusScan<TwoWire>;
 
@@ -326,7 +337,7 @@ struct TwoSwitchWiring {
     std::uint8_t       a{};
     std::uint8_t       b{};
     bool               bAnswers{true};
-    std::vector<Probe> probes{};
+    std::vector<Probe> probes;
 
     FakeBus::Result operator()(std::uint8_t               address,
                                std::span<std::byte const> sent,
@@ -334,22 +345,22 @@ struct TwoSwitchWiring {
         bool const probe  = sent.empty() && recv.size() == 1;
         auto const answer = [&](bool present) {
             if(probe) { probes.push_back({address, a, b}); }
-            if(!present) { return FakeBus::Result::notAcknowledged; }
+            if(!present) { return FakeBus::Result::nack; }
             for(std::size_t i = 0; i < recv.size(); ++i) {
                 recv[i] = std::byte{static_cast<std::uint8_t>(i % 3 == 2 ? 0x81 : 0x00)};
             }
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         };
         if(address == MuxDev::Address) {
             if(!sent.empty()) { a = static_cast<std::uint8_t>(sent[0]); }
             for(auto& r : recv) { r = std::byte{a}; }   // the read-back, not a probe
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         }
-        if(address == MuxBConfig::Address) {
-            if(!bAnswers) { return FakeBus::Result::notAcknowledged; }
+        if(address == MuxBConfig::address) {
+            if(!bAnswers) { return FakeBus::Result::nack; }
             if(!sent.empty()) { b = static_cast<std::uint8_t>(sent[0]); }
             for(auto& r : recv) { r = std::byte{b}; }
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         }
         auto const onA = [&](unsigned ch) { return ((a >> ch) & 1U) != 0; };
         auto const onB = [&](unsigned ch) { return ((b >> ch) & 1U) != 0; };
@@ -372,7 +383,7 @@ struct TwoRig {
     std::unique_ptr<TwoWire> bus = std::make_unique<TwoWire>();
     MuxArbiter               arbiterA{};
     MuxArbiter               arbiterB{};
-    std::unique_ptr<TwoScan> scan{};
+    std::unique_ptr<TwoScan> scan;
 
     TwoRig() {
         FakeBus::reset();
@@ -400,12 +411,12 @@ struct TwoRig {
 
     void turn(bool parts) {
         if(parts) {
-            bus->handler();
+            bus->turn();
         } else {
-            bus->get<MuxDev>().handler();
-            bus->get<MuxB>().handler();
+            bus->get<MuxDev>().turn();
+            bus->get<MuxB>().turn();
         }
-        scan->handler();
+        scan->turn();
         FakeBus::complete();
         FakeClock::current += 1ms;
     }
@@ -436,13 +447,12 @@ void twoSwitches() {
                                        : 9U + static_cast<std::size_t>(std::countr_zero(p.b));
         seen[segment]      = true;
         owned              = owned || p.address == 0x23 || p.address == MuxDev::Address
-                          || p.address == MuxBConfig::Address || (p.address == 0x44 && (p.a & 0x04) != 0)
+                          || p.address == MuxBConfig::address || (p.address == 0x44 && (p.a & 0x04) != 0)
                           || (p.address == 0x61 && (p.a & 0x20) != 0)
                           || (p.address == 0x62 && (p.b & 0x02) != 0);
     }
     check(oneOpen, "no probe went out with more than one channel open across both switches");
-    check(std::all_of(seen.begin(), seen.end(), [](bool s) { return s; }),
-          "every segment of both was probed");
+    check(std::ranges::all_of(seen, [](bool s) { return s; }), "every segment of both was probed");
     check(!owned, "no probe of a part's address where the part is");
 }
 

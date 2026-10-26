@@ -1,12 +1,14 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace Kvasir::I2C::Chips {
@@ -15,37 +17,43 @@ namespace Kvasir::I2C::Chips {
 /// where the vendor's Arduino driver disagrees with the datasheet are noted below.
 ///
 /// Fixed address 0x34, one-byte pointer. IC type 0x03 reads 0x4A (the vendor driver's
-/// register and value: the datasheet's register list skips 0x02..0x03). This description covers the
+/// register and value: the datasheet's register list skips 0x02..0x03; see Identity). This description covers the
 /// *monitoring* half only -- what a battery display needs -- and deliberately not the rails:
 /// writing a DCDC or LDO voltage on a board whose regulators are already configured for its
 /// panel and PSRAM is a good way to brown something out, and nothing here needs to.
 struct Axp2101 {
-    static constexpr std::string_view        Name    = "AXP2101";
+    static constexpr std::string_view Name = "AXP2101";
+    /// IC type, register 0x03, reads 0x4A. Not in the datasheet: its register list (6.13.1,
+    /// i2c/axp2101.md l.1073-1075) goes from 0x01 to 0x04; register and value are the vendor
+    /// driver's (XPowersLib REG/AXP2101Constants.h l.5 and l.9, the check in
+    /// XPowersAXP2101.hpp l.3085). The engine reads it before anything is written: a part with
+    /// another identity at 0x34 gets nothing.
+    static constexpr std::array Identity{
+      Engine::RegisterCheck{"ic-type", 0x03, 1, true, 0xFF, 0x4A},
+    };
     static constexpr Address7                Address = 0x34;
     static constexpr std::array<Address7, 1> Addresses{0x34};
     static constexpr std::size_t             RegisterBytes = 1;
 
-    /// Read the IC type, then turn on the ADC channels the readings below come from:
+    /// Turn on the ADC channels the readings below come from (after the Identity):
     /// ADC_CHANNEL_CTRL 0x30 bit 0 battery voltage, bit 2 VBUS, bit 3 system, bit 4 die
     /// temperature; BAT_DET_CTRL 0x68 bit 0 is the battery-present detector. The vendor sets
     /// each of these bits read-modify-write; the whole byte is written here. Bit 1, the TS pin
     /// channel, is kept at its reset value 1 (6.13.2.29): the charger's thermistor protection
     /// measures through it. Bit 5, the general-purpose ADC, stays at its reset value 0.
     static constexpr std::array Init{
-      Step::read({.reg = 0x03, .count = 1, .offset = 0}),
-      Step::identify(),
-      Step::write({.reg = 0x30, .payload = {0x1F}}),
-      Step::write({.reg = 0x68, .payload = {0x01}, .delay = std::chrono::milliseconds{10}}),
+      Engine::Step::write({.reg = 0x30, .payload = {0x1F}}),
+      Engine::Step::write({.reg = 0x68, .payload = {0x01}, .delay = std::chrono::milliseconds{10}}),
     };
 
     struct State {
         std::uint8_t deviceId{};   ///< IC type (0x03)
     };
 
-    [[nodiscard]] static constexpr bool setup(Bytes  data,
-                                              State& state) {
-        state.deviceId = data.u8(0);
-        return state.deviceId == 0x4A;
+    /// What the engine read of the Identity above, once it matched and before Init runs.
+    static constexpr void identified(std::span<std::uint32_t const> ids,
+                                     State&                         state) {
+        state.deviceId = static_cast<std::uint8_t>(ids[0]);
     }
 
     /// What the charge state machine is doing (STATUS2 bits 2..0).
@@ -64,8 +72,9 @@ struct Axp2101 {
         /// STATUS1 and STATUS2 at 0x00, then the ADC results at 0x34. Two reads rather than
         /// one because 0x02..0x33 in between is the interrupt and rail configuration, which
         /// a status poll has no reason to touch.
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0}),
-                                          Step::read({.reg = 0x34, .count = 10, .offset = 2})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x34, .count = 10, .offset = 2})};
 
         struct Sample {
             MilliVolt    battery{};
@@ -131,20 +140,21 @@ struct Axp2101 {
     /// block and changes slowly.
     struct Gauge {
         static constexpr auto       Period = std::chrono::milliseconds{2000};
-        static constexpr std::array Steps{Step::read({.reg = 0xA4, .count = 1, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0xA4, .count = 1, .offset = 0})};
 
         using Sample = Percent;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const p = data.u8(0);
             // A percentage above 100 is not one (the register resets to 00h; the vendor's
             // driver clamps nothing), so it is not reported.
-            if(p > 100) { return Outcome<Sample>::reject(); }
-            return Outcome<Sample>::ok(Units::percent(p));
+            if(p > 100) { return Engine::Outcome<Sample>::reject(); }
+            return Engine::Outcome<Sample>::ok(Units::percent(p));
         }
     };
 
-    using Reads = List<Power, Gauge>;
+    using Reads = Engine::List<Power, Gauge>;
 };
 
 }   // namespace Kvasir::I2C::Chips

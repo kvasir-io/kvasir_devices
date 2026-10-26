@@ -1,9 +1,13 @@
 #pragma once
 
+#include "../../Bytes.hpp"
 #include "../../Duration.hpp"
-#include "../../Link.hpp"
 #include "../../Quantities.hpp"
+#include "../Client.hpp"
 #include "../QueueCore.hpp"
+#include "kvasir/Hal/Spi.hpp"
+#include "kvasir/Util/Config.hpp"
+#include "kvasir/Util/Link.hpp"
 #include "kvasir/Util/Periodic.hpp"
 
 #include <array>
@@ -15,7 +19,7 @@
 #include <utility>
 
 // Everything runs from the main loop except each frame's callback (the master's completion),
-// which only sets the two flags the loop reads.
+// which only ends the OneFrame (Client.hpp) the loop takes.
 namespace Kvasir::SPI {
 
 /// The knobs of the NOR flash driver, with their defaults; derive and redeclare what you
@@ -23,18 +27,18 @@ namespace Kvasir::SPI {
 /// the datasheet maxima of the Winbond W25Q / Macronix MX25 / Micron N25Q families (page
 /// program 3 ms, sector erase 400 ms), since they are counted from when the driver saw the
 /// command's frame complete; a chip erase takes from 2 s (a 2 MB part) to 200 s (W25Q128) or
-/// more, so ChipEraseTimeout is set per part and defaults to twice the W25Q128's.
+/// more, so `chipEraseTimeout` is set per part (Config) and defaults to twice the W25Q128's.
 struct NorFlashDefaults {
-    static constexpr auto PageProgramTimeout = std::chrono::milliseconds{10};
-    static constexpr auto SectorEraseTimeout = std::chrono::milliseconds{1000};
-    static constexpr auto ChipEraseTimeout   = std::chrono::seconds{400};
+    static constexpr auto pageProgramTimeout = std::chrono::milliseconds{10};
+    static constexpr auto sectorEraseTimeout = std::chrono::milliseconds{1000};
+    static constexpr auto chipEraseTimeout   = std::chrono::seconds{400};
 
     /// The status register is read at this interval while the part is busy.
-    static constexpr auto         StatusPollInterval  = std::chrono::milliseconds{1};
-    static constexpr std::uint8_t AbsentAfterFailures = 3;
+    static constexpr auto         statusPollInterval  = std::chrono::milliseconds{1};
+    static constexpr std::uint8_t absentAfterFailures = 3;
     /// fR for Read Data 03h (W25Q128JV.md:1944); a slower part sets its own.
-    static constexpr ClockMode    Mode     = ClockMode::_0;
-    static constexpr Units::Hertz MaxClock = Units::hertz(50'000'000);
+    static constexpr Hal::ClockMode mode     = Hal::ClockMode::mode0;
+    static constexpr Units::Hertz   maxClock = Units::hertz(50'000'000);
 };
 
 /// A generic SPI NOR flash (Winbond W25Q, Macronix MX25, Micron N25Q ...: the JEDEC
@@ -74,45 +78,24 @@ struct NorFlash {
 
     enum class Outcome : std::uint8_t { running, ok, failed };
 
-    static constexpr auto Setup = Spi::setup(
-      [] {
-          if constexpr(requires { Config::Mode; }) {
-              return Config::Mode;
-          } else {
-              return NorFlashDefaults::Mode;
-          }
-      }(),
-      [] {
-          if constexpr(requires { Config::MaxClock; }) {
-              return Config::MaxClock;
-          } else {
-              return NorFlashDefaults::MaxClock;
-          }
-      }());
-    static constexpr std::uint8_t AbsentAfterFailures = [] {
-        if constexpr(requires { Config::AbsentAfterFailures; }) {
-            return static_cast<std::uint8_t>(Config::AbsentAfterFailures);
-        } else {
-            return NorFlashDefaults::AbsentAfterFailures;
-        }
-    }();
+    static constexpr auto Setup
+      = Spi::setup(KVASIR_CONFIG_OR(Config, mode, NorFlashDefaults::mode),
+                   KVASIR_CONFIG_OR(Config, maxClock, NorFlashDefaults::maxClock));
+    static constexpr std::uint8_t AbsentAfterFailures = static_cast<std::uint8_t>(
+      KVASIR_CONFIG_OR(Config, absentAfterFailures, NorFlashDefaults::absentAfterFailures));
 
-    NorFlash() { apply(set(Cs{})); }
+    NorFlash() { ChipSelect<Cs>::release(); }
 
     NorFlash(NorFlash const&)            = delete;   // the frames' callbacks point at it
     NorFlash& operator=(NorFlash const&) = delete;
 
-    void handler() { idleLogic(); }
+    [[nodiscard]] Link link() const { return link_.link(); }
 
-    [[nodiscard]] Link link() const { return link_; }
+    [[nodiscard]] bool answering() const { return link_.link() == Link::answering; }
 
-    [[nodiscard]] bool answering() const { return link_ == Link::answering; }
+    [[nodiscard]] bool absent() const { return link_.link() == Link::absent; }
 
-    [[nodiscard]] bool absent() const { return link_ == Link::absent; }
-
-    [[nodiscard]] bool present() const { return answering(); }
-
-    [[nodiscard]] std::uint16_t bringUps() const { return bringUps_; }
+    [[nodiscard]] std::uint16_t bringUps() const { return link_.bringUps(); }
 
     [[nodiscard]] std::uint32_t errors() const { return errors_; }
 
@@ -133,37 +116,25 @@ struct NorFlash {
     /// The largest address plus one: 24 bits on the wire.
     static constexpr std::uint32_t AddressSpace = std::uint32_t{1} << 24;
 
-    static constexpr std::chrono::milliseconds PageProgramTimeout = [] {
-        if constexpr(requires { Config::PageProgramTimeout; }) {
-            return Kvasir::asDuration(Config::PageProgramTimeout);
-        } else {
-            return std::chrono::milliseconds{NorFlashDefaults::PageProgramTimeout};
-        }
-    }();
+    static constexpr std::chrono::milliseconds PageProgramTimeout = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       pageProgramTimeout,
+                       std::chrono::milliseconds{NorFlashDefaults::pageProgramTimeout}));
 
-    static constexpr std::chrono::milliseconds SectorEraseTimeout = [] {
-        if constexpr(requires { Config::SectorEraseTimeout; }) {
-            return Kvasir::asDuration(Config::SectorEraseTimeout);
-        } else {
-            return std::chrono::milliseconds{NorFlashDefaults::SectorEraseTimeout};
-        }
-    }();
+    static constexpr std::chrono::milliseconds SectorEraseTimeout = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       sectorEraseTimeout,
+                       std::chrono::milliseconds{NorFlashDefaults::sectorEraseTimeout}));
 
-    static constexpr std::chrono::milliseconds ChipEraseTimeout = [] {
-        if constexpr(requires { Config::ChipEraseTimeout; }) {
-            return Kvasir::asDuration(Config::ChipEraseTimeout);
-        } else {
-            return std::chrono::milliseconds{NorFlashDefaults::ChipEraseTimeout};
-        }
-    }();
+    static constexpr std::chrono::milliseconds ChipEraseTimeout = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       chipEraseTimeout,
+                       std::chrono::milliseconds{NorFlashDefaults::chipEraseTimeout}));
 
-    static constexpr std::chrono::milliseconds StatusPollInterval = [] {
-        if constexpr(requires { Config::StatusPollInterval; }) {
-            return Kvasir::asDuration(Config::StatusPollInterval);
-        } else {
-            return std::chrono::milliseconds{NorFlashDefaults::StatusPollInterval};
-        }
-    }();
+    static constexpr std::chrono::milliseconds StatusPollInterval = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       statusPollInterval,
+                       std::chrono::milliseconds{NorFlashDefaults::statusPollInterval}));
 
     struct Jedec {
         std::uint8_t manufacturer{};
@@ -192,7 +163,8 @@ struct NorFlash {
         timedOut,   ///< the part stayed busy past the operation's timeout
     };
 
-    void idleLogic() {
+    /// The loop step: runs the operation under way (frames, the busy polls, its timeout).
+    void turn() {
         auto const now = Clock::now();
         switch(state_) {
         case State::idle: break;
@@ -309,12 +281,10 @@ struct NorFlash {
                               static_cast<std::uint8_t>(rx_[2]),
                               static_cast<std::uint8_t>(rx_[3])};
                     if(jedec_.manufacturer != 0 && jedec_.manufacturer != 0xFF) {
-                        markAnswering_();
+                        link_.up();
                     } else {
-                        reportFailure_();
+                        link_.failed();
                     }
-                } else if(op_ == Op::read) {
-                    for(std::size_t i = 0; i < length_; ++i) { target_[i] = rx_[4 + i]; }
                 }
                 finish_(Result::ok);
             }
@@ -354,11 +324,12 @@ struct NorFlash {
     /// 0x00 nor 0xFF has come back. False while another operation runs.
     [[nodiscard]] bool readJedec() { return begin_(Op::jedec, 0, {}, 0); }
 
-    /// Read `into.size()` bytes (up to PageSize) from `address`. The driver keeps `into`
-    /// and writes the bytes through it when the frame completes, so it must stay alive and
-    /// unread until takeDone() (or finished()) reports the operation done; on any result
-    /// other than ok its contents are unchanged. False while another operation runs, for
-    /// more than a page, or past the 24-bit address space.
+    /// Read `into.size()` bytes (up to PageSize) from `address`. The bytes are clocked
+    /// straight into `into` (the frame's receive buffer), so it must stay alive and unread
+    /// until takeDone() (or finished()) reports the operation done; on any result other than
+    /// ok its contents are undefined (a frame cut short leaves part of the data, or none).
+    /// False while another operation runs, for more than a page, or past the 24-bit address
+    /// space.
     [[nodiscard]] bool read(std::uint32_t        address,
                             std::span<std::byte> into) {
         return !into.empty() && begin_(Op::read, address, into, into.size());
@@ -455,11 +426,7 @@ private:
         return submit_(std::span<std::byte const>{tx_}.first(1), {});
     }
 
-    void putAddress_(std::size_t at) {
-        tx_[at]     = static_cast<std::byte>(address_ >> 16);
-        tx_[at + 1] = static_cast<std::byte>(address_ >> 8);
-        tx_[at + 2] = static_cast<std::byte>(address_);
-    }
+    void putAddress_(std::size_t at) { putBe24(tx_, at, address_); }
 
     /// The first frame: the whole operation for a read or the id, write-enable otherwise.
     bool startOp_() {
@@ -470,11 +437,17 @@ private:
             return submit_(std::span<std::byte const>{tx_}.first(4),
                            std::span<std::byte>{rx_}.first(4));
         case Op::read:
+            // 03h and the address as the frame's command bytes, then the data straight into
+            // the caller's span under the same CS; MOSI is 0xFF meanwhile, which the part
+            // ignores - only the code and the address are latched from DI (W25Q128JV 8.2.6,
+            // md l.1113).
             tx_[0] = std::byte{CmdRead};
             putAddress_(1);
-            for(std::size_t i = 0; i < length_; ++i) { tx_[4 + i] = std::byte{0}; }
-            return submit_(std::span<std::byte const>{tx_}.first(4 + length_),
-                           std::span<std::byte>{rx_}.first(4 + length_));
+            return xfer_.start(
+              typename Spi::Request{.setup   = Setup,
+                                    .lines   = ChipSelect<Cs>::lines,
+                                    .command = std::span<std::byte const>{tx_}.first(4),
+                                    .rx      = target_});
         case Op::eraseSector:
         case Op::eraseChip:
         case Op::program:
@@ -517,66 +490,39 @@ private:
         state_    = State::idle;
     }
 
-    static void select_() { apply(clear(Cs{})); }
-
-    static void deselect_() { apply(set(Cs{})); }
-
-    static constexpr Lines lines_{&select_, &deselect_, nullptr, nullptr};
-
-    /// `rx` (when given) as long as `tx`. Both flags cleared first: the callback writes them from
-    /// the completion interrupt, and take_() must never read the previous frame's verdict.
+    /// `rx` (when given) as long as `tx`. false: a frame is still out, or the master refused it.
     bool submit_(std::span<std::byte const> tx,
                  std::span<std::byte>       rx) {
-        if(inFlight_) { return false; }
-        done_     = false;
-        ok_       = false;
-        inFlight_ = Spi::submit(typename Spi::Request{.setup    = Setup,
-                                                      .lines    = lines_,
-                                                      .tx       = tx,
-                                                      .rx       = rx,
-                                                      .callback = [this](auto r) {
-                                                          ok_   = r == decltype(r)::succeeded;
-                                                          done_ = true;
-                                                      }});
-        return inFlight_;
+        return xfer_.start(typename Spi::Request{.setup = Setup,
+                                                 .lines = ChipSelect<Cs>::lines,
+                                                 .tx    = tx,
+                                                 .rx    = rx});
     }
 
+    /// The frame's verdict once; `running` while it is out and when none is (idle).
     Outcome take_() {
-        if(!inFlight_ || !done_) { return Outcome::running; }
-        inFlight_ = false;
-        if(!ok_) { ++errors_; }
-        return ok_ ? Outcome::ok : Outcome::failed;
+        switch(xfer_.take()) {
+        case OneFrame<Spi>::Poll::ok:      return Outcome::ok;
+        case OneFrame<Spi>::Poll::failed:  ++errors_; return Outcome::failed;
+        case OneFrame<Spi>::Poll::idle:
+        case OneFrame<Spi>::Poll::running: break;
+        }
+        return Outcome::running;
     }
 
-    void markAnswering_() {
-        if(link_ != Link::answering) { ++bringUps_; }
-        link_     = Link::answering;
-        failures_ = 0;
-    }
-
-    void markStarting_() { link_ = Link::starting; }
-
-    void reportFailure_() {
-        if(failures_ != 0xFF) { ++failures_; }
-        if(failures_ >= AbsentAfterFailures) { link_ = Link::absent; }
-    }
-
-    std::array<std::byte, 4 + PageSize> tx_{};
-    std::array<std::byte, 4 + PageSize> rx_{};
-    bool                                inFlight_{};
-    bool volatile done_{};   ///< written by the completion (interrupt)
-    bool volatile ok_{};
-    Link          link_{Link::starting};
-    std::uint8_t  failures_{};
-    std::uint16_t bringUps_{};
-    std::uint32_t errors_{};
+    std::array<std::byte, 4 + PageSize> tx_{};   ///< a command, or a page program's header and data
+    std::array<std::byte, 4>
+                  rx_{};   ///< the id's or the status's answer (a read goes to the caller)
+    OneFrame<Spi> xfer_{};
+    LinkTracker<AbsentAfterFailures> link_{};   ///< the link, failures in a row, bring-ups
+    std::uint32_t                    errors_{};
 
     Op                      op_{Op::none};
     State                   state_{State::idle};
     Result                  result_{Result::none};
     std::uint32_t           address_{};
     std::size_t             length_{};
-    std::span<std::byte>    target_{};
+    std::span<std::byte>    target_;
     Kvasir::Deadline<Clock> pollGap_{};    ///< no Read Status before it ends
     Kvasir::Deadline<Clock> deadline_{};   ///< the operation's (or the settle's) timeout
     Jedec                   jedec_{};

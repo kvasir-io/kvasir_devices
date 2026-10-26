@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Features.hpp"
 #include "../Log.hpp"
 #include "Backend.hpp"
 #include "Config.hpp"
@@ -14,8 +15,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <kvasir/Util/RateLimiter.hpp>
-#include <kvasir/Util/using_literals.hpp>
+#include <kvasir/Log/FaultLog.hpp>
+#include <kvasir/Log/LogLimited.hpp>
+#include <kvasir/Log/RateLimiter.hpp>
 #include <span>
 #include <string_view>
 #include <tuple>
@@ -27,81 +29,38 @@
 /// (Backend.hpp); this file touches no register.
 ///
 ///     struct UsbConfig {
-///         static constexpr auto ManufacturerString = "...";   // or a callable, for a runtime one
-///         static constexpr auto ProductString      = "...";
-///         static constexpr auto SerialNumberString = [] { return Kvasir::serialNumberString(); };
-///         static constexpr auto ProductVersionBCD  = 0x0100;
-///         static constexpr auto VendorID           = 0x....;
-///         static constexpr auto ProductID          = 0x....;
+///         static constexpr auto manufacturerString = "...";   // or a callable, for a runtime one
+///         static constexpr auto productString      = "...";
+///         static constexpr auto serialNumberString = [] { return Kvasir::serialNumberString(); };
+///         static constexpr auto productVersionBcd  = 0x0100;
+///         static constexpr auto vendorId           = 0x....;
+///         static constexpr auto productId          = 0x....;
 ///     };
 ///     using Usb = Kvasir::USB::CdcAcm<HW::UsbBackend, Clock, UsbConfig>;   // CdcAcm.hpp
 ///
 /// and Usb in the Startup list. Config.hpp has the optional config members.
 namespace Kvasir::USB {
 namespace detail {
-    // The backend's Startup members, passed on where it has them.
-    template<typename B>
-    struct ForwardProvides {};
-
-    template<typename B>
-        requires requires { typename B::Provides; }
-    struct ForwardProvides<B> {
-        using Provides = typename B::Provides;
-    };
-
-    template<typename B>
-    struct ForwardClaims {};
-
-    template<typename B>
-        requires requires { typename B::Claims; }
-    struct ForwardClaims<B> {
-        using Claims = typename B::Claims;
-    };
-
-    template<typename B>
-    struct ForwardPowerClockEnable {};
-
-    template<typename B>
-        requires requires { B::powerClockEnable; }
-    struct ForwardPowerClockEnable<B> {
-        static constexpr auto powerClockEnable = B::powerClockEnable;
-    };
-
-    template<typename B>
-    struct ForwardPinConfig {};
-
-    template<typename B>
-        requires requires { B::initStepPinConfig; }
-    struct ForwardPinConfig<B> {
-        static constexpr auto initStepPinConfig = B::initStepPinConfig;
-    };
-
-    template<typename B>
-    struct ForwardPeripheryConfig {};
-
-    template<typename B>
-        requires requires { B::initStepPeripheryConfig; }
-    struct ForwardPeripheryConfig<B> {
-        static constexpr auto initStepPeripheryConfig = B::initStepPeripheryConfig;
-    };
-
-    template<typename B>
-    struct ForwardInterruptConfig {};
-
-    template<typename B>
-        requires requires { B::initStepInterruptConfig; }
-    struct ForwardInterruptConfig<B> {
-        static constexpr auto initStepInterruptConfig = B::initStepInterruptConfig;
-    };
-
+    // The backend's Startup members, passed on where it has them (Features.hpp).
     template<typename B>
     struct BackendStartup
-      : ForwardProvides<B>
-      , ForwardClaims<B>
-      , ForwardPowerClockEnable<B>
-      , ForwardPinConfig<B>
-      , ForwardPeripheryConfig<B>
-      , ForwardInterruptConfig<B> {};
+      : Kvasir::detail::ForwardProvides<B>
+      , Kvasir::detail::ForwardClaims<B>
+      , Kvasir::detail::ForwardPowerClockEnable<B>
+      , Kvasir::detail::ForwardPinConfig<B>
+      , Kvasir::detail::ForwardPeripheryConfig<B>
+      , Kvasir::detail::ForwardInterruptConfig<B> {};
+
+    // A string of the config (manufacturerString, ...): text, or a callable that gives it at run
+    // time.
+    template<auto const& S>
+    consteval auto descriptorString() {
+        if constexpr(std::is_invocable_v<decltype(S)>) {
+            return Kvasir::USB::RuntimeDescriptorString{S};
+        } else {
+            return Kvasir::USB::DescriptorString{SC_LIFT(S)};
+        }
+    }
 }   // namespace detail
 
 template<template<typename, typename> class BackendT,
@@ -113,20 +72,18 @@ template<template<typename, typename> class BackendT,
          std::size_t FirstEndpointNumber,
          template<typename, typename, typename, std::size_t, std::size_t> class... Mixins>
 struct Device
-  : detail::MixinTraits::MixinBases<Clock,
-                                    ConfigT,
-                                    Device<BackendT,
-                                           Clock,
-                                           ConfigT,
-                                           Class,
-                                           SubClass,
-                                           FirstInterfaceNumber,
-                                           FirstEndpointNumber,
-                                           Mixins...>,
-                                    FirstInterfaceNumber,
-                                    FirstEndpointNumber,
-                                    std::make_index_sequence<sizeof...(Mixins)>,
-                                    Mixins...>
+  : MixinTraits::Layout<Clock,
+                        ConfigT,
+                        Device<BackendT,
+                               Clock,
+                               ConfigT,
+                               Class,
+                               SubClass,
+                               FirstInterfaceNumber,
+                               FirstEndpointNumber,
+                               Mixins...>,
+                        std::make_index_sequence<sizeof...(Mixins)>,
+                        Mixins...>::template Bases<FirstInterfaceNumber, FirstEndpointNumber>
   , detail::BackendStartup<BackendT<Clock, ConfigT>> {
     /// The chip's half. Its endpoints carry whatever more the chip can do than Backend.hpp asks.
     using Backend = BackendT<Clock, ConfigT>;
@@ -141,13 +98,9 @@ private:
                         FirstEndpointNumber,
                         Mixins...>;
 
-    using MixinsBase = detail::MixinTraits::MixinBases<Clock,
-                                                       ConfigT,
-                                                       Self,
-                                                       FirstInterfaceNumber,
-                                                       FirstEndpointNumber,
-                                                       std::make_index_sequence<sizeof...(Mixins)>,
-                                                       Mixins...>;
+    using Layout = MixinTraits::
+      Layout<Clock, ConfigT, Self, std::make_index_sequence<sizeof...(Mixins)>, Mixins...>;
+    using MixinsBase = typename Layout::template Bases<FirstInterfaceNumber, FirstEndpointNumber>;
 
     using SetupPacket = Kvasir::USB::SetupPacket;
     using Traits      = ConfigTraits<ConfigT>;
@@ -155,75 +108,39 @@ private:
     static_assert(detail::Controller<Backend>,
                   "the backend lacks part of what kvasir/Devices/USB/Backend.hpp lists for the "
                   "controller");
-    static_assert(Backend::MaxPacketSize == MaxPacketSize,
+    static_assert(Backend::maxPacketSize == MaxPacketSize,
                   "the backend's MaxPacketSize differs from the 64 bytes the descriptors promise");
-    static_assert(1
-                      + detail::MixinTraits::countMixinEndpoints<Clock,
-                                                                 ConfigT,
-                                                                 Device,
-                                                                 Mixins...>()
-                    <= Backend::EndpointCount,
+    static_assert(1 + Layout::EndpointCount <= Backend::endpointCount,
                   "the mixins use more endpoint numbers than the controller has");
 
-    using EP0_IN =
+    using Ep0In =
       typename Backend::template Endpoint<0, EndpointDirection::In, EndpointTransferType::Control>;
-    using EP0_OUT =
+    using Ep0Out =
       typename Backend::template Endpoint<0, EndpointDirection::Out, EndpointTransferType::Control>;
-    static_assert(detail::InEndpoint<EP0_IN> && detail::OutEndpoint<EP0_OUT>,
+    static_assert(detail::InEndpoint<Ep0In> && detail::OutEndpoint<Ep0Out>,
                   "the backend's endpoints lack part of what kvasir/Devices/USB/Backend.hpp lists");
 
     static constexpr std::tuple DescriptorStrings{
-      []() {
-          if constexpr(std::is_invocable_v<decltype(ConfigT::ManufacturerString)>) {
-              return Kvasir::USB::RuntimeDescriptorString{ConfigT::ManufacturerString};
-          } else {
-              return Kvasir::USB::DescriptorString{SC_LIFT(ConfigT::ManufacturerString)};
-          }
-      }(),
-      []() {
-          if constexpr(std::is_invocable_v<decltype(ConfigT::ProductString)>) {
-              return Kvasir::USB::RuntimeDescriptorString{ConfigT::ProductString};
-          } else {
-              return Kvasir::USB::DescriptorString{SC_LIFT(ConfigT::ProductString)};
-          }
-      }(),
-      []() {
-          if constexpr(std::is_invocable_v<decltype(ConfigT::SerialNumberString)>) {
-              return Kvasir::USB::RuntimeDescriptorString{ConfigT::SerialNumberString};
-          } else {
-              return Kvasir::USB::DescriptorString{SC_LIFT(ConfigT::SerialNumberString)};
-          }
-      }()};
+      detail::descriptorString<ConfigT::manufacturerString>(),
+      detail::descriptorString<ConfigT::productString>(),
+      detail::descriptorString<ConfigT::serialNumberString>()};
 
-    static constexpr auto DeviceDescriptor{USB::Descriptors::makeDeviceDescriptorArray<
-      ConfigT::ProductVersionBCD,
-      ConfigT::VendorID,
-      ConfigT::ProductID,
-      1,
-      2,
-      3,
-      Class,
-      SubClass,
-      detail::MixinTraits::maxBcdUSB<Clock, ConfigT, Self, Mixins...>()>()};
+    static constexpr auto DeviceDescriptor{
+      USB::Descriptors::makeDeviceDescriptorArray<ConfigT::productVersionBcd,
+                                                  ConfigT::vendorId,
+                                                  ConfigT::productId,
+                                                  1,
+                                                  2,
+                                                  3,
+                                                  Class,
+                                                  SubClass,
+                                                  Layout::BcdUSB>()};
 
-    static constexpr auto ConfigDescriptor = []() {
-        constexpr std::size_t MixinInterfaceCount
-          = detail::MixinTraits::countMixinInterfaces<Clock, ConfigT, Self, Mixins...>();
-
-        constexpr auto mixinDescriptors
-          = detail::MixinTraits::assembleMixinDescriptors<Clock,
-                                                          ConfigT,
-                                                          Self,
-                                                          FirstInterfaceNumber,
-                                                          FirstEndpointNumber,
-                                                          Mixins...>();
-
-        return Descriptors::makeConfigDescriptorArray(
-          Traits::BusPower,
-          Traits::BusPowered,
-          static_cast<std::uint8_t>(MixinInterfaceCount),
-          mixinDescriptors);
-    }();
+    static constexpr auto ConfigDescriptor
+      = Descriptors::makeConfigDescriptorArray(Traits::BusPower,
+                                               Traits::BusPowered,
+                                               static_cast<std::uint8_t>(Layout::InterfaceCount),
+                                               MixinsBase::interfaceDescriptors());
 
     // State
     static inline std::atomic<std::uint8_t>  configuration{};
@@ -231,19 +148,7 @@ private:
     static inline bool                       pendingAddressSet{false};
     static inline std::span<std::byte const> remainingControlData{};
     static inline bool                       endOfTransferPending{false};
-    static inline detail::EP0ControlState    ep0_ctrl{};
-
-    // Shares one static object with the fault log's limiter, which is empty without logging and
-    // then takes no byte there ([[no_unique_address]] works on members, not on statics).
-    struct MaskAndLog {
-        std::uint8_t isrMaskDepth{};
-        [[no_unique_address]] Kvasir::LogRateLimiter<Clock, Kvasir::RateLimiterConfig{.burst = 8}>
-          faultLog{};
-    };
-
-    static inline MaskAndLog        maskAndLog_{};
-    static constexpr std::uint8_t&  isrMaskDepth = maskAndLog_.isrMaskDepth;
-    static inline std::atomic<bool> suspended{false};
+    static inline detail::EP0ControlState    ep0Control{};
 
     enum class Fault : std::uint8_t {
         unhandledBufferDone = 1,
@@ -252,9 +157,21 @@ private:
         invalidOutData,
         outReadNotInDataPhase,
     };
+
+    // Shares one static object with the fault log, which is empty without logging and
+    // then takes no byte there ([[no_unique_address]] works on members, not on statics).
+    struct MaskAndLog {
+        std::uint8_t isrMaskDepth{};
+        [[no_unique_address]] Kvasir::FaultLog<Clock, Fault, Kvasir::RateLimiterConfig{.burst = 8}>
+          faultLog{};
+    };
+
+    static inline MaskAndLog        maskAndLog_{};
+    static constexpr std::uint8_t&  isrMaskDepth = maskAndLog_.isrMaskDepth;
+    static inline std::atomic<bool> suspended{false};
     // Fault logging goes through this: a misbehaving host repeats these per packet, from inside
     // the ISR.
-    static constexpr auto& faultLog_ = maskAndLog_.faultLog;
+    static constexpr auto& faults = maskAndLog_.faultLog;
 
     // What the backend's dispatchEvents reports to.
     struct Sink {
@@ -262,14 +179,14 @@ private:
 
         static void setup(SetupPacket const& pkt) { handleSetupPacket(pkt); }
 
-        static void transferComplete(std::size_t ep_num,
+        static void transferComplete(std::size_t epNum,
                                      bool        in) {
-            handleBufferDone(ep_num, in);
+            handleBufferDone(epNum, in);
         }
 
-        static void cancelComplete(std::size_t ep_num,
+        static void cancelComplete(std::size_t epNum,
                                    bool        in) {
-            handleAbortDone(ep_num, in);
+            handleAbortDone(epNum, in);
         }
 
         // A backend that can tell reports both; the bus going quiet for 3 ms, and waking up.
@@ -278,28 +195,28 @@ private:
         static void resume() { handleSuspend(false); }
 
         static void startOfFrame([[maybe_unused]] std::uint16_t frame) {
-            if constexpr(Traits::UseSof) { ConfigT::StartOfFrameCallback(frame); }
+            if constexpr(Traits::UseSof) { ConfigT::startOfFrameCallback(frame); }
         }
     };
 
     static void onIsr() { Backend::template dispatchEvents<Sink>(); }
 
     static void endpointConfig() {
-        EP0_IN::setupEndpoint();
-        EP0_OUT::setupEndpoint();
+        Ep0In::setupEndpoint();
+        Ep0Out::setupEndpoint();
         MixinsBase::callSetupEndpoints();
     }
 
     static void handleSuspend(bool isSuspended) {
         if(suspended.exchange(isSuspended) == isSuspended) { return; }
         MixinsBase::callSuspended(isSuspended);
-        if constexpr(requires { ConfigT::SuspendCallback(isSuspended); }) {
-            ConfigT::SuspendCallback(isSuspended);
+        if constexpr(requires { ConfigT::suspendCallback(isSuspended); }) {
+            ConfigT::suspendCallback(isSuspended);
         }
     }
 
     static void handleBusReset() {
-        ep0_ctrl.reset();
+        ep0Control.reset();
         suspended = false;
         // Some controllers forget their endpoints on a bus reset (the SAM one all but endpoint
         // 0, and every endpoint's interrupts); setting them up again costs the others nothing.
@@ -309,24 +226,24 @@ private:
         configuration        = 0;
         remainingControlData = {};
         endOfTransferPending = false;
-        EP0_IN::reset();
-        EP0_OUT::reset();
+        Ep0In::reset();
+        Ep0Out::reset();
 
         Backend::setAddress(0);
 
         MixinsBase::callReset();
-        UC_LOG_I("USB: Bus reset detected");
+        UC_LOG_D("USB: Bus reset detected");
     }
 
-    static bool EndpointHandler(std::size_t ep_num,
+    static bool endpointHandler(std::size_t epNum,
                                 bool        in) {
-        if(ep_num == 0 && in) {
+        if(epNum == 0 && in) {
             if(pendingAddressSet) {
-                UC_LOG_I("USB: Setting device address to {}", deviceBusAddr);
+                UC_LOG_D("USB: Setting device address to {}", deviceBusAddr);
                 // The status stage went out from the old address; from here on the new one.
                 Backend::setAddress(deviceBusAddr);
                 pendingAddressSet = false;
-                ep0_ctrl.transition(ControlStage::Idle);
+                ep0Control.transition(ControlStage::Idle);
                 return true;
             }
             if(!remainingControlData.empty() || endOfTransferPending) {
@@ -341,50 +258,48 @@ private:
                 }
                 return true;
             }
-            if(ep0_ctrl.stage() == ControlStage::Data) {
-                ep0_ctrl.transition(ControlStage::Status);
+            if(ep0Control.stage() == ControlStage::Data) {
+                ep0Control.transition(ControlStage::Status);
                 ep0OUT<true>(0);
                 return true;
             }
-            if(ep0_ctrl.stage() == ControlStage::Status) {
-                ep0_ctrl.transition(ControlStage::Idle);
+            if(ep0Control.stage() == ControlStage::Status) {
+                ep0Control.transition(ControlStage::Idle);
                 return true;
             }
             return false;
         }
-        if(ep_num == 0 && !in) {
-            if(ep0_ctrl.stage() == ControlStage::Status) {
-                ep0_ctrl.transition(ControlStage::Idle);
+        if(epNum == 0 && !in) {
+            if(ep0Control.stage() == ControlStage::Status) {
+                ep0Control.transition(ControlStage::Idle);
                 return true;
             }
         }
         return false;
     }
 
-    static void handleBufferDone(std::size_t ep_num,
+    static void handleBufferDone(std::size_t epNum,
                                  bool        in) {
         using namespace std::string_view_literals;
-        if(EndpointHandler(ep_num, in)) { return; }
-        if(!MixinsBase::callEndpointHandler(ep_num, in)) {
-            KVASIR_LOG_LIMITED(
-              faultLog_.allow(Kvasir::rateLimitKey(Fault::unhandledBufferDone, ep_num, in)),
-              UC_LOG_W,
-              "USB: Unhandled endpoint buffer done (EP{} {})",
-              ep_num,
-              in ? "IN"sv : "OUT"sv);
+        if(endpointHandler(epNum, in)) { return; }
+        if(!MixinsBase::callEndpointHandler(epNum, in)) {
+            KVASIR_LOG_LIMITED(faults.note(Fault::unhandledBufferDone, epNum, in),
+                               UC_LOG_W,
+                               "USB: Unhandled endpoint buffer done (EP{} {})",
+                               epNum,
+                               in ? "IN"sv : "OUT"sv);
         }
     }
 
-    static void handleAbortDone(std::size_t ep_num,
+    static void handleAbortDone(std::size_t epNum,
                                 bool        in) {
         using namespace std::string_view_literals;
-        if(!MixinsBase::callAbortDone(ep_num, in)) {
-            KVASIR_LOG_LIMITED(
-              faultLog_.allow(Kvasir::rateLimitKey(Fault::unhandledAbortDone, ep_num, in)),
-              UC_LOG_W,
-              "USB: Unhandled endpoint abort done (EP{} {})",
-              ep_num,
-              in ? "IN"sv : "OUT"sv);
+        if(!MixinsBase::callAbortDone(epNum, in)) {
+            KVASIR_LOG_LIMITED(faults.note(Fault::unhandledAbortDone, epNum, in),
+                               UC_LOG_W,
+                               "USB: Unhandled endpoint abort done (EP{} {})",
+                               epNum,
+                               in ? "IN"sv : "OUT"sv);
         }
     }
 
@@ -516,7 +431,7 @@ private:
             configuration = static_cast<std::uint8_t>(pkt.wValue & 0xff);
 
             MixinsBase::callConfigured(configuration);
-            UC_LOG_I("USB: Device {} (config={})",
+            UC_LOG_D("USB: Device {} (config={})",
                      configuration == 0 ? "unconfigured"sv : "configured"sv,
                      configuration.load());
             return true;
@@ -525,8 +440,7 @@ private:
         }
     }
 
-    static constexpr std::size_t TotalInterfaceCount
-      = detail::MixinTraits::countMixinInterfaces<Clock, ConfigT, Self, Mixins...>();
+    static constexpr std::size_t TotalInterfaceCount = Layout::InterfaceCount;
 
     // Standard requests no mixin claimed: interfaces without endpoints of their own always
     // run alternate setting 0, and EP0 is never halted.
@@ -569,7 +483,7 @@ private:
     static void handleSetupPacket(SetupPacket const& pkt) {
         remainingControlData = {};
         endOfTransferPending = false;
-        ep0_ctrl.transition(ControlStage::Setup);
+        ep0Control.transition(ControlStage::Setup);
 
         // Whatever the last transfer left armed is dropped, and the data stage starts at DATA1.
         Backend::beginControlTransfer();
@@ -592,24 +506,22 @@ private:
 
         // Centralized error handling - USB 2.0 spec requires STALL for unsupported requests
         if(!handled) {
-            KVASIR_LOG_LIMITED(
-              faultLog_.allow(
-                Kvasir::rateLimitKey(Fault::unhandledSetup, pkt.bmRequestType, pkt.bRequest)),
-              UC_LOG_W,
-              "USB: STALL - Unhandled setup packet: {}",
-              pkt);
+            KVASIR_LOG_LIMITED(faults.note(Fault::unhandledSetup, pkt.bmRequestType, pkt.bRequest),
+                               UC_LOG_W,
+                               "USB: STALL - Unhandled setup packet: {}",
+                               pkt);
             stallControlRequest();
         }
     }
 
     template<bool Last>
     static void ep0IN(std::span<std::byte const> data) {
-        EP0_IN::template tryTransfer<Last>(data);
+        Ep0In::template tryTransfer<Last>(data);
     }
 
     template<bool Last>
     static void ep0OUT(std::size_t size) {
-        EP0_OUT::template armReceive<Last>(size);
+        Ep0Out::template armReceive<Last>(size);
     }
 
 public:
@@ -629,7 +541,7 @@ public:
           = !data.empty() && data.size() < wLength && data.size() % MaxPacketSize == 0;
         auto const first = data.first(std::min(data.size(), MaxPacketSize));
 
-        ep0_ctrl.transition(ControlStage::Data);
+        ep0Control.transition(ControlStage::Data);
         remainingControlData = data.subspan(first.size());
         endOfTransferPending = endsOnPacketBoundary;
         if(remainingControlData.empty() && !endOfTransferPending) {
@@ -642,19 +554,19 @@ public:
 
     // Whole configuration descriptor, for mixins describing other mixins' interfaces.
     // Only usable where the device type is complete, i.e. inside a callback body.
-    static constexpr std::span<std::byte const> configDescriptor() { return ConfigDescriptor; }
+    static constexpr std::span<std::byte const> configDescriptorBytes() { return ConfigDescriptor; }
 
     static void ep0OUTDataPhase(std::size_t size) {
         assert(MaxPacketSize >= size);
-        ep0_ctrl.transition(ControlStage::Data);
+        ep0Control.transition(ControlStage::Data);
         ep0OUT<true>(size);
     }
 
     static bool ep0OUTGetData(std::span<std::byte> data) {
-        if(ep0_ctrl.stage() == ControlStage::Data) {
-            std::size_t const len = EP0_OUT::readCurrentBuffer(data);
+        if(ep0Control.stage() == ControlStage::Data) {
+            std::size_t const len = Ep0Out::readCurrentBuffer(data);
             if(len != data.size()) {
-                KVASIR_LOG_LIMITED(faultLog_.allow(Kvasir::rateLimitKey(Fault::invalidOutData)),
+                KVASIR_LOG_LIMITED(faults.note(Fault::invalidOutData),
                                    UC_LOG_E,
                                    "USB: Invalid out data (received={}, expected={})",
                                    len,
@@ -662,24 +574,23 @@ public:
                 return false;
             }
             return true;
-        } else {
-            KVASIR_LOG_LIMITED(faultLog_.allow(Kvasir::rateLimitKey(Fault::outReadNotInDataPhase)),
-                               UC_LOG_E,
-                               "USB: out read attempted while not in data phase");
-            return false;
         }
+        KVASIR_LOG_LIMITED(faults.note(Fault::outReadNotInDataPhase),
+                           UC_LOG_E,
+                           "USB: out read attempted while not in data phase");
+        return false;
     }
 
     static void acknowledgeSetupRequest() {
-        ep0_ctrl.transition(ControlStage::Status);
+        ep0Control.transition(ControlStage::Status);
         ep0IN<true>(std::span<std::byte const>{});
     }
 
     // Ends the current control request with a STALL, from the setup or the data stage.
     static void stallControlRequest() {
-        EP0_IN::stall();
-        EP0_OUT::stall();
-        ep0_ctrl.transition(ControlStage::Stall);
+        Ep0In::stall();
+        Ep0Out::stall();
+        ep0Control.transition(ControlStage::Stall);
     }
 
     // Runs f with the USB interrupt masked, for thread code touching endpoint state the
@@ -703,7 +614,6 @@ public:
         return std::forward<F>(f)();
     }
 
-public:
     //Kvasir Callbacks
     using Isr = typename Backend::template Isr<&Device::onIsr>;
 
@@ -713,7 +623,6 @@ public:
         Backend::connect();
     };
 
-public:
     //Public API
     static bool isConfigured() { return configuration != 0; }
 

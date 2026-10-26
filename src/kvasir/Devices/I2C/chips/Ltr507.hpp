@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -62,8 +63,8 @@ struct Ltr507 {
     /// Lite-On LTR-507ALS. LTR507.md:430..431, PART_ID 0x86 = 0x91 (part number in 7:4) and
     /// MANUFAC_ID 0x87 = 0x05.
     static constexpr std::array Identity{
-      RegisterCheck{        "part-id", 0x86, 1, true, 0xF0, 0x90},
-      RegisterCheck{"manufacturer-id", 0x87, 1, true, 0xFF, 0x05},
+      Engine::RegisterCheck{        "part-id", 0x86, 1, true, 0xF0, 0x90},
+      Engine::RegisterCheck{"manufacturer-id", 0x87, 1, true, 0xFF, 0x05},
     };
     static constexpr Address7                Address = 0x3A;
     static constexpr std::array<Address7, 3> Addresses{0x3A, 0x3B, 0x23};
@@ -96,16 +97,16 @@ struct Ltr507 {
       = static_cast<std::uint8_t>(0x80U | static_cast<unsigned>(Rate));
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x80, .payload = {AlsContr}}),
-      Step::write({.reg = 0x81, .payload = {PsContr}}),
-      Step::write({.reg = 0x82, .payload = {PsLed}}),
-      Step::write({.reg = 0x83, .payload = {static_cast<std::uint8_t>(LedPulses)}}),
-      Step::write(
+      Engine::Step::write({.reg = 0x80, .payload = {AlsContr}}),
+      Engine::Step::write({.reg = 0x81, .payload = {PsContr}}),
+      Engine::Step::write({.reg = 0x82, .payload = {PsLed}}),
+      Engine::Step::write({.reg = 0x83, .payload = {static_cast<std::uint8_t>(LedPulses)}}),
+      Engine::Step::write(
         {.reg     = 0x84,
          .payload = {0x03}}),   // PS measurement rate: 100 ms, the ALS's (0x00 would stop the ALS)
-      Step::write({.reg     = 0x85,
-                   .payload = {AlsMeasRate},
-                   .delay   = MeasurementPeriod}),   // then one repeat's worth of wait
+      Engine::Step::write({.reg     = 0x85,
+                           .payload = {AlsMeasRate},
+                           .delay   = MeasurementPeriod}),   // then one repeat's worth of wait
     };
 
     struct State {
@@ -127,9 +128,9 @@ struct Ltr507 {
         static constexpr auto Period = MeasurementPeriod + std::chrono::milliseconds{10};
 
         static constexpr std::array Steps{
-          Step::read({.reg = 0x8A, .count = 1, .offset = 0}),   // ALS_PS_STATUS
-          Step::read({.reg = 0x88, .count = 2, .offset = 1}),   // ALS_DATA
-          Step::read({.reg = 0x8B, .count = 2, .offset = 3}),   // PS_DATA
+          Engine::Step::read({.reg = 0x8A, .count = 1, .offset = 0}),   // ALS_PS_STATUS
+          Engine::Step::read({.reg = 0x88, .count = 2, .offset = 1}),   // ALS_DATA
+          Engine::Step::read({.reg = 0x8B, .count = 2, .offset = 3}),   // PS_DATA
         };
 
         struct Sample {
@@ -161,17 +162,17 @@ struct Ltr507 {
         /// finished since the last readout. Nothing is wrong with the part or the frame, so it is
         /// `unchanged`, not a rejection -- a read that lands just before a conversion ends does
         /// that now and then (a hardware test: one in a minute).
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
             auto const status = data.u8(0);
-            if((status & 0x04U) == 0) { return Outcome<Sample>::unchanged(); }
+            if((status & 0x04U) == 0) { return Engine::Outcome<Sample>::unchanged(); }
             Sample sample{};
             sample.status            = status;
             sample.light             = data.le16(1);
             sample.proximity         = static_cast<std::uint16_t>(data.le16(3) & 0x07FFU);
             sample.proximityOverflow = (data.u8(4) & 0x10U) != 0;
             sample.gain              = state.gain;
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -182,10 +183,10 @@ struct Ltr507 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = AlsContr;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x80, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x80, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -194,8 +195,8 @@ struct Ltr507 {
         }
     };
 
-    using Reads  = List<Light>;
-    using Writes = List<AlsControl>;
+    using Reads  = Engine::List<Light>;
+    using Writes = Engine::List<AlsControl>;
 };
 
 }   // namespace Kvasir::I2C::Chips

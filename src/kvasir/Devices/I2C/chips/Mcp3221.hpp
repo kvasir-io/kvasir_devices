@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -25,8 +26,7 @@ struct Mcp3221 {
     static constexpr Address7         Address       = 0x4D;
     static constexpr std::size_t      RegisterBytes = 0;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F};
+    static constexpr auto Addresses = addressRun<0x48, 8>();
 
     static_assert(Supply > Units::milliVolt(0),
                   "the supply is the reference every code is scaled by; it may not be zero");
@@ -35,7 +35,7 @@ struct Mcp3221 {
 
     struct Conversion {
         static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{Step::receive({.count = 2})};
+        static constexpr std::array Steps{Engine::Step::receive({.count = 2})};
 
         struct Sample {
             std::uint16_t code{};   ///< 0..4095 of VDD
@@ -55,7 +55,7 @@ struct Mcp3221 {
         }
     };
 
-    using Reads = List<Conversion>;
+    using Reads = Engine::List<Conversion>;
 };
 
 }   // namespace Kvasir::I2C::Chips

@@ -23,6 +23,7 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
@@ -46,7 +47,7 @@ crcWords(W... ws) {
     std::array<std::byte, 3 * sizeof...(W)> out{};
     std::size_t                             i = 0;
     for(auto const w : {static_cast<std::uint16_t>(ws)...}) {
-        for(auto const b : Sensirion::framed(w)) { out[i++] = static_cast<std::byte>(b); }
+        for(auto const b : Kvasir::Sensirion::framed(w)) { out[i++] = static_cast<std::byte>(b); }
     }
     return out;
 }
@@ -85,8 +86,7 @@ constexpr Chips::Bme280::State bmeTrim() {
 // -- the common parts ---------------------------------------------------------------------
 
 void bme280() {
-    testCase("BME280");
-    fresh();
+    I2cCase          testcase{"BME280"};
     RegisterModel<1> m{0x76};
     m.set(0xD0, {0x60});
     auto const le = [&](std::uint32_t reg, std::int32_t v) {
@@ -128,25 +128,23 @@ void bme280() {
     // are the skipped values the registers hold before the first conversion: rejected
     static_assert([] {
         auto const f   = frame(0x65, 0x5A, 0xC0, 0x7E, 0xED, 0x00, 0x60, 0x00);
-        auto const got = Chips::Bme280::Measurement::decode(Bytes{f}, bmeTrim());
+        auto const got = Chips::Bme280::Measurement::decode(Kvasir::Bytes{f}, bmeTrim());
         auto const noT = frame(0x65, 0x5A, 0xC0, 0x80, 0x00, 0x00, 0x60, 0x00);
         auto const noP = frame(0x80, 0x00, 0x00, 0x7E, 0xED, 0x00, 0x60, 0x00);
         auto const noH = frame(0x65, 0x5A, 0xC0, 0x7E, 0xED, 0x00, 0x80, 0x00);
         return isOk(got) && equal(got.value.temperature, 2508)
             && within(got.value.pressure, 100653, 2)
             && got.value.humidity <= Units::milliPercent(100000)
-            && isReject(Chips::Bme280::Measurement::decode(Bytes{noT}, bmeTrim()))
-            && isReject(Chips::Bme280::Measurement::decode(Bytes{noP}, bmeTrim()))
-            && isReject(Chips::Bme280::Measurement::decode(Bytes{noH}, bmeTrim()));
+            && isReject(Chips::Bme280::Measurement::decode(Kvasir::Bytes{noT}, bmeTrim()))
+            && isReject(Chips::Bme280::Measurement::decode(Kvasir::Bytes{noP}, bmeTrim()))
+            && isReject(Chips::Bme280::Measurement::decode(Kvasir::Bytes{noH}, bmeTrim()));
     }());
     auto const t0 = FakeClock::now();
     check(runUntil(d, [&] { return d.samples() == 2; }, 3s), "second sample");
     check(FakeClock::now() - t0 >= 990ms, "one a second");
     checkEq(Log::warnings, 0, "no warnings");
-    if(failures != 0) { dump(); }
 
-    testCase("BMP280");
-    fresh();
+    testcase.next("BMP280");
     m.set(0xD0, {0x58});
     FakeBus::respond = std::ref(m);
     Dev<Chips::Bmp280> p{};
@@ -156,21 +154,20 @@ void bme280() {
     // the same six bytes without the humidity word
     static_assert([] {
         auto const f   = frame(0x65, 0x5A, 0xC0, 0x7E, 0xED, 0x00);
-        auto const got = Chips::Bmp280::Measurement::decode(Bytes{f}, bmeTrim());
+        auto const got = Chips::Bmp280::Measurement::decode(Kvasir::Bytes{f}, bmeTrim());
         return isOk(got) && equal(got.value.temperature, 2508)
             && within(got.value.pressure, 100653, 2) && equal(got.value.humidity, 0U);
     }());
 }
 
 void sht3x() {
-    testCase("SHT3x");
-    fresh();
+    I2cCase const             testcase{"SHT3x"};
     std::vector<std::uint8_t> reply;
     bool                      corrupt = false;
     ScopedHook const          answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x44) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x44) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               auto const cmd = static_cast<std::uint16_t>((static_cast<std::uint8_t>(sent[0]) << 8)
                                                           | static_cast<std::uint8_t>(sent[1]));
@@ -181,13 +178,13 @@ void sht3x() {
                   reply.insert(reply.end(), rh.begin(), rh.end());
                   if(corrupt) { reply[2] ^= 0xFF; }
               }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(recv.size() != reply.size()) { return FakeBus::Result::failed; }
           for(std::size_t i = 0; i < recv.size(); ++i) {
               recv[i] = static_cast<std::byte>(reply[i]);
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Sht3x> d{};
     check(runUntil(d, [&] { return d.samples() == 1; }, 2s), "first sample");
@@ -198,12 +195,12 @@ void sht3x() {
     // 0x6666 is 25.00 degC, 0x8000 50.00 %RH; a corrupt first CRC is rejected
     static_assert([] {
         auto const f   = crcWords(0x6666, 0x8000);
-        auto const got = Chips::Sht3x::Measurement::decode(Bytes{f});
+        auto const got = Chips::Sht3x::Measurement::decode(Kvasir::Bytes{f});
         auto       bad = f;
         bad[2] ^= std::byte{0xFF};
         return isOk(got) && within(got.value.temperature, 2500, 1)
             && within(got.value.humidity, 5000, 1)
-            && isReject(Chips::Sht3x::Measurement::decode(Bytes{bad}));
+            && isReject(Chips::Sht3x::Measurement::decode(Kvasir::Bytes{bad}));
     }());
     check(FakeBus::log[5].at - FakeBus::log[4].at >= 15ms, "conversion wait");
     corrupt = true;
@@ -216,35 +213,33 @@ void sht3x() {
     check(runUntil(d, [&] { return hasWrite({0x30, 0x6D}); }, 2s), "heater enable 0x306D");
     static_cast<void>(d.set<Heater>(Chips::Sht3xDetail::Heater::off));
     check(runUntil(d, [&] { return hasWrite({0x30, 0x66}); }, 2s), "heater disable 0x3066");
-    if(failures != 0) { dump(); }
 }
 
 void aht20() {
-    testCase("AHT20");
-    fresh();
+    I2cCase const    testcase{"AHT20"};
     bool             triggered = false;
     int              busyLeft  = 2;   // the first two frames read say busy; a retry re-triggers
     int              triggers  = 0;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x38) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x38) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               if(static_cast<std::uint8_t>(sent[0]) == 0xAC) {
                   triggered = true;
                   ++triggers;
               }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(recv.size() == 1) {
               recv[0] = std::byte{0x18};
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(recv.size() == 7 && triggered) {
               if(busyLeft > 0) {
                   --busyLeft;
                   recv[0] = std::byte{0x9C};
-                  return FakeBus::Result::succeeded;
+                  return FakeBus::Result::ok;
               }
               std::array<std::byte, 6> f{std::byte{0x1C},
                                          std::byte{0x80},
@@ -253,8 +248,8 @@ void aht20() {
                                          std::byte{0x66},
                                          std::byte{0x66}};
               for(std::size_t i = 0; i < 6; ++i) { recv[i] = f[i]; }
-              recv[6] = static_cast<std::byte>(Sensirion::crc8(Bytes{f}));
-              return FakeBus::Result::succeeded;
+              recv[6] = static_cast<std::byte>(Kvasir::Sensirion::crc8(Kvasir::Bytes{f}));
+              return FakeBus::Result::ok;
           }
           return FakeBus::Result::failed;
       }};
@@ -267,28 +262,26 @@ void aht20() {
           "reset, init, trigger");
     check(d.identified(), "calibrated");
     std::size_t reads7 = 0;
-    for(auto const& t : FakeBus::log) { reads7 += t.isRead() && t.recvLen == 7; }
+    for(auto const& t : FakeBus::log) { reads7 += t.isRead() && t.recvLen == 7 ? 1U : 0U; }
     checkEq(reads7, 3U, "two busy frames, each answered by a fresh trigger, then the frame");
     checkEq(triggers, 3, "three triggers");
     checkNear(d.latest().humidity, 5000, 1, "the model's frame reached the decode");
     // RH 0x80000 is 50.00 %, T 0x66666 30.00 degC, CRC over the six; busy bit 7 is a retry
     static_assert([] {
         auto const body = frame(0x1C, 0x80, 0x00, 0x06, 0x66, 0x66);
-        auto const f    = join(body, frame(Sensirion::crc8(Bytes{body})));
-        auto const got  = Chips::Aht20::Measurement::decode(Bytes{f});
+        auto const f    = join(body, frame(Kvasir::Sensirion::crc8(Kvasir::Bytes{body})));
+        auto const got  = Chips::Aht20::Measurement::decode(Kvasir::Bytes{f});
         auto const busy = frame(0x9C, 0, 0, 0, 0, 0, 0);
         return isOk(got) && within(got.value.humidity, 5000, 1)
             && within(got.value.temperature, 3000, 1)
-            && isRetry(Chips::Aht20::Measurement::decode(Bytes{busy}));
+            && isRetry(Chips::Aht20::Measurement::decode(Kvasir::Bytes{busy}));
     }());
     checkEq(d.rejected(), 0U, "nothing rejected");
-    if(failures != 0) { dump(); }
 }
 
 void sht4x() {
-    testCase("SHT4x");
-    fresh();
-    CommandModel m{0x44};
+    I2cCase const testcase{"SHT4x"};
+    CommandModel  m{0x44};
     m.replies[0x89]  = words({0x1234, 0x5678});
     m.replies[0xFD]  = words({0x6666, 0x72B0});   // 25.0 degC, -6 + 125 * 29360 / 65535 = 50.0 %
     FakeBus::respond = std::ref(m);
@@ -301,7 +294,7 @@ void sht4x() {
     // 0x6666 is 25.0 degC, -6 + 125 x 0x72B0 / 65535 is 50.0 %RH
     static_assert([] {
         auto const f   = crcWords(0x6666, 0x72B0);
-        auto const got = Chips::Sht4x::Measurement::decode(Bytes{f});
+        auto const got = Chips::Sht4x::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && within(got.value.temperature, 2500, 1)
             && within(got.value.humidity, 5000, 1);
     }());
@@ -318,19 +311,17 @@ void sht4x() {
     auto const ticket = d.request<Heated>();
     check(runUntil(
             d,
-            [&] { return d.answer<Heated>(ticket) == Answer::ok; },
+            [&] { return d.answer<Heated>(ticket) == Kvasir::Engine::Answer::ok; },
             2s),
           "asked for, answered");
     checkEq(d.samples<Heated>(), samples + 1, "one heated sample");
     check(d.latest<Heated>().temperature > d.latest().temperature,
           "and latest() is still the unheated one");
-    if(failures != 0) { dump(); }
 }
 
 void shtc3() {
-    testCase("SHTC3");
-    fresh();
-    CommandModel m{0x70};
+    I2cCase const testcase{"SHTC3"};
+    CommandModel  m{0x70};
     m.replies[0xEFC8] = words({0x0807});
     m.replies[0x7866] = words({0x6666, 0x8000});
     FakeBus::respond  = std::ref(m);
@@ -345,16 +336,14 @@ void shtc3() {
     // 0x6666 is 25.00 degC, 0x8000 50.00 %RH
     static_assert([] {
         auto const f   = crcWords(0x6666, 0x8000);
-        auto const got = Chips::Shtc3::Measurement::decode(Bytes{f});
+        auto const got = Chips::Shtc3::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && within(got.value.temperature, 2500, 1)
             && within(got.value.humidity, 5000, 1);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void htu21d() {
-    testCase("HTU21D");
-    fresh();
+    I2cCase      testcase{"HTU21D"};
     CommandModel m{0x40};
     m.replies[0xF3]  = {0x4E, 0x85, 0x6B};   // datasheet: 7.04 degC, CRC 0x6B
     m.replies[0xF5]  = {0x68, 0x3A, 0x7C};   // datasheet: 44.8 %RH, CRC 0x7C
@@ -367,14 +356,12 @@ void htu21d() {
     // the datasheet's words: 0x4E85 (CRC 0x6B) is 7.04 degC, 0x683A (CRC 0x7C) 44.8 %RH
     static_assert([] {
         auto const f   = frame(0x4E, 0x85, 0x6B, 0x68, 0x3A, 0x7C);
-        auto const got = Chips::Htu21d::Measurement::decode(Bytes{f});
+        auto const got = Chips::Htu21d::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && within(got.value.temperature, 704, 1)
             && within(got.value.humidity, 4488, 10);
     }());
-    if(failures != 0) { dump(); }
 
-    testCase("Si7021");
-    fresh();
+    testcase.next("Si7021");
     m.commands.clear();
     m.replies[0xFCC9] = {0x15, 0xFF, 0xB5, 0xFF, 0xFF, 0x2D};   // SNB_3..0, each pair with its CRC
     FakeBus::respond  = std::ref(m);
@@ -384,8 +371,7 @@ void htu21d() {
 }
 
 void hdc1080() {
-    testCase("HDC1080");
-    fresh();
+    I2cCase const       testcase{"HDC1080"};
     RegisterModel<1, 2> m{0x40};
     m.set(0xFE, {0x54, 0x49, 0x10, 0x50});
     std::vector<std::uint8_t> result{0x66, 0x66, 0x80, 0x00};
@@ -393,14 +379,14 @@ void hdc1080() {
     ScopedHook const          answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x40) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x40) { return FakeBus::Result::nack; }
           if(sent.size() == 1 && recv.empty()) {
               pointerOnly = static_cast<std::uint8_t>(sent[0]) == 0x00;
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(sent.empty() && recv.size() == 4 && pointerOnly) {
               for(std::size_t i = 0; i < 4; ++i) { recv[i] = static_cast<std::byte>(result[i]); }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return m(addr, sent, recv);
       }};
@@ -412,16 +398,14 @@ void hdc1080() {
     // 0x6666 is 26.00 degC, 0x8000 50.00 %RH
     static_assert([] {
         auto const f   = frame(0x66, 0x66, 0x80, 0x00);
-        auto const got = Chips::Hdc1080::Measurement::decode(Bytes{f});
+        auto const got = Chips::Hdc1080::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && within(got.value.temperature, 2600, 1)
             && within(got.value.humidity, 5000, 1);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void tmp102() {
-    testCase("TMP102");
-    fresh();
+    I2cCase const       testcase{"TMP102"};
     RegisterModel<1, 2> m{0x48};
     m.set(0x00, {0x00, 0x00});   // 0 degC until the first conversion is done
     m.set(0x01, {0x60, 0xA0});
@@ -456,24 +440,22 @@ void tmp102() {
         auto const f = frame(0x19, 0x00);
         auto const g = frame(0xE7, 0x00);
         using T      = Chips::Tmp102::Temperature;
-        return equal(centiOf(T::decode(Bytes{f}).temperature), 2500)
-            && equal(centiOf(T::decode(Bytes{g}).temperature), -2500);
+        return equal(centiOf(T::decode(Kvasir::Bytes{f}).temperature), 2500)
+            && equal(centiOf(T::decode(Kvasir::Bytes{g}).temperature), -2500);
     }());
     // Not a TMP102: an ADS1115's config register (8583h) has bit 13 clear
     static_assert([] {
         Chips::Tmp102::State st{};
-        return Chips::Tmp102::setup(Bytes{frame(0x60, 0xA0)}, st)
-            && !Chips::Tmp102::setup(Bytes{frame(0x85, 0x83)}, st)
-            && !Chips::Tmp102::setup(Bytes{frame(0x60, 0xA1)}, st);
+        return Chips::Tmp102::setup(Kvasir::Bytes{frame(0x60, 0xA0)}, st)
+            && !Chips::Tmp102::setup(Kvasir::Bytes{frame(0x85, 0x83)}, st)
+            && !Chips::Tmp102::setup(Kvasir::Bytes{frame(0x60, 0xA1)}, st);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void lm75() {
     RegisterModel<1, 2> m{0x48};
     m.readOnly = {0x00};
-    testCase("LM75");
-    fresh();
+    I2cCase const testcase{"LM75"};
     // the configuration register is one byte on a chip whose others are two: the model
     // takes that write itself
     ScopedHook const answering{
@@ -482,7 +464,7 @@ void lm75() {
           if(addr == 0x48 && sent.size() == 2 && recv.empty()
              && static_cast<std::uint8_t>(sent[0]) == 0x01)
           {
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return m(addr, sent, recv);
       }};
@@ -493,9 +475,8 @@ void lm75() {
     // 0x1900 is 25.00 degC
     static_assert([] {
         auto const f = frame(0x19, 0x00);
-        return equal(Chips::Lm75::Temperature::decode(Bytes{f}).temperature, 2500);
+        return equal(Chips::Lm75::Temperature::decode(Kvasir::Bytes{f}).temperature, 2500);
     }());
-    if(failures != 0) { dump(); }
 }
 
 /// A TC74 on the wire: CONFIG (SHDN, read-only DATA_RDY) and TEMP behind the command byte. TEMP
@@ -520,7 +501,7 @@ struct Tc74Part {
     FakeBusResult operator()(std::uint8_t               addr,
                              std::span<std::byte const> sent,
                              std::span<std::byte>       recv) {
-        if(addr != address) { return FakeBusResult::notAcknowledged; }
+        if(addr != address) { return FakeBusResult::nack; }
         if(!standby && FakeClock::now() >= convertedAt) {
             ready   = true;
             tempReg = temp;
@@ -541,7 +522,7 @@ struct Tc74Part {
             }
         }
         for(auto& b : recv) { b = std::byte{pointer == 0x00 ? tempReg : config()}; }
-        return FakeBusResult::succeeded;
+        return FakeBusResult::ok;
     }
 };
 
@@ -555,7 +536,7 @@ void tc74() {
         using T      = Chips::Tc74<>::Temperature;
         auto const t = [](std::uint8_t raw) {
             auto const f = frame(0x40, raw);   // DATA_RDY set, normal mode
-            auto const o = T::decode(Bytes{f});
+            auto const o = T::decode(Kvasir::Bytes{f});
             return isOk(o) ? centiOf(o.value.temperature) : -99999;
         };
         return t(0x7F) == 12700 && t(0x19) == 2500 && t(0x00) == 0 && t(0xFF) == -100
@@ -570,9 +551,11 @@ void tc74() {
         auto const frozen = frame(0xC0, 0x19);   // a standby the ready bit has not seen yet
         auto const floats = frame(0xFF, 0xFF);
         auto const odd    = frame(0x41, 0x19);
-        return isUnchanged(T::decode(Bytes{notYet})) && isUnchanged(T::decode(Bytes{asleep}))
-            && isUnchanged(T::decode(Bytes{frozen})) && isReject(T::decode(Bytes{floats}))
-            && isReject(T::decode(Bytes{odd}));
+        return isUnchanged(T::decode(Kvasir::Bytes{notYet}))
+            && isUnchanged(T::decode(Kvasir::Bytes{asleep}))
+            && isUnchanged(T::decode(Kvasir::Bytes{frozen}))
+            && isReject(T::decode(Kvasir::Bytes{floats}))
+            && isReject(T::decode(Kvasir::Bytes{odd}));
     }());
     static_assert([] {
         std::array<std::byte, 1> b{};
@@ -584,8 +567,8 @@ void tc74() {
     }());
 
     {
-        fresh();
-        Tc74Part part{};
+        I2cCase const testcase{"TC74: through the engine, standby and back"};
+        Tc74Part      part{};
         part.temp = 0xE7;   // -25 degC
         ScopedHook const    answering{FakeBus::respond, std::ref(part)};
         Dev<Chips::Tc74<1>> t{};
@@ -618,11 +601,10 @@ void tc74() {
         static_cast<void>(t.set<Chips::Tc74<1>::Power>(Chips::Tc74<1>::Mode::normal));
         check(runUntil(t, [&] { return t.samples() > asleepFor; }, 1s), "readings resume");
         checkEq(centiOf(t.latest().temperature), 0, "the new conversion");
-        if(failures != 0) { dump(); }
     }
     {
-        // a part with a reserved bit set is not a TC74, and is not written to
-        fresh();
+        I2cCase const testcase{
+          "TC74: a part with a reserved bit set is not a TC74, and is not written to"};
         Tc74Part part{};
         part.reserved = 0x01;
         ScopedHook const    answering{FakeBus::respond, std::ref(part)};
@@ -630,24 +612,21 @@ void tc74() {
         runFor(t, 3s);
         check(!t.identified() && !t.answering(), "a reserved bit set: not identified");
         checkEq(part.configWrites, 0, "and not written to");
-        if(failures != 0) { dump(); }
     }
     {
-        // TC74A5 ordered, TC74A1 assumed: the A1 description at 0x49 finds nothing at 0x4D
-        fresh();
+        I2cCase const testcase{
+          "TC74: A5 ordered, A1 assumed: the A1 description at 0x49 finds nothing at 0x4D"};
         Tc74Part part{};
         part.address = 0x4D;
         ScopedHook const    answering{FakeBus::respond, std::ref(part)};
         Dev<Chips::Tc74<1>> t{};
         runFor(t, 3s);
         check(!t.identified() && !t.answering(), "nothing answers at the variant's address");
-        if(failures != 0) { dump(); }
     }
 }
 
 void dps310() {
-    testCase("DPS310 (worked example)");
-    fresh();
+    I2cCase const    testcase{"DPS310 (worked example)"};
     RegisterModel<1> dps{0x77};
     dps.set(0x0D, {0x10});   // product id
     dps.set(0x28, {0x80});   // TMP_COEF_SRCE = external
@@ -721,11 +700,11 @@ void dps310() {
         st.c10         = 4000;
         st.c01         = 100;
         auto const f   = frame(0x03, 0xF8, 0x00, 0x04, 0x00, 0x00, 0xF7);
-        auto const got = Chips::Dps310<>::Measurement::decode(Bytes{f}, st);
+        auto const got = Chips::Dps310<>::Measurement::decode(Kvasir::Bytes{f}, st);
         // PRS_RDY and TMP_RDY clear: nothing new, whatever the result registers hold
         auto const old = frame(0x03, 0xF8, 0x00, 0x04, 0x00, 0x00, 0xC7);
         return isOk(got) && equal(got.value.temperature, 35000) && equal(got.value.pressure, 101050)
-            && isUnchanged(Chips::Dps310<>::Measurement::decode(Bytes{old}, st));
+            && isUnchanged(Chips::Dps310<>::Measurement::decode(Kvasir::Bytes{old}, st));
     }());
 
     // Every coefficient in play, against the datasheet's polynomial evaluated in double.
@@ -744,7 +723,7 @@ void dps310() {
         constexpr double praw = -1'513'241;   // 0xE8E8E7 as 24 bits; raw / kP about -0.72
         constexpr double traw = 305'000;      // 0x04A768; raw / kT about 0.58
         auto const       f    = frame(0xE8, 0xE8, 0xE7, 0x04, 0xA7, 0x68, 0x30);
-        auto const       got  = D::Measurement::decode(Bytes{f}, st).value;
+        auto const       got  = D::Measurement::decode(Kvasir::Bytes{f}, st).value;
         double const     prs  = praw / D::Kp;
         double const     tmp  = traw / D::Kt;
         double const wantP = st.c00 + prs * (st.c10 + prs * (st.c20 + prs * st.c30)) + tmp * st.c01
@@ -753,12 +732,10 @@ void dps310() {
         return within(got.pressure, wantP, 1.0)                // within a pascal
             && within(got.temperature, wantT * 1000.0, 1.0);   // and a millidegree
     }());
-    if(failures != 0) { dump(); }
 }
 
 void tmp117() {
-    testCase("TMP117 / TMP119");
-    fresh();
+    I2cCase const       testcase{"TMP117 / TMP119"};
     RegisterModel<1, 2> t17{0x48};
     t17.set(0x0F, {0x01, 0x17});
     t17.set(0x00, {0x0C, 0x80});   // 3200 x 7.8125 m degC = 25.000 degC
@@ -774,7 +751,7 @@ void tmp117() {
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
           auto const r = t17(addr, sent, recv);
-          if(r == FakeBus::Result::succeeded && sent.size() == 1 && recv.size() == 2) {
+          if(r == FakeBus::Result::ok && sent.size() == 1 && recv.size() == 2) {
               auto const reg = static_cast<std::uint8_t>(sent[0]);
               if(reg == 0x01) { recv[0] |= ready ? std::byte{0xA0} : std::byte{0x80}; }
               if(reg == 0x01 && bringUpRead) {
@@ -788,8 +765,9 @@ void tmp117() {
     Dev<Chips::Tmp117> t1{};
     check(runUntil(t1, [&] { return t1.valid(); }, 2s), "first sample");
     check(t1.identified(), "device id 0x0117");
-    checkEq(t1.identity(0), 0x0117U, "DEVICE_ID as the engine read it, once");
-    checkEq(t1.state().deviceId, 0x0117U, "and published in the State");
+    checkEq(t1.state().deviceId,
+            0x0117U,
+            "DEVICE_ID as the engine read it, once, kept in the State");
     // The identity is the description's Identity, under its mask: DID 117h whatever the revision
     // in 15:12; the TMP119's is its whole word, 2117h.
     static_assert(Chips::Tmp117::Identity[0].matches(0x0117)
@@ -802,8 +780,8 @@ void tmp117() {
         Chips::Tmp117::State st{};
         auto const           loaded  = frame(0x02, 0x20);
         auto const           loading = frame(0x12, 0x20);   // EEPROM_Busy
-        return Chips::Tmp117::setup(Bytes{loaded}, st) && !st.eepromBusy
-            && !Chips::Tmp117::setup(Bytes{loading}, st) && st.eepromBusy;
+        return Chips::Tmp117::setup(Kvasir::Bytes{loaded}, st) && !st.eepromBusy
+            && !Chips::Tmp117::setup(Kvasir::Bytes{loading}, st) && st.eepromBusy;
     }());
     checkEq(t1.latest().temperature, 25000, "the model's frame reached the decode");
     checkEq(t1.latest().highAlert, true, "HIGH_Alert from the configuration read at offset 0");
@@ -828,19 +806,17 @@ void tmp117() {
         auto const f  = frame(0xA2, 0x20, 0x0C, 0x80);
         auto const g  = frame(0xA2, 0x20, 0xF3, 0x80);
         auto const h  = frame(0x02, 0x20, 0xF3, 0x80);
-        auto const up = T::decode(Bytes{f}, {});
-        auto const dn = T::decode(Bytes{g}, up.value);
+        auto const up = T::decode(Kvasir::Bytes{f}, {});
+        auto const dn = T::decode(Kvasir::Bytes{g}, up.value);
         return isOk(up) && equal(up.value.temperature, 25000) && up.value.highAlert
             && !up.value.lowAlert && isOk(dn) && equal(dn.value.temperature, -25000)
-            && isUnchanged(T::decode(Bytes{h}, dn.value));
+            && isUnchanged(T::decode(Kvasir::Bytes{h}, dn.value));
     }());
     check(Chips::Tmp119::Name == std::string_view{"TMP119"}, "the TMP119 shares the map");
-    if(failures != 0) { dump(); }
 }
 
 void emc2101() {
-    testCase("EMC2101");
-    fresh();
+    I2cCase const    testcase{"EMC2101"};
     RegisterModel<1> em{0x4C};
     em.set(0x00, {0x19});   // internal 25 degC
     em.set(0x01, {0x1E});   // external 30 degC whole
@@ -863,17 +839,18 @@ void emc2101() {
     // internal 0x19, external 0x1E + 3/8, tach 0x10 0x27, status 0x50
     static_assert([] {
         auto const f   = frame(0x19, 0x1E, 0x60, 0x10, 0x27, 0x50);
-        auto const got = Chips::Emc2101::Sensors::decode(Bytes{f});
+        auto const got = Chips::Emc2101::Sensors::decode(Kvasir::Bytes{f});
         return equal(got.temperature, 25000) && equal(got.externalTemperature, 30375)
             && equal(got.tach, 10000U) && equal(got.fanSpeed(), 540) && equal(got.status, 0x50)
             && !got.externalDiodeOpen() && got.externalValid();
     }());
     check(em.word(0x03) == 0x8C && em.word(0x4A) == 0x20 && em.word(0xBF) == 0x06,
           "the configuration registers are written at bring-up");
-    check(hasWrite({0x46}) == false, "and 0x46 is never written");
+    check(!hasWrite({0x46}), "and 0x46 is never written");
     // 0x46 must be read before 0x47, which it latches
     {
-        std::size_t low = 0, high = 0;
+        std::size_t low  = 0;
+        std::size_t high = 0;
         for(std::size_t i = 0; i < FakeBus::log.size(); ++i) {
             auto const& tr = FakeBus::log[i];
             if(tr.isRead() && tr.sent == std::vector<std::uint8_t>{0x46}) { low = i; }
@@ -886,10 +863,9 @@ void emc2101() {
     // +127.000 degC exactly is an open diode, not a temperature
     static_assert([] {
         auto const f   = frame(0x19, 0x7F, 0x00, 0x10, 0x27, 0x00);
-        auto const got = Chips::Emc2101::Sensors::decode(Bytes{f});
+        auto const got = Chips::Emc2101::Sensors::decode(Kvasir::Bytes{f});
         return got.externalDiodeOpen() && !got.externalValid();
     }());
-    if(failures != 0) { dump(); }
 }
 
 // A limit past what the part measures is clamped to its range, not wrapped to the other sign.
@@ -911,12 +887,12 @@ static_assert([] {
 }());
 
 void adt7420() {
-    testCase("ADT7420");
-    fresh();
+    I2cCase const       testcase{"ADT7420"};
     RegisterModel<1, 2> ad{0x48};
     ad.set(0x00, {0x0C, 0x80});   // 13-bit: 0x0C80 >> 3 = 400 sixteenths = 25.00 degC
-    ad.readOnly            = {0x00};
-    std::uint8_t     adCfg = 0xFF, adHyst = 0xFF;
+    ad.readOnly             = {0x00};
+    std::uint8_t     adCfg  = 0xFF;
+    std::uint8_t     adHyst = 0xFF;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
@@ -924,18 +900,18 @@ void adt7420() {
               auto const r = static_cast<std::uint8_t>(sent[0]);
               if(r == 0x03) {
                   adCfg = static_cast<std::uint8_t>(sent[1]);
-                  return FakeBus::Result::succeeded;
+                  return FakeBus::Result::ok;
               }
               if(r == 0x0A) {
                   adHyst = static_cast<std::uint8_t>(sent[1]);
-                  return FakeBus::Result::succeeded;
+                  return FakeBus::Result::ok;
               }
           }
           if(addr == 0x48 && sent.size() == 1 && recv.size() == 1) {
               // the two 8-bit registers: the ID, and the configuration read back
               recv[0]
                 = static_cast<std::uint8_t>(sent[0]) == 0x0B ? std::byte{0xCB} : std::byte{adCfg};
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return ad(addr, sent, recv);
       }};
@@ -948,10 +924,10 @@ void adt7420() {
         using A = Chips::Adt7420<>;
         A::State const st{0xCB, A::Resolution::bits13};
         auto const     f   = frame(0x0C, 0x80);
-        auto const     got = A::Temperature::decode(Bytes{f}, st);
+        auto const     got = A::Temperature::decode(Kvasir::Bytes{f}, st);
         auto const     ff  = frame(0xFF, 0xFF);
         return isOk(got) && equal(got.value.temperature, 2500)
-            && isReject(A::Temperature::decode(Bytes{ff}, st));
+            && isReject(A::Temperature::decode(Kvasir::Bytes{ff}, st));
     }());
     // 16-bit: 0xFFFF is -1/128 degC, a reading just below zero, and is kept (-0.78 centi-degC
     // truncates to 0)
@@ -959,7 +935,7 @@ void adt7420() {
         using A = Chips::Adt7420<>;
         A::State const st{0xCB, A::Resolution::bits16};
         auto const     ff  = frame(0xFF, 0xFF);
-        auto const     got = A::Temperature::decode(Bytes{ff}, st);
+        auto const     got = A::Temperature::decode(Kvasir::Bytes{ff}, st);
         return isOk(got) && equal(got.value.temperature, 0);
     }());
     checkEq(adCfg, std::uint8_t{0x00}, "the reset configuration at bring-up");
@@ -968,12 +944,10 @@ void adt7420() {
     check(runUntil(aa, [&] { return ad.word(0x04) == 0x2000U; }, 200ms), "THIGH 64 degC");
     aa.modify<Chips::Adt7420<>::Config>([](auto& c) { c.mode = Chips::Adt7420<>::Mode::shutdown; });
     check(runUntil(aa, [&] { return adCfg == 0x60; }, 200ms), "shutdown, the rest untouched");
-    if(failures != 0) { dump(); }
 }
 
 void tmp1075() {
-    testCase("TMP1075");
-    fresh();
+    I2cCase const       testcase{"TMP1075"};
     RegisterModel<1, 2> t75{0x48};
     t75.set(0x0F, {0x75, 0x00});   // DIEID
     t75.set(0x01, {0x00, 0xFF});
@@ -1013,12 +987,11 @@ void tmp1075() {
         using T       = Chips::Tmp1075<>::Temperature;
         auto const f  = frame(0x19, 0x00);
         auto const g  = frame(0xF0, 0x00);
-        auto const up = T::decode(Bytes{f});
-        auto const dn = T::decode(Bytes{g});
+        auto const up = T::decode(Kvasir::Bytes{f});
+        auto const dn = T::decode(Kvasir::Bytes{g});
         return isOk(up) && equal(up.value.temperature, 2500) && isOk(dn)
             && equal(dn.value.temperature, -1600);
     }());
-    if(failures != 0) { dump(); }
 }
 
 /// The limits read back every 5 s, 100 ms after a write.
@@ -1027,15 +1000,15 @@ struct CheckedLimits {
 };
 
 void limitsReadBack() {
-    testCase("TMP1075: Timing::LimitsVerifyInterval puts back limits the part lost");
-    fresh();
+    I2cCase testcase{"TMP1075: Timing::LimitsVerifyInterval puts back limits the part lost"};
     RegisterModel<1, 2> t75{0x48};
     t75.set(0x0F, {0x75, 0x00});
     t75.set(0x00, {0x19, 0x00});
     t75.readOnly     = {0x00, 0x0F};
     FakeBus::respond = std::ref(t75);
     using Checked    = Chips::Tmp1075<CheckedLimits>;
-    static_assert(detail::Verifies<Checked::Limits> && !detail::Verifies<Chips::Tmp1075<>::Limits>);
+    static_assert(Kvasir::Engine::detail::Verifies<Checked::Limits>
+                  && !Kvasir::Engine::detail::Verifies<Chips::Tmp1075<>::Limits>);
     Dev<Checked> tt{};
     tt.set<Checked::Limits>(Checked::High, Units::centiDegC(8500));
     tt.set<Checked::Limits>(Checked::Low, Units::centiDegC(8000));
@@ -1045,15 +1018,14 @@ void limitsReadBack() {
     check(runUntil(tt, [&] { return t75.word(0x03) == 0x5500U; }, 6s), "written again");
     checkEq(tt.mismatches<Checked::Limits>(), 1U, "one mismatch");
 
-    testCase("ADT7420: the same for its three limits");
-    fresh();
+    testcase.next("ADT7420: the same for its three limits");
     RegisterModel<1, 1> a{0x48};
     a.set(0x0B, {0xCB});
     a.set(0x00, {0x0C, 0x80});
     a.readOnly       = {0x00, 0x01, 0x0B};
     FakeBus::respond = std::ref(a);
     using CheckedAdt = Chips::Adt7420<Chips::Adt7420<>::Resolution::bits13, CheckedLimits>;
-    static_assert(detail::Verifies<CheckedAdt::Limits>);
+    static_assert(Kvasir::Engine::detail::Verifies<CheckedAdt::Limits>);
     Dev<CheckedAdt> aa{};
     aa.set<CheckedAdt::Limits>(CheckedAdt::Critical, Units::centiDegC(8500));
     check(runUntil(aa, [&] { return aa.writes<CheckedAdt::Limits>() == 1; }, 500ms), "written");
@@ -1066,8 +1038,7 @@ void limitsReadBack() {
 }
 
 void mcp9808() {
-    testCase("MCP9808");
-    fresh();
+    I2cCase const       testcase{"MCP9808"};
     RegisterModel<1, 2> c{0x18};
     c.set(0x06, {0x00, 0x54, 0x04, 0x00});
     c.set(0x05, {0x01, 0x90});
@@ -1080,7 +1051,7 @@ void mcp9808() {
              && static_cast<std::uint8_t>(sent[0]) == 0x08)
           {
               resolution = static_cast<std::uint8_t>(sent[1]);   // the one 8-bit register
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return c(addr, sent, recv);
       }};
@@ -1097,14 +1068,13 @@ void mcp9808() {
         using T      = Chips::Mcp9808::Temperature;
         auto const f = frame(0x01, 0x90);
         auto const g = frame(0x1E, 0x70);
-        return equal(centiOf(T::decode(Bytes{f}).temperature), 2500)
-            && equal(centiOf(T::decode(Bytes{g}).temperature), -2500);
+        return equal(centiOf(T::decode(Kvasir::Bytes{f}).temperature), 2500)
+            && equal(centiOf(T::decode(Kvasir::Bytes{g}).temperature), -2500);
     }());
-    if(failures != 0) { dump(); }
 }
 
 /// The AHT20's frame, as the DHT20 model serves it.
-constexpr auto Frame_ = frame(0x1C, 0x80, 0x00, 0x06, 0x66, 0x66);
+constexpr auto aht20Frame = frame(0x1C, 0x80, 0x00, 0x06, 0x66, 0x66);
 
 void dht20() {
     // The AHT20's frame: 50.00 %RH, 30.00 degC.
@@ -1113,11 +1083,11 @@ void dht20() {
     std::array<std::uint8_t, 3>           regBytes{0x11, 0x22, 0x33};
     auto const                            respond
       = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x38) { return FakeBus::Result::notAcknowledged; }
+            if(addr != 0x38) { return FakeBus::Result::nack; }
             if(!sent.empty()) {
                 // The write-back of the restore sets the calibration bits, as a real part does.
                 if(static_cast<std::uint8_t>(sent[0]) == 0xBE) { status = 0x1C; }
-                return FakeBus::Result::succeeded;
+                return FakeBus::Result::ok;
             }
             if(recv.size() == 1) {
                 recv[0] = std::byte{status};
@@ -1125,15 +1095,15 @@ void dht20() {
                 for(std::size_t i = 0; i < 3; ++i) { recv[i] = std::byte{regBytes[i]}; }
             } else if(recv.size() == 7) {
                 for(std::size_t i = 0; i < 6; ++i) { recv[i] = std::byte{Frame[i]}; }
-                recv[6] = std::byte{Sensirion::crc8(Bytes{std::as_bytes(std::span{Frame})})};
+                recv[6] = std::byte{
+                  Kvasir::Sensirion::crc8(Kvasir::Bytes{std::as_bytes(std::span{Frame})})};
             } else {
                 return FakeBus::Result::failed;
             }
-            return FakeBus::Result::succeeded;
+            return FakeBus::Result::ok;
         };
 
-    testCase("DHT20: calibrated at power-up -- a status read, then measurements");
-    fresh();
+    I2cCase           testcase{"DHT20: calibrated at power-up -- a status read, then measurements"};
     ScopedHook const  answering{FakeBus::respond, respond};
     Dev<Chips::Dht20> d{};
     check(runUntil(d, [&] { return d.valid(); }, 3s), "first sample");
@@ -1148,14 +1118,13 @@ void dht20() {
               "the model's frame reached the decode");
     // the AHT20's frame and CRC: 50.00 %RH, 30.00 degC
     static_assert([] {
-        auto const f   = join(Frame_, frame(Sensirion::crc8(Bytes{Frame_})));
-        auto const got = Chips::Dht20::Measurement::decode(Bytes{f});
+        auto const f = join(aht20Frame, frame(Kvasir::Sensirion::crc8(Kvasir::Bytes{aht20Frame})));
+        auto const got = Chips::Dht20::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && within(got.value.humidity, 5000, 1)
             && within(got.value.temperature, 3000, 1);
     }());
 
-    testCase("DHT20: without the calibration bits, Restore rewrites 0x1B, 0x1C and 0x1E");
-    fresh();
+    testcase.next("DHT20: without the calibration bits, Restore rewrites 0x1B, 0x1C and 0x1E");
     status = 0x08;
     ScopedHook const  answeringAgain{FakeBus::respond, respond};
     Dev<Chips::Dht20> e{};
@@ -1183,12 +1152,10 @@ void dht20() {
     checkEq(e.latest<Chips::Dht20::Restore>().status,
             std::uint8_t{0x1C},
             "the final status byte at offset 9, not a register byte");
-    if(failures != 0) { dump(); }
 }
 
 void gas() {
-    testCase("SCD4x (datasheet example 500 ppm, 25 degC, 37 %)");
-    fresh();
+    I2cCase               testcase{"SCD4x (datasheet example 500 ppm, 25 degC, 37 %)"};
     CommandModel          m{0x62};
     int                   readyPolls = 0;
     FakeClock::time_point started{};
@@ -1218,15 +1185,13 @@ void gas() {
     static_assert([] {
         auto const f
           = join(crcWords(0x8006), frame(0x01, 0xF4, 0x33, 0x66, 0x67, 0xA2, 0x5E, 0xB9, 0x3C));
-        auto const got = Chips::Scd4x::Measurement::decode(Bytes{f});
+        auto const got = Chips::Scd4x::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.co2, 500) && within(got.value.temperature, 2500, 1)
             && within(got.value.humidity, 3700, 1);
     }());
     checkEq(d.rejected(), 0U, "nothing rejected");
-    if(failures != 0) { dump(); }
 
-    testCase("SGP40");
-    fresh();
+    testcase.next("SGP40");
     CommandModel g{0x59};
     g.replies[0x3682] = words({0x0001, 0x0002, 0x0003});
     g.replies[0x260F] = words({0x1234});
@@ -1241,53 +1206,51 @@ void gas() {
     // one word with its CRC
     static_assert([] {
         auto const f   = crcWords(0x1234);
-        auto const got = Chips::Sgp40::Raw::decode(Bytes{f});
+        auto const got = Chips::Sgp40::Raw::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.ticks, 0x1234U);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void thermalAndBaro() {
-    testCase("MLX90614 (datasheet PEC example)");
-    fresh();
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x5A) { return FakeBus::Result::notAcknowledged; }
-            if(sent.size() != 1 || recv.size() != 3) { return FakeBus::Result::failed; }
-            auto const cmd = static_cast<std::uint8_t>(sent[0]);
-            if(cmd == 0x07) {
-                recv[0] = std::byte{0xD2};
-                recv[1] = std::byte{0x3A};
-                recv[2] = std::byte{0x30};
-                return FakeBus::Result::succeeded;
-            }
-            if(cmd == 0x06) {
-                std::array<std::byte, 5> frame{std::byte{0xB4},
-                                               std::byte{0x06},
-                                               std::byte{0xB5},
-                                               std::byte{0x2E},
-                                               std::byte{0x39}};
-                recv[0] = std::byte{0x2E};
-                recv[1] = std::byte{0x39};
-                recv[2] = static_cast<std::byte>(crc8Smbus(Bytes{frame}));
-                return FakeBus::Result::succeeded;
-            }
-            return FakeBus::Result::failed;
-        };
+    I2cCase          testcase{"MLX90614 (datasheet PEC example)"};
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x5A) { return FakeBus::Result::nack; }
+          if(sent.size() != 1 || recv.size() != 3) { return FakeBus::Result::failed; }
+          auto const cmd = static_cast<std::uint8_t>(sent[0]);
+          if(cmd == 0x07) {
+              recv[0] = std::byte{0xD2};
+              recv[1] = std::byte{0x3A};
+              recv[2] = std::byte{0x30};
+              return FakeBus::Result::ok;
+          }
+          if(cmd == 0x06) {
+              std::array<std::byte, 5> const frame{std::byte{0xB4},
+                                                   std::byte{0x06},
+                                                   std::byte{0xB5},
+                                                   std::byte{0x2E},
+                                                   std::byte{0x39}};
+              recv[0] = std::byte{0x2E};
+              recv[1] = std::byte{0x39};
+              recv[2] = static_cast<std::byte>(crc8Smbus(Kvasir::Bytes{frame}));
+              return FakeBus::Result::ok;
+          }
+          return FakeBus::Result::failed;
+      }};
     Dev<Chips::Mlx90614<>> d{};
     check(runUntil(d, [&] { return d.samples() == 1; }, 500ms), "first sample");
     checkEq(d.latest().object, 2801, "the model's frame reached the decode");
     // ambient 0x392E (19.61 degC) with its PEC, then the datasheet's object 0x3AD2, PEC 0x30
     static_assert([] {
-        auto const pec = crc8Smbus(Bytes{frame(0xB4, 0x06, 0xB5, 0x2E, 0x39)});
+        auto const pec = crc8Smbus(Kvasir::Bytes{frame(0xB4, 0x06, 0xB5, 0x2E, 0x39)});
         auto const f   = frame(0x2E, 0x39, pec, 0xD2, 0x3A, 0x30);
-        auto const got = Chips::Mlx90614<>::Temperature::decode(Bytes{f});
+        auto const got = Chips::Mlx90614<>::Temperature::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.object, 2801) && equal(got.value.ambient, 1961);
     }());
     checkEq(d.rejected(), 0U, "PECs accepted");
 
-    testCase("BMP180 (datasheet worked example)");
-    fresh();
+    testcase.next("BMP180 (datasheet worked example)");
     RegisterModel<1> m{0x77};
     m.set(0xD0, {0x55});
     m.set(0xAA, {0x01, 0x98, 0xFF, 0xB8, 0xC7, 0xD1, 0x7F, 0xE5, 0x7F, 0xF5, 0x5A,
@@ -1319,15 +1282,13 @@ void thermalAndBaro() {
         c.mc           = -8711;
         c.md           = 2868;
         auto const f   = frame(0x6C, 0xFA, 0x5D, 0x23, 0x00);
-        auto const got = B::Measurement::decode(Bytes{f}, c);
+        auto const got = B::Measurement::decode(Kvasir::Bytes{f}, c);
         return isOk(got) && equal(got.value.temperature, 150) && equal(got.value.pressure, 69964U);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void mpl3115a2() {
-    testCase("MPL3115A2");
-    fresh();
+    I2cCase const    testcase{"MPL3115A2"};
     RegisterModel<1> m{0x60};
     m.set(0x0C, {0xC4});
     m.set(0x00, {0x00});   // not ready yet
@@ -1340,7 +1301,7 @@ void mpl3115a2() {
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(s.size() == 2 && s[0] == std::byte{0x26} && s[1] == std::byte{0x04}) {
-              return FakeBus::Result::notAcknowledged;
+              return FakeBus::Result::nack;
           }
           return m(a, s, r);
       }};
@@ -1360,11 +1321,10 @@ void mpl3115a2() {
     // status, then 0x62F340 (Q18.2 left-justified: 101325 Pa) and 0x1980 (25.50 degC)
     static_assert([] {
         auto const f   = frame(0x08, 0x62, 0xF3, 0x40, 0x19, 0x80);
-        auto const got = Chips::Mpl3115a2::Measurement::decode(Bytes{f});
+        auto const got = Chips::Mpl3115a2::Measurement::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.pressure, 101325U)
             && equal(got.value.temperature, 2550);
     }());
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

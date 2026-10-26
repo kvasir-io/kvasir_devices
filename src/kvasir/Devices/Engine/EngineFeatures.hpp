@@ -1,0 +1,95 @@
+#pragma once
+
+/// What the device engine does beyond talking to the part, switched per bus (per engine port,
+/// Engine.hpp BusPort): a feature that is off costs no RAM in any device's state and no code in
+/// the engine.
+///
+/// A bus says what it wants with a `static constexpr EngineFeatures Features` member; a bus that
+/// has none gets the defaults. A driver from a chip package is given one with WithFeatures:
+///
+///     using I2c1 = Kvasir::Engine::WithFeatures<HW::I2cDriver<...>, {.switchable = true}>;
+///
+/// Never per device: devices with different features would be two ports, two copies of the
+/// engine. A device that needs a feature its bus has switched off does not build.
+
+#include "../Features.hpp"
+
+#include <cstdint>
+#include <type_traits>
+
+namespace Kvasir::Engine {
+
+struct EngineFeatures {
+    /// Bridges (Bridge.hpp) and Config::enabled(): link() can say `offline`. Off by default -
+    /// no firmware used it when the switch came.
+    bool switchable = false;
+    /// Parking a part that NAKs, probing for it with a backing-off interval, and link()
+    /// saying `absent` (Presence.hpp). Off, a NAKing part is retried as any failure is.
+    bool presence = true;
+    /// The engine's own timeout on a request the bus has not answered (DeviceKnobs
+    /// inFlightTimeoutMs). Off for a bus whose driver has a timeout of its own.
+    bool inFlightNet = true;
+    /// The bus completion time of every sample, read in the interrupt: stamp<G>() and
+    /// takeGaps<G>() for a group that says Timestamped (TouchController reads it).
+    bool timestamps = true;
+    /// The counters a firmware reports from: samples(), rejected(), writes(), errors(),
+    /// turns(), unidentified() - and the numbers in logHealth's line. Nothing in the engine
+    /// decides by them.
+    bool stats = true;
+    /// period<G>(ms): a read group's rate changed at run time. Off, every group runs at its
+    /// description's (or its State's) period and the slot keeps no period of its own.
+    bool runtimePeriod = true;
+    /// After a failed write, read-back or bring-up, wait `faultBackoff` (EngineDefaults) before trying again.
+    /// Off, the next turn tries again at once. (The re-init after `faultsBeforeReinit` failures
+    /// in a row is recovery, not back-off: it stays.)
+    bool faultBackoff = true;
+    /// Resting turns (Engine::rest): a device with nothing due skips its turn until it is. Off,
+    /// every turn runs in full - more work per loop turn, no resting state in RAM.
+    bool rest = true;
+    /// A device driven on its own (Device::turn(), not a Bus or a DeviceSet) calls its
+    /// chip's hooks directly, as a device set of one (SetOps.hpp), instead of through its
+    /// table (Device::EngineOps). Direct calls stamp the whole engine once per chip type;
+    /// through the table it is one engine per port, whatever the chips. Off by default: a
+    /// firmware with a dozen chip types paid ~30 KB for the copies. On only pays for a bus
+    /// with one or two chip types, where the table's loads and indirect calls are all it saves.
+    bool directOps = false;
+
+    constexpr bool operator==(EngineFeatures const&) const = default;
+};
+
+/// Every feature on: what a test fake is, so that the tests of each feature run on it.
+inline constexpr EngineFeatures AllEngineFeatures{.switchable    = true,
+                                                  .presence      = true,
+                                                  .inFlightNet   = true,
+                                                  .timestamps    = true,
+                                                  .stats         = true,
+                                                  .runtimePeriod = true,
+                                                  .faultBackoff  = true,
+                                                  .rest          = true,
+                                                  .directOps     = false};
+
+/// A bus driver with the engine features @p F: everything of `Bus`, one member more.
+template<typename Bus, EngineFeatures F>
+struct WithFeatures : Bus {
+    static constexpr EngineFeatures Features = F;
+};
+
+namespace detail {
+    // The "empty when off" helpers are bus-neutral (../Features.hpp); the engine takes them in here.
+    using ::Kvasir::detail::Absent;
+    using ::Kvasir::detail::IfFeature;
+    using ::Kvasir::detail::NoCount;
+    using ::Kvasir::detail::NoStamp;
+    using ::Kvasir::detail::StatCount;
+
+    template<typename Bus>
+    consteval EngineFeatures featuresOf() {
+        if constexpr(requires { Bus::Features; }) {
+            return Bus::Features;
+        } else {
+            return EngineFeatures{};
+        }
+    }
+}   // namespace detail
+
+}   // namespace Kvasir::Engine

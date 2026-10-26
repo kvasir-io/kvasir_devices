@@ -23,22 +23,22 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
 void bh1750() {
-    testCase("BH1750");
-    fresh();
+    I2cCase const             testcase{"BH1750"};
     std::vector<std::uint8_t> reading{0x04, 0xB0};   // 1200 -> 1000 lx
     ScopedHook const          answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x23) { return FakeBus::Result::notAcknowledged; }
-          if(!sent.empty()) { return FakeBus::Result::succeeded; }
+          if(addr != 0x23) { return FakeBus::Result::nack; }
+          if(!sent.empty()) { return FakeBus::Result::ok; }
           for(std::size_t i = 0; i < recv.size(); ++i) {
               recv[i] = static_cast<std::byte>(reading[i]);
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Bh1750> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
@@ -51,7 +51,7 @@ void bh1750() {
     // 0x04B0 is 1200 counts, 1000 lx at the H resolution
     static_assert([] {
         auto const f = frame(0x04, 0xB0);
-        auto const s = Chips::Bh1750::Light::decode(Bytes{f});
+        auto const s = Chips::Bh1750::Light::decode(Kvasir::Bytes{f});
         return equal(s.raw, 1200U) && equal(s.lux(), 1000000U);
     }());
     check(d.fresh(), "fresh once");
@@ -59,12 +59,10 @@ void bh1750() {
     auto const n = d.samples();
     runFor(d, 1s);
     checkEq(d.samples() - n, 5U, "five samples a second");
-    if(failures != 0) { dump(); }
 }
 
 void veml6030() {
-    testCase("VEML6030");
-    fresh();
+    I2cCase const       testcase{"VEML6030"};
     RegisterModel<1, 2> m{0x48};
     // wire order is LSB first: register 0x07 holds bytes {0x81, 0xD4}
     m.set(0x07, {0x81, 0xD4});
@@ -72,7 +70,7 @@ void veml6030() {
     m.set(0x05, {0xD0, 0x07});   // 2000 counts
     m.readOnly       = {0x04, 0x05, 0x07};
     FakeBus::respond = std::ref(m);
-    Dev<Chips::Veml6030<>, At<0x48>> d{};
+    Dev<Chips::Veml6030<>, Kvasir::Engine::At<0x48>> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
     check(d.identified(), "ID low byte 0x81 accepted");
     checkEq(d.state().deviceId, 0xD481U, "ID kept");
@@ -80,16 +78,15 @@ void veml6030() {
     checkEq(d.latest().white, 2000U, "WHITE, read into offset 2, reached the decode");
     // ALS 1000 and WHITE 2000, little endian, at gain 1/8 and 100 ms: 0.5376 lx a count
     static_assert([] {
-        auto const f   = frame(0xE8, 0x03, 0xD0, 0x07);
-        auto const got = Chips::Veml6030<>::Light::decode(Bytes{f}, Chips::Veml6030<>::State{});
+        auto const f = frame(0xE8, 0x03, 0xD0, 0x07);
+        auto const got
+          = Chips::Veml6030<>::Light::decode(Kvasir::Bytes{f}, Chips::Veml6030<>::State{});
         return equal(got.als, 1000U) && equal(got.white, 2000U) && equal(got.lux(), 537600);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void opt3001() {
-    testCase("OPT3001");
-    fresh();
+    I2cCase const       testcase{"OPT3001"};
     RegisterModel<1, 2> opt{0x44};
     opt.set(0x7E, {0x54, 0x49});   // manufacturer "TI"
     opt.set(0x7F, {0x30, 0x01});   // device id
@@ -100,12 +97,12 @@ void opt3001() {
     check(runUntil(d, [&] { return d.valid(); }, 3s), "first sample");
     check(d.identified(), "5449h / 3001h accepted");
     checkEq(d.state().manufacturerId, 0x5449U, "manufacturer id kept");
-    checkEq(opt.word(0x01), 0xCE00U, "configuration: auto range, 800 ms, continuous");
+    checkEq(opt.word(0x01), 0xCE10U, "configuration: auto range, 800 ms, continuous, L 1");
     checkEq(d.latest().raw, 0x5123U, "the model's frame reached the decode");
     checkEq(Units::value(d.latest().lux()), 93120U, "93.12 lx");
     static_assert([] {
         auto const f = frame(0x51, 0x23);
-        auto const s = Chips::Opt3001<>::Light::decode(Bytes{f});
+        auto const s = Chips::Opt3001<>::Light::decode(Kvasir::Bytes{f});
         return equal(s.exponent(), 5) && equal(s.mantissa(), 0x123) && equal(s.lux(), 93120U)
             && !s.saturated();
     }());
@@ -113,21 +110,19 @@ void opt3001() {
     static_assert([] {
         auto const one = frame(0x00, 0x01);
         auto const top = frame(0xBF, 0xFF);
-        return equal(Chips::Opt3001<>::Light::decode(Bytes{one}).lux(), 10U)
-            && equal(Chips::Opt3001<>::Light::decode(Bytes{top}).lux(), 83865600U)
-            && Chips::Opt3001<>::Light::decode(Bytes{top}).saturated();
+        return equal(Chips::Opt3001<>::Light::decode(Kvasir::Bytes{one}).lux(), 10U)
+            && equal(Chips::Opt3001<>::Light::decode(Kvasir::Bytes{top}).lux(), 83865600U)
+            && Chips::Opt3001<>::Light::decode(Kvasir::Bytes{top}).saturated();
     }());
     // CT picks the conversion time, the read period trails it by 50 ms.
     static_assert(Chips::Opt3001<>::Light::Period == 850ms
                   && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::Light::Period
                        == 150ms
-                  && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::Conf == 0xC600);
-    if(failures != 0) { dump(); }
+                  && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::Conf == 0xC610);
 }
 
 void opt4048() {
-    testCase("OPT4048");
-    fresh();
+    I2cCase const       testcase{"OPT4048"};
     RegisterModel<1, 2> opt{0x44};
     opt.set(0x11, {0x08, 0x21});   // DEVICE_ID: DIDL 0x2, DIDH 0x21
     // CH1 (Y): exponent 2, mantissa 0x12345 -> code 0x48D14
@@ -159,7 +154,7 @@ void opt4048() {
                              0x00,
                              0x00);
         auto const got
-          = Chips::Opt4048<>::Colour::decode(Bytes{f}, Chips::Opt4048<>::Colour::Sample{});
+          = Chips::Opt4048<>::Colour::decode(Kvasir::Bytes{f}, Chips::Opt4048<>::Colour::Sample{});
         return isOk(got) && equal(got.value.exponent[1], 2) && equal(got.value.counter[1], 3)
             && equal(got.value.y(), 0x48D14U)
             && equal(got.value.lux(), 641259U);   // code x 2.15e-3 = 641.259 lux
@@ -172,15 +167,13 @@ void opt4048() {
         auto const f = frame(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         S          lit{};
         lit.code[1] = 0x48D14U;
-        return isOk(Chips::Opt4048<>::Colour::decode(Bytes{f}, lit))
-            && isUnchanged(Chips::Opt4048<>::Colour::decode(Bytes{f}, S{}));
+        return isOk(Chips::Opt4048<>::Colour::decode(Kvasir::Bytes{f}, lit))
+            && isUnchanged(Chips::Opt4048<>::Colour::decode(Kvasir::Bytes{f}, S{}));
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ltr390() {
-    testCase("LTR390");
-    fresh();
+    I2cCase const    testcase{"LTR390"};
     RegisterModel<1> lt{0x53};
     lt.set(0x06, {0xB2});               // PART_ID, upper nibble 0xB
     lt.set(0x07, {0x08});               // MAIN_STATUS: ALS/UVS data ready
@@ -192,7 +185,7 @@ void ltr390() {
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(s.size() == 2 && s[0] == std::byte{0x00} && s[1] == std::byte{0x10}) {
-              return FakeBus::Result::notAcknowledged;
+              return FakeBus::Result::nack;
           }
           return lt(a, s, r);
       }};
@@ -208,16 +201,14 @@ void ltr390() {
     // lux = 1000 x 0.6 / (3 x 1.0) = 200; UVI = 958 / ((3/18) x (2^18/2^20) x 2300)
     static_assert([] {
         auto const f   = frame(0x08, 0xE8, 0x03, 0x00, 0x08, 0xBE, 0x03, 0x00);
-        auto const got = Chips::Ltr390<>::Light::decode(Bytes{f}, Chips::Ltr390<>::State{});
+        auto const got = Chips::Ltr390<>::Light::decode(Kvasir::Bytes{f}, Chips::Ltr390<>::State{});
         return isOk(got) && equal(got.value.als, 1000U) && equal(got.value.uvs, 958U)
             && equal(got.value.lux(), 200000U) && equal(got.value.uvi(), 9996U);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ltr507() {
-    testCase("LTR-507ALS");
-    fresh();
+    I2cCase const    testcase{"LTR-507ALS"};
     RegisterModel<1> l507{0x3A};
     l507.set(0x86, {0x91});         // PART_ID
     l507.set(0x87, {0x05});         // MANUFAC_ID
@@ -240,7 +231,7 @@ void ltr507() {
     // ALS_PS_STATUS with ALS and PS valid, ALS_DATA 0x1234, PS_DATA 0x7FF
     static_assert([] {
         auto const f   = frame(0x05, 0x34, 0x12, 0xFF, 0x07);
-        auto const got = Chips::Ltr507<>::Light::decode(Bytes{f}, Chips::Ltr507<>::State{});
+        auto const got = Chips::Ltr507<>::Light::decode(Kvasir::Bytes{f}, Chips::Ltr507<>::State{});
         return isOk(got) && equal(got.value.light, 0x1234U)
             && equal(got.value.proximity, 0x07FFU)   // masked to eleven bits
             && got.value.proximityValid() && got.value.proximityNew();
@@ -258,16 +249,18 @@ void ltr507() {
     // PS_DATA_1 is the overflow flag (6.11); PS status bit 0 clear is data already read
     static_assert([] {
         auto const f   = frame(0x05, 0x34, 0x12, 0xFF, 0xFF);
-        auto const got = Chips::Ltr507<>::Light::decode(Bytes{f}, Chips::Ltr507<>::State{});
+        auto const got = Chips::Ltr507<>::Light::decode(Kvasir::Bytes{f}, Chips::Ltr507<>::State{});
         auto const old = frame(0x04, 0x34, 0x12, 0xFF, 0x07);
-        auto const was = Chips::Ltr507<>::Light::decode(Bytes{old}, Chips::Ltr507<>::State{});
+        auto const was
+          = Chips::Ltr507<>::Light::decode(Kvasir::Bytes{old}, Chips::Ltr507<>::State{});
         return isOk(got) && equal(got.value.proximity, 0x07FFU) && !got.value.proximityValid()
             && isOk(was) && was.value.proximityValid() && !was.value.proximityNew();
     }());
     // the ALS status bit clear is old data: nothing new, whatever ALS_DATA says
     static_assert([] {
         auto const f = frame(0x00, 0xFF, 0xFF, 0xFF, 0x07);
-        return isUnchanged(Chips::Ltr507<>::Light::decode(Bytes{f}, Chips::Ltr507<>::State{}));
+        return isUnchanged(
+          Chips::Ltr507<>::Light::decode(Kvasir::Bytes{f}, Chips::Ltr507<>::State{}));
     }());
     // the status bit gates the reading: with it clear the run reports nothing, and is no fault
     auto const before = l5.samples();
@@ -277,12 +270,10 @@ void ltr507() {
     checkEq(l5.samples(), before, "no new sample while the ALS status bit is clear");
     checkEq(l5.rejected(), 0U, "and old data is not a rejection");
     checkEq(l5.latest().light, 0x1234U, "and the previous reading is still the one on offer");
-    if(failures != 0) { dump(); }
 }
 
 void apds9960() {
-    testCase("APDS-9960");
-    fresh();
+    I2cCase const    testcase{"APDS-9960"};
     RegisterModel<1> apd{0x39};
     apd.set(0x92, {0xAB});
     apd.set(0x93, {0x03});   // AVALID | PVALID
@@ -303,7 +294,7 @@ void apds9960() {
     // STATUS AVALID | PVALID, clear red green blue little endian, then proximity
     static_assert([] {
         auto const f   = frame(0x03, 0xE8, 0x03, 0x64, 0x00, 0xC8, 0x00, 0x2C, 0x01, 0x7F);
-        auto const got = Chips::Apds9960<>::Colour::decode(Bytes{f});
+        auto const got = Chips::Apds9960<>::Colour::decode(Kvasir::Bytes{f});
         return equal(got.clear, 1000U) && equal(got.red, 100U) && equal(got.green, 200U)
             && equal(got.blue, 300U) && equal(got.proximity, 0x7F) && got.colourValid()
             && got.proximityValid() && !got.saturated();
@@ -320,20 +311,19 @@ void apds9960() {
         }
         check(cleared, "CICLEAR (0xE6) addressed with nothing written");
     }
-    if(failures != 0) { dump(); }
 }
 
 // Integration time in, register codes out, rounded to the nearest step.
 struct ApdsSlow {
-    static constexpr auto IntegrationTime = 100ms;
+    static constexpr auto integrationTime = 100ms;
 };
 
 struct As7341Datasheet {
-    static constexpr unsigned Atime = 29, Astep = 599;
+    static constexpr unsigned atime = 29, astep = 599;
 };
 
 struct As7341Long {
-    static constexpr auto IntegrationTime = 2s;
+    static constexpr auto integrationTime = 2s;
 };
 
 static_assert(Chips::Apds9960<>::Cycles == 10 && Chips::Apds9960<>::Atime == 0xF6
@@ -369,8 +359,7 @@ static_assert(Chips::As7341<Chips::As7341Detail::Gain::x256,
               "2 s: ATIME 9 would need 71942 steps, ATIME 10 needs 65402");
 
 void as7341() {
-    testCase("AS7341");
-    fresh();
+    I2cCase const    testcase{"AS7341"};
     RegisterModel<1> as{0x39};
     as.set(0x92, {0x09 << 2});
     // six ADCs; the SMUX decides which photodiode each one is. The first byte of the SMUX
@@ -447,7 +436,7 @@ void as7341() {
                                 0x01,    // and after the second
                                 0x40,    // STATUS2 AVALID, first pass
                                 0x40);   // second pass
-        auto const out  = Chips::As7341<>::Spectrum::decode(Bytes{f});
+        auto const out  = Chips::As7341<>::Spectrum::decode(Kvasir::Bytes{f});
         auto const got  = out.value;
         auto       busy = f;
         busy[25]        = std::byte{0x11};   // the second SMUX not done
@@ -459,22 +448,20 @@ void as7341() {
             && equal(got.f[7], 14U)               // F8 is ADC3 of the second
             && equal(got.clear, 15U)              // clear is ADC4, from the fresher second pass
             && equal(got.nir, 16U)                // NIR is ADC5
-            && isRetry(Chips::As7341<>::Spectrum::decode(Bytes{busy}))
-            && isRetry(Chips::As7341<>::Spectrum::decode(Bytes{nodata}));
+            && isRetry(Chips::As7341<>::Spectrum::decode(Kvasir::Bytes{busy}))
+            && isRetry(Chips::As7341<>::Spectrum::decode(Kvasir::Bytes{nodata}));
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ktd2026() {
-    testCase("KTD2026");
-    fresh();
+    I2cCase const    testcase{"KTD2026"};
     RegisterModel<1> ktd{0x30};
     // "Reset Complete Chip" is not acknowledged (datasheet, the note under "Write").
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(s.size() == 2 && s[0] == std::byte{0x00} && s[1] == std::byte{0x07}) {
-              return FakeBus::Result::notAcknowledged;
+              return FakeBus::Result::nack;
           }
           return ktd(a, s, r);
       }};
@@ -508,12 +495,10 @@ void ktd2026() {
             [&] { return hasWrite({0x04, 0x00}); },
             200ms),
           "all zero turns every channel off");
-    if(failures != 0) { dump(); }
 }
 
 void ktd2061() {
-    testCase("KTD2061");
-    fresh();
+    I2cCase const    testcase{"KTD2061"};
     RegisterModel<1> ktd{0x68};
     ktd.set(0x00, {0xA4});   // ID: VENDOR 101, DIE_ID 00100
     ktd.set(0x01, {0x00});   // Monitor: nothing to report
@@ -559,12 +544,10 @@ void ktd2061() {
     checkEq(ktd.word(0x03), 0xFFU, "R0");
     checkEq(ktd.word(0x08), 0xFFU, "B1");
     checkEq(ktd.word(0x09), 0xC0U, "A1 on, red from slot 1");
-    if(failures != 0) { dump(); }
 }
 
 void pca9956b() {
-    testCase("PCA9956B");
-    fresh();
+    I2cCase const    testcase{"PCA9956B"};
     RegisterModel<1> pca{0x3F};
     pca.set(0x81, {0x00});
     pca.readOnly     = {0x81};
@@ -580,10 +563,10 @@ void pca9956b() {
     // MODE2 as Table 9 has it: 1 is the fault in both flags; bits 2 and 0 are reserved and
     // read back 1
     static_assert([] {
-        auto const clean = Led::Status::decode(Bytes{frame(0x00)});
-        auto const err   = Led::Status::decode(Bytes{frame(0x40)});
-        auto const res   = Led::Status::decode(Bytes{frame(0x45)});
-        auto const hot   = Led::Status::decode(Bytes{frame(0x85)});
+        auto const clean = Led::Status::decode(Kvasir::Bytes{frame(0x00)});
+        auto const err   = Led::Status::decode(Kvasir::Bytes{frame(0x40)});
+        auto const res   = Led::Status::decode(Kvasir::Bytes{frame(0x45)});
+        auto const hot   = Led::Status::decode(Kvasir::Bytes{frame(0x85)});
         return !clean.error() && !clean.overTemperature()   //
             && err.error() && !err.overTemperature()        // 0x40: ERROR, not OVERTEMP
             && equal(res.mode2, 0x45) && res.error() && !res.overTemperature()
@@ -637,12 +620,10 @@ void pca9956b() {
             300ms),
           "CLRERR written");
     check(hasWrite({0x81, 0x10}), "MODE2 bit 4, which self-clears");
-    if(failures != 0) { dump(); }
 }
 
 void tsl2591() {
-    testCase("TSL2591");
-    fresh();
+    I2cCase const    testcase{"TSL2591"};
     RegisterModel<1> tsl{0x29};
     tsl.set(0xB2, {0x50});                     // device id, behind the command byte
     tsl.set(0xB3, {0x01});                     // STATUS: AVALID
@@ -658,13 +639,13 @@ void tsl2591() {
     // STATUS AVALID, CH0 = 10000 and CH1 = 1000 little endian, at medium gain and 100 ms;
     // CPL = 100 ms x 25 / 408; lux = (10000 - 1000) x (1 - 0.1) / CPL = 1321.920 lx
     static_assert([] {
-        auto const f   = frame(0x01, 0x10, 0x27, 0xE8, 0x03);
-        auto const got = Chips::Tsl2591<>::Light::decode(Bytes{f}, Chips::Tsl2591<>::State{});
+        auto const f = frame(0x01, 0x10, 0x27, 0xE8, 0x03);
+        auto const got
+          = Chips::Tsl2591<>::Light::decode(Kvasir::Bytes{f}, Chips::Tsl2591<>::State{});
         return isOk(got) && equal(got.value.full, 10000U) && equal(got.value.infrared, 1000U)
             && equal(got.value.visible(), 9000U) && !got.value.saturated()
             && equal(got.value.lux(), 1321920);
     }());
-    if(failures != 0) { dump(); }
 }
 
 // A run-time gain or integration change holds the part's other groups off for two integrations
@@ -677,8 +658,7 @@ static_assert([] {
 }());
 
 void light() {
-    testCase("TCS34725");
-    fresh();
+    I2cCase          testcase{"TCS34725"};
     RegisterModel<1> m{0x29};
     m.set(0x92, {0x44});
     m.set(0xB3, {0x01});   // STATUS: AVALID
@@ -700,8 +680,8 @@ void light() {
                 [&] { return findWrite({0x81, 0xF6}, from) < FakeBus::log.size(); },
                 1s),
               "ATIME written");
-        auto const  at   = findWrite({0x81, 0xF6}, from);
-        std::size_t next = at + 1;
+        auto const        at   = findWrite({0x81, 0xF6}, from);
+        std::size_t const next = at + 1;
         runFor(c, 300ms);
         check(next < FakeBus::log.size() && FakeBus::log[next].at - FakeBus::log[at].at >= 48ms,
               "nothing else of the part within two 24 ms integrations");
@@ -709,14 +689,14 @@ void light() {
     checkEq(c.latest().blue, 1024U, "the model's frame reached the decode");
     // STATUS AVALID, then C R G B as big-endian-looking bytes read little endian
     static_assert([] {
-        auto const f   = frame(0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04);
-        auto const got = Chips::Tcs34725::Colour::decode(Bytes{f}, Chips::Tcs34725::State{});
+        auto const f = frame(0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04);
+        auto const got
+          = Chips::Tcs34725::Colour::decode(Kvasir::Bytes{f}, Chips::Tcs34725::State{});
         return isOk(got) && equal(got.value.clear, 256U) && equal(got.value.red, 512U)
             && equal(got.value.green, 768U) && equal(got.value.blue, 1024U);
     }());
 
-    testCase("VEML7700");
-    fresh();
+    testcase.next("VEML7700");
     RegisterModel<1, 2> v{0x10};
     v.set(0x07, {0x81, 0xC4});
     v.set(0x04, {0xE8, 0x03});
@@ -729,13 +709,13 @@ void light() {
     checkEq(l.latest().white, 1337U, "WHITE, read into offset 2, reached the decode");
     // ALS 1000 and WHITE 1337, little endian
     static_assert([] {
-        auto const f   = frame(0xE8, 0x03, 0x39, 0x05);
-        auto const got = Chips::Veml7700<>::Light::decode(Bytes{f}, Chips::Veml7700<>::State{});
+        auto const f = frame(0xE8, 0x03, 0x39, 0x05);
+        auto const got
+          = Chips::Veml7700<>::Light::decode(Kvasir::Bytes{f}, Chips::Veml7700<>::State{});
         return equal(got.als, 1000U) && equal(got.white, 1337U);
     }());
 
-    testCase("VCNL4040");
-    fresh();
+    testcase.next("VCNL4040");
     RegisterModel<1, 2> p{0x60};
     p.set(0x0C, {0x86, 0x01});
     p.set(0x08, {0x10, 0x00, 0xE8, 0x03, 0xD0, 0x07});
@@ -752,13 +732,12 @@ void light() {
     // PS 16, ALS 1000, WHITE 2000, little endian; 0.1 lx a count
     static_assert([] {
         auto const f   = frame(0x10, 0x00, 0xE8, 0x03, 0xD0, 0x07);
-        auto const got = Chips::Vcnl4040::Light::decode(Bytes{f});
+        auto const got = Chips::Vcnl4040::Light::decode(Kvasir::Bytes{f});
         return equal(got.proximity, 16U) && equal(got.als, 1000U) && equal(got.white, 2000U)
             && equal(got.lux(), 100000U);
     }());
 
-    testCase("TSL2561");
-    fresh();
+    testcase.next("TSL2561");
     RegisterModel<1> t{0x39};
     t.set(0x8A, {0x50});
     t.set(0xAC, {0x00, 0x04, 0xFF, 0xFF});
@@ -774,11 +753,10 @@ void light() {
     // 0.25, the float formula gives 22.0 lx at 16x, so 352 lx here
     static_assert([] {
         auto const f   = frame(0x00, 0x04, 0x00, 0x01);
-        auto const got = Chips::Tsl2561::Light::decode(Bytes{f}, Chips::Tsl2561::State{});
+        auto const got = Chips::Tsl2561::Light::decode(Kvasir::Bytes{f}, Chips::Tsl2561::State{});
         return equal(got.full, 1024U) && equal(got.infrared, 256U)
             && equal(got.lux(), 351750);   // the T package integer calculation
     }());
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

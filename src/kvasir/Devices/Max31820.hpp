@@ -3,6 +3,9 @@
 #include "Duration.hpp"
 #include "OneWire.hpp"
 #include "Quantities.hpp"
+#include "SampleSlot.hpp"
+#include "kvasir/Util/Config.hpp"
+#include "kvasir/Util/Link.hpp"
 
 #include <array>
 #include <chrono>
@@ -15,13 +18,16 @@ namespace Kvasir {
 /// The knobs of the MAX31820 / DS18B20 driver, with their defaults; derive and redeclare
 /// what you change.
 struct Max31820Defaults {
-    /// A 12-bit conversion takes 750 ms at most (DS18B20 Table 2); read the scratchpad
-    /// this long after Convert T.
-    static constexpr auto ConversionTime = std::chrono::milliseconds{800};
+    /// A 12-bit conversion takes 750 ms at most (MAX31820 tCONV, other/MAX31820.md l.51,
+    /// l.130); read the scratchpad this long after Convert T.
+    static constexpr auto conversionTime = std::chrono::milliseconds{800};
 
     /// After a failed transaction (no presence pulse, a timeout, a CRC that does not check)
     /// before the next Convert T.
-    static constexpr auto RetryDelay = std::chrono::milliseconds{200};
+    static constexpr auto retryDelay = std::chrono::milliseconds{200};
+
+    /// Failed transactions in a row from which link() says absent.
+    static constexpr std::uint8_t absentAfter = 3;
 };
 
 /// A Maxim MAX31820 / DS18B20 as the one part on a 1-Wire bus (Skip ROM): Convert T
@@ -55,24 +61,21 @@ struct Max31820 {
 
     static constexpr std::size_t readoutPacketSize{9};
 
-    static constexpr std::chrono::milliseconds ConversionTime = [] {
-        if constexpr(requires { Config::ConversionTime; }) {
-            return Kvasir::asDuration(Config::ConversionTime);
-        } else {
-            return std::chrono::milliseconds{Max31820Defaults::ConversionTime};
-        }
-    }();
+    static constexpr std::chrono::milliseconds ConversionTime = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       conversionTime,
+                       std::chrono::milliseconds{Max31820Defaults::conversionTime}));
 
-    static constexpr std::chrono::milliseconds RetryDelay = [] {
-        if constexpr(requires { Config::RetryDelay; }) {
-            return Kvasir::asDuration(Config::RetryDelay);
-        } else {
-            return std::chrono::milliseconds{Max31820Defaults::RetryDelay};
-        }
-    }();
+    static constexpr std::chrono::milliseconds RetryDelay = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Config,
+                       retryDelay,
+                       std::chrono::milliseconds{Max31820Defaults::retryDelay}));
+
+    static constexpr std::uint8_t AbsentAfter
+      = KVASIR_CONFIG_OR(Config, absentAfter, Max31820Defaults::absentAfter);
 
     static_assert(OneWire::BufferSize >= readoutPacketSize,
-                  "OneWire buffer to small");
+                  "OneWire buffer too small");
 
     struct Sample {
         Units::MilliDegC temperature{};
@@ -84,42 +87,43 @@ struct Max31820 {
     /// A CRC-checked reading is in, and nothing has failed since.
     [[nodiscard]] bool valid() const { return valid_; }
 
-    [[nodiscard]] Sample const& latest() const { return sample_; }
+    [[nodiscard]] Sample const& latest() const { return slot_.latest(); }
 
     /// Steps with every CRC-checked reading.
-    [[nodiscard]] std::uint32_t seq() const { return samples_; }
+    [[nodiscard]] std::uint32_t seq() const { return slot_.seq(); }
 
-    [[nodiscard]] std::uint32_t samples() const { return samples_; }
+    [[nodiscard]] std::uint32_t samples() const { return slot_.samples(); }
 
     /// True once per new reading for the reader that keeps `seen`.
-    [[nodiscard]] bool fresh(std::uint32_t& seen) const {
-        if(seen == samples_) { return false; }
-        seen = samples_;
-        return true;
-    }
+    [[nodiscard]] bool fresh(std::uint32_t& seen) const { return slot_.fresh(seen); }
 
     /// Transactions that failed (no presence pulse, a timeout, a bad CRC), over the
     /// device's life.
     [[nodiscard]] std::uint32_t errors() const { return errors_; }
 
+    /// Answering with a CRC-checked reading in since the last failure, absent from absentAfter failed transactions
+    /// in a row, starting before that. Back to answering by itself: the driver retries every retryDelay, and the next
+    /// good reading is answering again.
+    [[nodiscard]] Link link() const { return streak_.link(valid_); }
+
     /// The last CRC-checked reading as the sensor's 12-bit two's-complement count (1/16 degC);
     /// empty after a failed transaction.
     [[nodiscard]] std::optional<std::int16_t> raw() const {
         if(!valid_) { return std::nullopt; }
-        return sample_.raw;
+        return slot_.latest().raw;
     }
 
     /// The same reading as a temperature. One count is 62.5 mdegC, so this is within 0.5 mdegC.
     [[nodiscard]] std::optional<Units::MilliDegC> temperature() const {
         if(!valid_) { return std::nullopt; }
-        return sample_.temperature;
+        return slot_.latest().temperature;
     }
 
     [[nodiscard]] static constexpr Units::MilliDegC temperatureFor(std::int16_t raw) {
         return Units::milliDegC(raw * 125 / 2);
     }
 
-    void handler() {
+    void turn() {
         auto const currentTime = Clock::now();
         switch(st_) {
         case State::startConversion:
@@ -190,10 +194,10 @@ struct Max31820 {
                         if(Dallas::crc8(bytes) != 0 || allZero || powerOn) {
                             fail_(currentTime);
                         } else {
-                            sample_.raw         = resolved(bytes.s16le(0), bytes.u8(4));
-                            sample_.temperature = temperatureFor(sample_.raw);
-                            valid_              = true;
-                            ++samples_;
+                            auto const raw = resolved(bytes.s16le(0), bytes.u8(4));
+                            slot_.publish({.temperature = temperatureFor(raw), .raw = raw});
+                            valid_ = true;
+                            streak_.cleared();
                         }
                         OneWire::release();
                     }
@@ -224,14 +228,15 @@ private:
         st_       = State::startConversion;
         waitTime_ = currentTime + RetryDelay;
         valid_    = false;
+        streak_.failed();
         ++errors_;
     }
 
-    State         st_{State::startConversion};
-    TimePoint     waitTime_{TimePoint::min()};
-    Sample        sample_{};
-    bool          valid_{false};
-    std::uint32_t samples_{};
-    std::uint32_t errors_{};
+    State                      st_{State::startConversion};
+    TimePoint                  waitTime_{TimePoint::min()};
+    SampleSlot<Sample>         slot_{};
+    bool                       valid_{false};
+    FailureStreak<AbsentAfter> streak_{};
+    std::uint32_t              errors_{};
 };
 }   // namespace Kvasir

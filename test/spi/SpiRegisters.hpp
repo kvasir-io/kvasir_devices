@@ -23,8 +23,8 @@ struct SpiRegisters {
         return std::pair{(c & 0x80U) != 0, static_cast<std::uint8_t>(c & 0x7FU)};
     }};
     /// A register written, as it arrives.
-    std::function<void(std::uint8_t, std::uint8_t)>    onWrite{};
-    std::vector<std::pair<std::uint8_t, std::uint8_t>> written{};
+    std::function<void(std::uint8_t, std::uint8_t)>    onWrite;
+    std::vector<std::pair<std::uint8_t, std::uint8_t>> written;
 
     std::uint32_t seenRises{};
     bool          haveControl{};

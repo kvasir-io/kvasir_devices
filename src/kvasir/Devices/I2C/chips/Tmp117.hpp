@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -103,12 +104,12 @@ struct Tmp117 {
     /// TI TMP117. TMP117.md:1292..1315, "Device ID Register (address = 0Fh) [reset = 0117h]": DID 117h
     /// in 11:0, the revision above it.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x0F, 2, true, 0x0FFF, 0x0117},
+      Engine::RegisterCheck{"id", 0x0F, 2, true, 0x0FFF, 0x0117},
     };
     static constexpr Address7    Address       = 0x48;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x48, 0x49, 0x4A, 0x4B};
+    static constexpr auto Addresses = addressRun<0x48, 4>();
 
     /// 1.5 ms to load the EEPROM into the register map after power-up; writes during that
     /// window are ignored, so the first thing done here is a read. The same load follows a
@@ -117,9 +118,9 @@ struct Tmp117 {
     /// up yet: the Config write after the bring-up would be ignored (7.3.1, "Power Up").
     static constexpr auto StartupDelay = std::chrono::milliseconds{5};
 
-    static constexpr std::array Init{Step::read({.reg = 0x01, .count = 2, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0})};
 
-    struct State : Groups::DeviceId {
+    struct State : Engine::Groups::DeviceId {
         bool eepromBusy{};   ///< EEPROM_Busy when the bring-up read the configuration
     };
 
@@ -145,8 +146,9 @@ struct Tmp117 {
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Step::read({.reg = 0x01, .count = 2, .offset = 0}),
-                                          Step::read({.reg = 0x00, .count = 2, .offset = 2})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 2})};
 
         struct Sample {
             MilliDegC temperature{};   ///< 0.001 degC
@@ -158,19 +160,19 @@ struct Tmp117 {
         /// temperature or the configuration clears Data_Ready (bit 13), so the configuration
         /// is read first; the flag clear means no conversion since the last read: the
         /// previous sample stands.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes         data,
-                                                              Sample const& previous) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes         data,
+                                                                      Sample const& previous) {
             auto const config = data.be16(0);
             if((config & 0x2000U) == 0) {
                 static_cast<void>(previous);
-                return Outcome<Sample>::unchanged();
+                return Engine::Outcome<Sample>::unchanged();
             }
             Sample sample{};
             sample.temperature
               = Units::milliDegC(static_cast<std::int32_t>(data.s16be(2)) * 125 / 16);
             sample.highAlert = (config & 0x8000U) != 0;
             sample.lowAlert  = (config & 0x4000U) != 0;
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -184,8 +186,8 @@ struct Tmp117 {
         static constexpr bool  AlwaysWrite = true;
         static constexpr Value Initial{Mode::continuous, Cycle::s1, Averaging::eight};
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             std::uint16_t raw = 0;
             raw = static_cast<std::uint16_t>(raw | (static_cast<unsigned>(value.mode) << 10));
             raw = static_cast<std::uint16_t>(raw | (static_cast<unsigned>(value.cycle) << 7));
@@ -200,7 +202,7 @@ struct Tmp117 {
                 raw = static_cast<std::uint16_t>(raw | (1U << 2));
             }
             putBe16(buffer, 0, raw);
-            return Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 2});
         }
     };
 
@@ -210,11 +212,11 @@ struct Tmp117 {
         static constexpr std::size_t Items = 2;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         limit,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, Tmp117Detail::toRaw(limit));
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = static_cast<std::uint16_t>(0x02 + item), .offset = 0, .count = 2});
         }
     };
@@ -225,10 +227,10 @@ struct Tmp117 {
         using Value                        = MilliDegC;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         offset,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         offset,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, Tmp117Detail::toRaw(offset));
-            return Step::writeBuffer({.reg = 0x07, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x07, .offset = 0, .count = 2});
         }
     };
 
@@ -237,8 +239,8 @@ struct Tmp117 {
     static constexpr std::size_t High = 0;
     static constexpr std::size_t Low  = 1;
 
-    using Reads  = List<Temperature>;
-    using Writes = List<Config, Limits, Offset>;
+    using Reads  = Engine::List<Temperature>;
+    using Writes = Engine::List<Config, Limits, Offset>;
 };
 
 /// Register-compatible with the TMP117; the tighter-accuracy part of the same family.
@@ -248,7 +250,7 @@ struct Tmp119 : Tmp117 {
     /// map on :1196 says 0117h for the same register -- the TMP117's value, carried over: the real part
     /// reads 2117h.
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x0F, 2, true, 0xFFFF, 0x2117},
+      Engine::RegisterCheck{"id", 0x0F, 2, true, 0xFFFF, 0x2117},
     };
 };
 

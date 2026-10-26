@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -42,40 +44,37 @@ namespace Apds9960Detail {
 /// the part is usually bought for, are cyclic and belong here. `request<Colour>()` and the
 /// AVALID flag are enough to sequence a one-shot read if that is wanted.
 ///
-/// `Gain` is AGAIN, 1x, 4x, 16x or 64x. `Timing::IntegrationTime` (27.8 ms when left out) is
+/// `Gain` is AGAIN, 1x, 4x, 16x or 64x. `Timing::integrationTime` (27.8 ms when left out) is
 /// set as the nearest whole number of 2.78 ms ATIME cycles, 1..256; `IntegrationTime` is what
 /// that comes to. The Sample carries the status with its validity bits, and no lux, so a gain
 /// written at run time (Gains) needs no scale here.
 ///     struct Slow { static constexpr auto IntegrationTime = std::chrono::milliseconds{100}; };
 ///     using Light = Chips::Apds9960<Apds9960Detail::Gain::x4, Slow>;   // 36 cycles, 100.08 ms
-template<Apds9960Detail::Gain Gain = Apds9960Detail::Gain::x4, typename Timing = DefaultTiming>
+template<Apds9960Detail::Gain Gain = Apds9960Detail::Gain::x4,
+         typename Timing           = Engine::DefaultTiming>
 struct Apds9960 {
     static constexpr std::string_view Name = "APDS-9960";
     /// Broadcom APDS-9960. APDS9960.md:1034..1041, ID register 0x92, "0xAB = APDS-9960".
     /// Configuration: ENABLE (0x80) PON, bit 0, and AEN, bit 1 (APDS9960.md:455..).
     static constexpr std::array Identity{
-      RegisterCheck{"id", 0x92, 1, true, 0xFF, 0xAB},
+      Engine::RegisterCheck{"id", 0x92, 1, true, 0xFF, 0xAB},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"power-and-als", 0x80, 1, true, 0x03, 0x03},
+      Engine::RegisterCheck{"power-and-als", 0x80, 1, true, 0x03, 0x03},
     };
     static constexpr Address7                Address = 0x39;
     static constexpr std::array<Address7, 1> Addresses{0x39};
     static constexpr std::size_t             RegisterBytes = 1;
 
-    static constexpr std::int64_t Cycles = Apds9960Detail::cyclesFor([] {
-        if constexpr(requires { Timing::IntegrationTime; }) {
-            return Kvasir::asDuration<std::chrono::microseconds>(Timing::IntegrationTime);
-        } else {
-            return 10 * Apds9960Detail::CycleTime;
-        }
-    }());
+    static constexpr std::int64_t Cycles
+      = Apds9960Detail::cyclesFor(Kvasir::asDuration<std::chrono::microseconds>(
+        KVASIR_CONFIG_OR(Timing, integrationTime, 10 * Apds9960Detail::CycleTime)));
 
     static_assert(Cycles >= 1,
-                  "Timing::IntegrationTime is below half an ATIME cycle (1.39 ms)");
+                  "Timing::integrationTime is below half an ATIME cycle (1.39 ms)");
     static_assert(Cycles <= 256,
-                  "Timing::IntegrationTime is above 256 ATIME cycles (711.68 ms)");
+                  "Timing::integrationTime is above 256 ATIME cycles (711.68 ms)");
 
     /// ATIME is 256 - cycles, so 0xFF is one cycle and 0x00 is the full 256.
     static constexpr std::uint8_t Atime = static_cast<std::uint8_t>(256 - Cycles);
@@ -96,11 +95,11 @@ struct Apds9960 {
     static constexpr auto StartupDelay = std::chrono::milliseconds{10};
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x81, .payload = {Atime}}),
-      Step::write({.reg = 0x8F, .payload = {Control}}),
-      Step::write({.reg     = 0x80,
-                   .payload = {Enable},
-                   .delay   = IntegrationWait + std::chrono::milliseconds{10}}),
+      Engine::Step::write({.reg = 0x81, .payload = {Atime}}),
+      Engine::Step::write({.reg = 0x8F, .payload = {Control}}),
+      Engine::Step::write({.reg     = 0x80,
+                           .payload = {Enable},
+                           .delay   = IntegrationWait + std::chrono::milliseconds{10}}),
     };
 
     struct State {
@@ -118,13 +117,13 @@ struct Apds9960 {
         static constexpr auto Period = IntegrationWait + std::chrono::milliseconds{50};
 
         static constexpr std::array Steps{
-          Step::read({.reg = 0x93, .count = 1, .offset = 0}),   // STATUS
-          Step::read({.reg = 0x94, .count = 8, .offset = 1}),   // clear, red, green, blue
-          Step::read({.reg = 0x9C, .count = 1, .offset = 9}),   // proximity
+          Engine::Step::read({.reg = 0x93, .count = 1, .offset = 0}),   // STATUS
+          Engine::Step::read({.reg = 0x94, .count = 8, .offset = 1}),   // clear, red, green, blue
+          Engine::Step::read({.reg = 0x9C, .count = 1, .offset = 9}),   // proximity
           // CICLEAR, addressed with nothing written: CPSAT latches until then (STATUS bit 7:
           // "de-asserted by ... 0xE6 CICLEAR"), so every read reports the saturation since
           // the one before it, not since the first time it happened.
-          Step::write({.reg = 0xE6}),
+          Engine::Step::write({.reg = 0xE6}),
         };
 
         struct Sample {
@@ -157,13 +156,13 @@ struct Apds9960 {
     };
 
     /// ENABLE, so the application can stop the engines or turn the gesture one on itself.
-    using Power = Groups::InitialByte<0x80, Enable>;
+    using Power = Engine::Groups::InitialByte<0x80, Enable>;
 
     /// AGAIN, PGAIN and the LED drive strength.
-    using Gains = Groups::InitialByte<0x8F, Control>;
+    using Gains = Engine::Groups::InitialByte<0x8F, Control>;
 
-    using Reads  = List<Colour>;
-    using Writes = List<Gains, Power>;
+    using Reads  = Engine::List<Colour>;
+    using Writes = Engine::List<Gains, Power>;
 };
 
 }   // namespace Kvasir::I2C::Chips

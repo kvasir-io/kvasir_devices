@@ -3,6 +3,7 @@
 #include "Bridge.hpp"
 
 #include <cstdint>
+#include <kvasir/Io/Claims.hpp>
 #include <kvasir/Io/Io.hpp>
 
 namespace Kvasir::I2C {
@@ -10,7 +11,7 @@ namespace Kvasir::I2C {
 /// A bridge on an enable pin of the controller, as a base for its description (Bridge.hpp).
 /// The pin is an input out of reset, so the first drive() also makes it an output.
 ///     struct ExtPort : Kvasir::I2C::GpioBridge<HW::Pin::extEnable> {
-///         static constexpr auto WhileOff = Kvasir::I2C::WhileOff::unpowered;
+///         static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered;
 ///     };
 template<typename Pin, BridgePolarity P = BridgePolarity::activeHigh>
 struct GpioBridge {

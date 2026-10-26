@@ -1,13 +1,9 @@
 /// QuadratureDecoder: clean turns both ways, contact bounce on every edge, a knob turned half way
 /// and let go, a lost edge, and a random walk of a bouncing knob against the detents it really
 /// went through.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
 #include <cstdint>
 #include <initializer_list>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/QuadratureDecoder.hpp>
 #include <random>
 
@@ -22,7 +18,7 @@ template<typename D>
 constexpr int feed(D&                              d,
                    std::initializer_list<unsigned> states) {
     int detents{};
-    for(auto s : states) { detents += d.update((s & 2U) != 0, (s & 1U) != 0); }
+    for(auto const s : states) { detents += d.update((s & 2U) != 0, (s & 1U) != 0); }
     return detents;
 }
 
@@ -61,7 +57,7 @@ void bounce() {
     int  total{};
     auto prev = 0U;
     for(int detent = 0; detent < 10; ++detent) {
-        for(auto s : Forward) {
+        for(auto const s : Forward) {
             for(int k = 0; k < 3; ++k) { total += feed(d, {s, prev}); }
             total += feed(d, {s});
             prev = s;

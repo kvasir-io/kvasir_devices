@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -33,14 +34,14 @@ namespace Opt4048Detail {
     /// Configuration RANGE (13:10): 0..6 the fixed full scales (2.2 klux up to 144 klux), 12
     /// auto-range.
     enum class Range : std::uint8_t {
-        klux2_2 = 0,
-        klux4_5 = 1,
-        klux9   = 2,
-        klux18  = 3,
-        klux36  = 4,
-        klux72  = 5,
-        klux144 = 6,
-        auto_   = 12,
+        klux2_2   = 0,
+        klux4_5   = 1,
+        klux9     = 2,
+        klux18    = 3,
+        klux36    = 4,
+        klux72    = 5,
+        klux144   = 6,
+        autoRange = 12,
     };
 
     /// Per channel, rounded up, so a whole measurement is four of these.
@@ -124,17 +125,17 @@ namespace Opt4048Detail {
 /// the INT pin and the threshold flags behave, which this description does not use.
 /// 0x44 by default, or 0x45..0x47 by the ADDR pin.
 template<Opt4048Detail::ConversionTime ConversionTime = Opt4048Detail::ConversionTime::ms100,
-         Opt4048Detail::Range          Range          = Opt4048Detail::Range::auto_>
+         Opt4048Detail::Range          Range          = Opt4048Detail::Range::autoRange>
 struct Opt4048 {
     static constexpr std::string_view Name = "OPT4048";
     /// TI OPT4048. OPT4048.md:963 and :1452..1453, register 11h: DIDH 821h in 11:0 (DIDL in 13:12).
     static constexpr std::array Identity{
-      RegisterCheck{"device-id", 0x11, 2, true, 0x0FFF, 0x0821},
+      Engine::RegisterCheck{"device-id", 0x11, 2, true, 0x0FFF, 0x0821},
     };
     static constexpr Address7    Address       = 0x44;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x44, 0x45, 0x46, 0x47};
+    static constexpr auto Addresses = addressRun<0x44, 4>();
 
     static constexpr std::size_t Channels = 4;
 
@@ -158,15 +159,14 @@ struct Opt4048 {
 
     static constexpr auto StartupDelay = std::chrono::milliseconds{10};
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::write({.reg = 0x0B, .payload = {0x80, 0x11}}
-      ), // I2C_BURST, the rest at reset
-      Step::write({.reg     = 0x0A,
-                   .payload = {static_cast<std::uint8_t>(Configuration >> 8),
-                               static_cast<std::uint8_t>(Configuration & 0xFF)},
-                   .delay   = ConversionTimes[ConversionCode] * 4}
-      )
-    };
+      Engine::Step::write({.reg = 0x0B, .payload = {0x80, 0x11}}),   // I2C_BURST, the rest at reset
+      Engine::Step::write({.reg     = 0x0A,
+                           .payload = {static_cast<std::uint8_t>(Configuration >> 8),
+                                       static_cast<std::uint8_t>(Configuration & 0xFF)},
+                           .delay   = ConversionTimes[ConversionCode] * 4})};
+    // clang-format on
 
     struct State {
         std::uint16_t deviceId{};
@@ -187,12 +187,13 @@ struct Opt4048 {
         static constexpr auto Period = readPeriod(ConversionCode);
 
         /// The conversion time the configuration holds now, which a Config write changes.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return readPeriod(state.conversionTime);
         }
 
         /// The eight result registers in one burst (I2C_BURST is set out of reset).
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 16, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 16, .offset = 0})};
 
         struct Sample {
             /// Linearised 28-bit codes: X, Y, Z and the wide channel.
@@ -214,8 +215,8 @@ struct Opt4048 {
             [[nodiscard]] constexpr std::uint32_t wide() const { return code[3]; }
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes         data,
-                                                              Sample const& previous) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes         data,
+                                                                      Sample const& previous) {
             Sample sample{};
             bool   same = true;
             for(std::size_t c = 0; c < Channels; ++c) {
@@ -226,7 +227,7 @@ struct Opt4048 {
                                    | static_cast<std::uint32_t>(lo >> 8);
                 auto const counter = static_cast<std::uint8_t>((lo >> 4) & 0x0FU);
                 if(exp > 8 || Opt4048Detail::crc(exp, man, counter) != (lo & 0x0FU)) {
-                    return Outcome<Sample>::reject();
+                    return Engine::Outcome<Sample>::reject();
                 }
                 sample.exponent[c] = exp;
                 sample.counter[c]  = counter;
@@ -234,8 +235,8 @@ struct Opt4048 {
                 same = same && counter == previous.counter[c] && exp == previous.exponent[c]
                     && sample.code[c] == previous.code[c];
             }
-            if(same) { return Outcome<Sample>::unchanged(); }
-            return Outcome<Sample>::ok(sample);
+            if(same) { return Engine::Outcome<Sample>::unchanged(); }
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -246,10 +247,10 @@ struct Opt4048 {
         static constexpr std::size_t Bytes   = 2;
         static constexpr Value       Initial = Configuration;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             putBe16(buffer, 0, value);
-            return Step::writeBuffer({.reg = 0x0A, .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = 0x0A, .offset = 0, .count = 2});
         }
 
         static constexpr void applied(Value const& value,
@@ -259,8 +260,8 @@ struct Opt4048 {
         }
     };
 
-    using Reads  = List<Colour>;
-    using Writes = List<Config>;
+    using Reads  = Engine::List<Colour>;
+    using Writes = Engine::List<Config>;
 };
 
 static_assert(Opt4048Detail::crc(0,

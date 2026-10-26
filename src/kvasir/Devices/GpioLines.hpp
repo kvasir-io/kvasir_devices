@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Lines.hpp"
-#include "kvasir/Io/Types.hpp"
+#include "kvasir/Io/Claims.hpp"
 
 namespace Kvasir {
 

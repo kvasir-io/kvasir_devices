@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -116,7 +117,7 @@ struct Tlv493d {
     }
 
     /// Ten bytes: the presence probe, and the flags that say the part came up.
-    static constexpr std::array Init{Step::receive({.count = 10, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::receive({.count = 10, .offset = 0})};
 
     struct State {
         bool testMode{};     ///< T, 0x05 bit 6
@@ -139,7 +140,7 @@ struct Tlv493d {
     /// read yet to build from: its staged configuration is built over zero factory bytes,
     /// and because a check step repeats the sequence without calling prepare() again, the
     /// staged bytes never catch up within that run -- it spends the engine's retry budget
-    /// (MaxRetries polls of a millisecond each) and ends in one rejection, writing nothing.
+    /// (maxRetries polls of a millisecond each) and ends in one rejection, writing nothing.
     /// The group's buffer keeps the ten bytes it read, so the next run configures the part,
     /// and a later bring-up of the same part starts from real factory bytes. (Neither Init
     /// nor a write group can compute a payload from bytes read at bring-up, and prepare()
@@ -170,9 +171,9 @@ struct Tlv493d {
         }
 
         static constexpr std::array Steps{
-          Step::receive({.count = 10, .offset = 0, .delay = ConversionGap}),
-          Step::check(std::chrono::milliseconds{1}),
-          Step::commandBuffer({.offset = ConfigOffset, .count = 4, .delay = ConversionGap}),
+          Engine::Step::receive({.count = 10, .offset = 0, .delay = ConversionGap}),
+          Engine::Step::check(std::chrono::milliseconds{1}),
+          Engine::Step::commandBuffer({.offset = ConfigOffset, .count = 4, .delay = ConversionGap}),
         };
 
         [[nodiscard]] static constexpr bool ready(Bytes data) {
@@ -192,7 +193,7 @@ struct Tlv493d {
         static constexpr auto Period = std::chrono::milliseconds{50};
 
         static constexpr std::array Steps{
-          Step::receive({.count = 7, .offset = 0, .delay = ConversionGap})};
+          Engine::Step::receive({.count = 7, .offset = 0, .delay = ConversionGap})};
 
         struct Sample {
             NanoTesla    x{};   ///< positive: a south pole facing the Hall element (Figure 4)
@@ -228,16 +229,18 @@ struct Tlv493d {
         /// as 0: in this mode a readout starts the next conversion, and PD at byte 5 already
         /// reports that one. Requiring it rejected every frame. Linux tlv493d.c checks none of
         /// PD, CH and FRM.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes         data,
-                                                              Sample const& previous) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes         data,
+                                                                      Sample const& previous) {
             auto const b3 = data.u8(3);
             auto const b5 = data.u8(5);
-            if((b3 & 0x03U) != 0) { return Outcome<Sample>::retry(std::chrono::milliseconds{1}); }
+            if((b3 & 0x03U) != 0) {
+                return Engine::Outcome<Sample>::retry(std::chrono::milliseconds{1});
+            }
             bool const neverConverted = data.u8(0) == 0 && data.u8(1) == 0 && data.u8(2) == 0
                                      && (b3 & 0xF0U) == 0 && data.u8(4) == 0 && (b5 & 0x0FU) == 0
                                      && data.u8(6) == 0;
-            if(neverConverted) { return Outcome<Sample>::reject(); }
-            if((b5 & 0x40U) != 0) { return Outcome<Sample>::reject(); }
+            if(neverConverted) { return Engine::Outcome<Sample>::reject(); }
+            if((b5 & 0x40U) != 0) { return Engine::Outcome<Sample>::reject(); }
             auto const temperatureCounts
               = Bytes::signExtend(((static_cast<std::uint32_t>(b3) >> 4U) << 8U) | data.u8(6), 12);
             Sample sample{};
@@ -246,8 +249,8 @@ struct Tlv493d {
             sample.z           = field(data.u8(2), data.u8(5));
             sample.temperature = Units::milliDegC((temperatureCounts - 340) * 1100 + 25000);
             sample.frame       = static_cast<std::uint8_t>((b3 >> 2U) & 0x03U);
-            if(sample == previous) { return Outcome<Sample>::unchanged(); }
-            return Outcome<Sample>::ok(sample);
+            if(sample == previous) { return Engine::Outcome<Sample>::unchanged(); }
+            return Engine::Outcome<Sample>::ok(sample);
         }
 
         static_assert(25000 % 1100 != 0,
@@ -255,7 +258,7 @@ struct Tlv493d {
                       "Sample from matching the first frame");
     };
 
-    using Reads = List<Field, Configure>;
+    using Reads = Engine::List<Field, Configure>;
 };
 
 static_assert(Tlv493d::configuration(0x00,

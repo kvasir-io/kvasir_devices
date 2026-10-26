@@ -1,8 +1,9 @@
 #pragma once
 
+#include "../Engine/SetOps.hpp"
 #include "Bridge.hpp"
 #include "Device.hpp"
-#include "SetOps.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <bit>
@@ -25,7 +26,7 @@
 ///     using Sensors = Kvasir::I2C::Bus<I2c1, Clock, Bh1750, Veml6030, Bme280, Sht3x>;
 ///     ...
 ///     Sensors bus{};                        // a local in main(), or a member
-///     bus.handler();                        // every device, once per loop turn
+///     bus.turn();                           // every device, once per loop turn
 ///     bus.get<Bh1750>().latest();           // by type, or get<0>() by index
 ///     bus.logHealth();                      // one line per device
 ///     static_assert(Sensors::busLoad() < 0.8);
@@ -45,20 +46,20 @@ namespace detail {
     /// START turns the bus around -- which is where the second address byte comes from.
     /// A counted read (Step::readCounted) is reckoned at its most, which its `count` holds:
     /// the load is a ceiling, and a skipped count-0 read costs less than it says.
-    [[nodiscard]] constexpr std::uint32_t stepBits(Step const& s,
-                                                   std::size_t registerBytes) {
+    [[nodiscard]] constexpr std::uint32_t stepBits(Engine::Step const& s,
+                                                   std::size_t         registerBytes) {
         if(!s.isTransaction()) { return 0; }
         std::uint32_t bytes = 1;   // the address
         if(s.hasRegister) {
             bytes += static_cast<std::uint32_t>(registerBytes);
-            if(s.kind == Step::Kind::read) { ++bytes; }   // the repeated START's address
+            if(s.kind == Engine::Step::Kind::read) { ++bytes; }   // the repeated START's address
         }
         bytes += s.count;
         return bytes * 9U + 2U;   // START and STOP
     }
 
-    constexpr std::uint32_t scriptBits(std::span<Step const> steps,
-                                       std::size_t           registerBytes) {
+    constexpr std::uint32_t scriptBits(std::span<Engine::Step const> steps,
+                                       std::size_t                   registerBytes) {
         std::uint32_t n = 0;
         for(auto const& s : steps) { n += stepBits(s, registerBytes); }
         return n;
@@ -87,24 +88,27 @@ namespace detail {
     template<typename D>
     [[nodiscard]] constexpr double cyclicBitsPerSecond() {
         double total = 0.0;
-        forEach<typename D::Reads>([&](auto i) {
-            using G = typename Nth<typename D::Reads>::template type<decltype(i)::value>;
-            constexpr auto period = periodOf<G>();
+        Engine::detail::forEach<typename D::Reads>([&](auto i) {
+            using G =
+              typename Engine::detail::Nth<typename D::Reads>::template type<decltype(i)::value>;
+            constexpr auto period = Engine::periodOf<G>();
             if constexpr(period > std::chrono::milliseconds::zero()) {
                 total += static_cast<double>(
-                           scriptBits(std::span<Step const>{G::Steps}, D::RegisterBytes))
+                           scriptBits(std::span<Engine::Step const>{G::Steps}, D::RegisterBytes))
                        / std::chrono::duration<double>{period}.count();
             }
         });
-        forEach<typename D::Writes>([&](auto i) {
-            using W = typename Nth<typename D::Writes>::template type<decltype(i)::value>;
-            constexpr auto period = periodOf<W>();
+        Engine::detail::forEach<typename D::Writes>([&](auto i) {
+            using W =
+              typename Engine::detail::Nth<typename D::Writes>::template type<decltype(i)::value>;
+            constexpr auto period = Engine::periodOf<W>();
             if constexpr(period > std::chrono::milliseconds::zero()) {
                 // One item's worth: address, register, payload. A write group's Steps are
                 // produced by encode() at run time, so this is the description's own Bytes.
                 auto const bytes = 1U + static_cast<std::uint32_t>(D::RegisterBytes)
                                  + static_cast<std::uint32_t>(W::Bytes);
-                total += static_cast<double>(bytes * 9U + 2U) * static_cast<double>(itemsOf<W>())
+                total += static_cast<double>(bytes * 9U + 2U)
+                       * static_cast<double>(Engine::detail::itemsOf<W>())
                        / std::chrono::duration<double>{period}.count();
             }
         });
@@ -128,7 +132,7 @@ namespace detail {
         using type = G;
     };
 
-    template<BridgedGate G>
+    template<Engine::detail::BridgedGate G>
     struct SwitchGateOf<G> {
         using type = typename G::InnerT;
     };
@@ -139,7 +143,7 @@ namespace detail {
         using type = void;
     };
 
-    template<BridgedGate G>
+    template<Engine::detail::BridgedGate G>
     struct BridgeOfGate<G> {
         using type = typename G::Bridge;
     };
@@ -149,12 +153,11 @@ namespace detail {
     template<typename X,
              typename Y>
     [[nodiscard]] constexpr bool exclusiveBridges() {
-        if constexpr(std::is_void_v<X> || std::is_void_v<Y> || std::is_same_v<X, Y>) {
-            return false;
-        } else if constexpr(requires {
-                                typename X::ExclusiveGroup;
-                                typename Y::ExclusiveGroup;
-                            })
+        // a void X or Y (no bridge) has no ExclusiveGroup
+        if constexpr(!std::is_same_v<X, Y> && requires {
+                         typename X::ExclusiveGroup;
+                         typename Y::ExclusiveGroup;
+                     })
         {
             return std::is_same_v<typename X::ExclusiveGroup, typename Y::ExclusiveGroup>;
         } else {
@@ -207,13 +210,13 @@ namespace detail {
     /// assert on; this can be called on its own and asked.
     template<typename... Ds>
     [[nodiscard]] constexpr bool addressesDistinct() {
-        using L = List<Ds...>;
+        using L = Engine::List<Ds...>;
         bool ok = true;
-        forEach<L>([&](auto i) {
-            forEach<L>([&](auto j) {
+        Engine::detail::forEach<L>([&](auto i) {
+            Engine::detail::forEach<L>([&](auto j) {
                 if constexpr(decltype(i)::value < decltype(j)::value) {
-                    if(clash<typename Nth<L>::template type<decltype(i)::value>,
-                             typename Nth<L>::template type<decltype(j)::value>>())
+                    if(clash<typename Engine::detail::Nth<L>::template type<decltype(i)::value>,
+                             typename Engine::detail::Nth<L>::template type<decltype(j)::value>>())
                     {
                         ok = false;
                     }
@@ -229,10 +232,11 @@ namespace detail {
     template<typename D>
     [[nodiscard]] constexpr double nominalSamplesPerSecond() {
         double rate = 0.0;
-        forEach<typename D::Reads>([&](auto i) {
-            using G = typename Nth<typename D::Reads>::template type<decltype(i)::value>;
-            if constexpr(HasSample<G>) {
-                constexpr auto period = periodOf<G>();
+        Engine::detail::forEach<typename D::Reads>([&](auto i) {
+            using G =
+              typename Engine::detail::Nth<typename D::Reads>::template type<decltype(i)::value>;
+            if constexpr(Engine::detail::HasSample<G>) {
+                constexpr auto period = Engine::periodOf<G>();
                 if constexpr(period > std::chrono::milliseconds::zero()) {
                     rate += 1.0 / std::chrono::duration<double>{period}.count();
                 }
@@ -245,28 +249,27 @@ namespace detail {
     template<typename D>
     [[nodiscard]] constexpr double nominalWritesPerSecond() {
         double rate = 0.0;
-        forEach<typename D::Writes>([&](auto i) {
-            using W = typename Nth<typename D::Writes>::template type<decltype(i)::value>;
-            constexpr auto period = periodOf<W>();
+        Engine::detail::forEach<typename D::Writes>([&](auto i) {
+            using W =
+              typename Engine::detail::Nth<typename D::Writes>::template type<decltype(i)::value>;
+            constexpr auto period = Engine::periodOf<W>();
             if constexpr(period > std::chrono::milliseconds::zero()) {
-                rate += static_cast<double>(itemsOf<W>())
+                rate += static_cast<double>(Engine::detail::itemsOf<W>())
                       / std::chrono::duration<double>{period}.count();
             }
         });
         return rate;
     }
 
-    /// A gate that claims its switch *closed*: the device is in front of the switch, on segment
-    /// 0, and only its transactions wait for the switch (Mux.hpp, MuxFrontGate). A gate says so
-    /// with `static constexpr bool Front = true`; one that says nothing is behind its switch.
-    template<typename G>
-    inline constexpr bool gateInFront = [] {
-        if constexpr(requires { G::Front; }) {
-            return static_cast<bool>(G::Front);
-        } else {
-            return false;
-        }
-    }();
+}   // namespace detail
+
+/// A gate that claims its switch *closed*: the device is in front of the switch, on segment
+/// 0, and only its transactions wait for the switch (Mux.hpp, MuxFrontGate). A gate says so
+/// with `static constexpr bool Front = true`; one that says nothing is behind its switch.
+template<typename G>
+inline constexpr bool gateInFront = static_cast<bool>(KVASIR_CONFIG_OR(G, Front, false));
+
+namespace detail {
 
     /// Which switch each gated device is behind, numbered in the order the list first reaches
     /// a device behind it, and how many switches there are.
@@ -277,20 +280,20 @@ namespace detail {
     };
 
     template<typename... Ds>
-    [[nodiscard]] constexpr SwitchMap<sizeof...(Ds)> switchMap() {
-        using L                      = List<Ds...>;
+    [[nodiscard]] constexpr SwitchMap<sizeof...(Ds)> makeSwitchMap() {
+        using L                      = Engine::List<Ds...>;
         constexpr std::size_t      N = sizeof...(Ds);
         std::array<std::size_t, N> firstOnSwitch{};   // the first device behind the same switch
         std::array<bool, N>        gated{};
-        forEach<L>([&](auto i) {
-            using A              = typename Nth<L>::template type<decltype(i)::value>;
-            auto const index     = decltype(i)::value;
+        Engine::detail::forEach<L>([&](auto i) {
+            using A          = typename Engine::detail::Nth<L>::template type<decltype(i)::value>;
+            auto const index = decltype(i)::value;
             firstOnSwitch[index] = index;
             if constexpr(OnSwitch<typename A::GateT>) {
                 gated[index] = true;
                 bool found   = false;
-                forEach<L>([&](auto j) {
-                    using B = typename Nth<L>::template type<decltype(j)::value>;
+                Engine::detail::forEach<L>([&](auto j) {
+                    using B = typename Engine::detail::Nth<L>::template type<decltype(j)::value>;
                     if constexpr(OnSwitch<typename B::GateT>) {
                         if constexpr(std::is_same_v<typename A::GateT::Mux, typename B::GateT::Mux>)
                         {
@@ -316,16 +319,20 @@ namespace detail {
         return map;
     }
 
+    /// The map of a device list, worked out once (an O(N^2) fold) for every table that reads it.
+    template<typename... Ds>
+    inline constexpr SwitchMap<sizeof...(Ds)> switchMap = makeSwitchMap<Ds...>();
+
     /// The segment of every device (Bus::segmentOf).
     template<typename... Ds>
     [[nodiscard]] constexpr std::array<std::uint8_t,
                                        sizeof...(Ds)>
     segmentTable() {
-        using L                                     = List<Ds...>;
-        auto const                              map = switchMap<Ds...>();
+        using L                                     = Engine::List<Ds...>;
+        auto const                              map = switchMap<Ds...>;
         std::array<std::uint8_t, sizeof...(Ds)> segments{};
-        forEach<L>([&](auto i) {
-            using A = typename Nth<L>::template type<decltype(i)::value>;
+        Engine::detail::forEach<L>([&](auto i) {
+            using A = typename Engine::detail::Nth<L>::template type<decltype(i)::value>;
             // A MuxFrontGate is gated and in front of its switch: segment 0, like an ungated part.
             if constexpr(BehindChannel<typename A::GateT>) {
                 auto const channel = static_cast<unsigned>(std::countr_zero(A::GateT::Mask));
@@ -360,11 +367,11 @@ namespace detail {
     template<std::size_t K,
              typename... Ds>
     [[nodiscard]] constexpr std::size_t firstBehindSwitch() {
-        using L           = List<Ds...>;
-        auto const  map   = switchMap<Ds...>();
+        using L           = Engine::List<Ds...>;
+        auto const  map   = switchMap<Ds...>;
         std::size_t first = sizeof...(Ds);
-        forEach<L>([&](auto i) {
-            using A = typename Nth<L>::template type<decltype(i)::value>;
+        Engine::detail::forEach<L>([&](auto i) {
+            using A = typename Engine::detail::Nth<L>::template type<decltype(i)::value>;
             if constexpr(OnSwitch<typename A::GateT>) {
                 if(first == sizeof...(Ds) && map.ordinal[decltype(i)::value] == K) {
                     first = decltype(i)::value;
@@ -402,13 +409,10 @@ namespace detail {
 
 }   // namespace detail
 
-/// Bus(DeferBinding): built unbound, for a DeviceSet to bind with its own device set.
-struct DeferBinding {};
-
 template<typename I2c, typename Clock, typename... Ds>
 class Bus {
 public:
-    using Devices = List<Ds...>;
+    using Devices = Engine::List<Ds...>;
     using I2cBus  = I2c;
     using ClockT  = Clock;
 
@@ -418,10 +422,10 @@ public:
 
     /// Switch K of Switches and its arbiter, K numbered as Segments numbers the switches.
     template<std::size_t K>
-    using SwitchDeviceAt = typename detail::Nth<Devices>::template type<
+    using SwitchDeviceAt = typename Engine::detail::Nth<Devices>::template type<
       detail::firstBehindSwitch<K, Ds...>()>::GateT::Mux;
     template<std::size_t K>
-    using SwitchArbiterAt = typename detail::Nth<Devices>::template type<
+    using SwitchArbiterAt = typename Engine::detail::Nth<Devices>::template type<
       detail::firstBehindSwitch<K, Ds...>()>::GateT::Arbiter;
 
     static constexpr std::size_t Count = sizeof...(Ds);
@@ -432,24 +436,26 @@ public:
       = (requires { typename Ds::Core; } && ...) && sizeof...(Ds) > 0;
 
     /// The chips of its devices, for a DeviceSet that drives this Bus among others.
-    template<bool Devices_>
+    template<bool HasDevices>
     struct CoresOf {
-        using type = detail::setops::List<>;
+        using type = Engine::List<>;
     };
 
-    template<bool Devices_>
-        requires Devices_
-    struct CoresOf<Devices_> {
-        using type = detail::setops::List<typename Ds::Core...>;
+    template<bool HasDevices>
+        requires HasDevices
+    struct CoresOf<HasDevices> {
+        using type = Engine::List<typename Ds::Core...>;
     };
 
     using ChipCores = typename CoresOf<IsDeviceSet>::type;
     /// What its devices have (a gate, a reset line), for a DeviceSet's flags.
-    static constexpr detail::SetFlags Flags = detail::flagsOfAll<Ds...>();
-    using PortT                             = detail::PortOf<I2c>;
+    static constexpr Engine::detail::SetFlags Flags = Engine::detail::flagsOfAll<Ds...>();
+    using PortT                                     = Engine::detail::PortOf<I2c>;
 
     using SetOpsT
-      = std::conditional_t<IsDeviceSet, detail::SetOpsFor<detail::PortOf<I2c>, Clock, Ds...>, void>;
+      = std::conditional_t<IsDeviceSet,
+                           Engine::detail::SetOpsFor<Engine::detail::PortOf<I2c>, Clock, Ds...>,
+                           void>;
 
     /// Whether a device is one of the Bus's parts: anything but a Broadcast (Concepts.hpp),
     /// which is written on demand and has nothing to answer until then.
@@ -487,7 +493,7 @@ public:
     static_assert(addressesDistinct(),
                   "two devices on this bus have the same address and are on the same gate, so "
                   "they would take each other's answers. Check the address straps, use a "
-                  "different Config::Address, or put them on different channels of a switch "
+                  "different Config::address, or put them on different channels of a switch "
                   "(Mux.hpp)");
 
     /// Requests that can be outstanding at once: the engine keeps at most one per device in
@@ -537,7 +543,7 @@ public:
     static constexpr std::size_t Bridges = std::tuple_size_v<BridgeLinesT>;
 
     /// The switches the devices are behind (Mux.hpp), each counted once.
-    static constexpr std::size_t Switches = detail::switchMap<Ds...>().switches;
+    static constexpr std::size_t Switches = detail::switchMap<Ds...>.switches;
 
     /// A segment is one stretch of wire: 0 is the bus in front of every switch, and each
     /// channel of each switch is one more -- 1 + 8 * switch + channel, the switches numbered in
@@ -547,13 +553,14 @@ public:
     /// Where D is in the Bus's order.
     template<typename D>
     [[nodiscard]] static constexpr std::size_t indexOf() {
-        static_assert(detail::IndexOf<D, Devices>::value < Count, "that device is not on this Bus");
-        return detail::IndexOf<D, Devices>::value;
+        static_assert(Engine::detail::IndexOf<D, Devices>::value < Count,
+                      "that device is not on this Bus");
+        return Engine::detail::IndexOf<D, Devices>::value;
     }
 
     /// The segment the device at `index` is on.
     [[nodiscard]] static constexpr std::size_t segmentOf(std::size_t index) {
-        return SegmentOfDevice_[index];
+        return segmentOfDevice[index];
     }
 
     /// The segment D is on.
@@ -583,7 +590,7 @@ public:
     /// A segment for a status line: "U" in front of the switches, the channel's digit behind
     /// the first switch ("3"), and the switch's letter and the digit behind any other ("B3").
     [[nodiscard]] static constexpr std::string_view segmentName(std::size_t segment) {
-        auto const& name = SegmentNames_[segment];
+        auto const& name = segmentNames[segment];
         return {name.data(), name[1] == '\0' ? std::size_t{1} : std::size_t{2}};
     }
 
@@ -616,10 +623,10 @@ public:
     /// For a DeviceSet that drives this Bus as part of a wider device set (DeviceSet.hpp):
     /// nothing is bound until it calls bindWith<S>(), so this Bus's own set - and an engine copy
     /// for it - never gets into the image.
-    explicit Bus(DeferBinding) {}
+    explicit Bus(Engine::DeferBinding) {}
 
     /// Binds the switches, gates and bridges, the switches' own turns and every device's place
-    /// in the device set S that drives them (SetOps.hpp; `void`: each device's own handler()).
+    /// in the device set S that drives them (SetOps.hpp; `void`: each device's own turn()).
     template<typename S>
     void bindWith() {
         bindSwitchTurns_<S>(std::make_index_sequence<Switches>{});
@@ -663,42 +670,43 @@ public:
     template<typename D,
              typename Self>
     [[nodiscard]] constexpr auto& get(this Self&& self) {
-        static_assert(detail::IndexOf<D, Devices>::value < Count, "that device is not on this Bus");
-        return std::get<detail::IndexOf<D, Devices>::value>(self.devices_);
+        static_assert(Engine::detail::IndexOf<D, Devices>::value < Count,
+                      "that device is not on this Bus");
+        return std::get<Engine::detail::IndexOf<D, Devices>::value>(self.devices_);
     }
 
-    /// The bridges' lines, then every device's handler in declaration order. Call once per
-    /// main-loop turn, after the bus behavior's own handler.
-    void handler() { handlerWith<SetOpsT>(Clock::now()); }
+    /// The bridges' lines, then every device's turn in declaration order. Call once per
+    /// main-loop turn, after the bus behavior's own turn.
+    void turn() { turnWith<SetOpsT>(Clock::now()); }
 
     /// The same, driven by device set S (a DeviceSet's) with its clock reading.
     template<typename S>
-    void handlerWith(typename Clock::time_point now) {
-        handleBridges_(std::make_index_sequence<Bridges>{});
-        auto const turn = [&](auto& d) {
+    void turnWith(typename Clock::time_point now) {
+        turnBridges_(std::make_index_sequence<Bridges>{});
+        auto const turnOne = [&](auto& d) {
             if constexpr(!std::is_void_v<S>) {
                 // The engine with the set's compile-time hooks: no table, no pointer.
-                detail::Engine<detail::PortOf<I2c>, Clock>::handler(d, S{}, now);
-            } else if constexpr(requires { d.handler(now); }) {
-                d.handler(now);
+                Engine::detail::Engine<Engine::detail::PortOf<I2c>, Clock>::turn(d, S{}, now);
+            } else if constexpr(requires { d.turn(now); }) {
+                d.turn(now);
             } else {
-                d.handler();
+                d.turn();
             }
         };
-        std::apply([&](auto&... d) { (turn(d), ...); }, devices_);
+        std::apply([&](auto&... d) { (turnOne(d), ...); }, devices_);
     }
 
     /// One device's turn alone, with the set's engine: for a phase in which only some parts may
-    /// run (a boot scan that runs the switch alone). `bus.get<D>().handler()` would do the
+    /// run (a boot scan that runs the switch alone). `bus.get<D>().turn()` would do the
     /// same through the chip's table - a second copy of the engine in the image.
     template<typename D,
              typename S = SetOpsT>
-    void handlerOf() {
-        auto& d = std::get<detail::IndexOf<D, Devices>::value>(devices_);
+    void turnOf() {
+        auto& d = std::get<Engine::detail::IndexOf<D, Devices>::value>(devices_);
         if constexpr(!std::is_void_v<S>) {
-            detail::Engine<detail::PortOf<I2c>, Clock>::handler(d, S{}, Clock::now());
+            Engine::detail::Engine<Engine::detail::PortOf<I2c>, Clock>::turn(d, S{}, Clock::now());
         } else {
-            d.handler();
+            d.turn();
         }
     }
 
@@ -776,7 +784,7 @@ public:
     void visit(this Self&& self,
                std::size_t index,
                F&&         f) {
-        detail::withIndex(
+        Engine::detail::withIndex(
           index,
           [&](auto i) { f(std::get<decltype(i)::value>(self.devices_)); },
           std::make_index_sequence<Count>{});
@@ -809,7 +817,7 @@ public:
         return counts;
     }
 
-    /// A device's running totals, which a poller takes the differences of (Stats.hpp).
+    /// A device's running totals, which a poller takes the differences of (Adapters/Stats.hpp).
     struct Counters {
         std::uint32_t samples{};
         std::uint32_t writes{};
@@ -840,7 +848,7 @@ private:
     }
 
     /// Every switch's own turn, for whatever claims it (its gates, a BusScan's ports): through
-    /// the device set's engine when the Bus is one, else the switch's handler().
+    /// the device set's engine when the Bus is one, else the switch's turn().
     template<typename S,
              std::size_t... Ks>
     void bindSwitchTurns_(std::index_sequence<Ks...>) {
@@ -849,13 +857,14 @@ private:
               using Mux = SwitchDeviceAt<Ks>;
               if constexpr(!std::is_void_v<S>) {
                   std::get<Ks>(arbiters_).turnSwitch = [](void* m) {
-                      detail::Engine<detail::PortOf<I2c>, Clock>::handler(*static_cast<Mux*>(m),
-                                                                          S{},
-                                                                          Clock::now());
+                      Engine::detail::Engine<Engine::detail::PortOf<I2c>, Clock>::turn(
+                        *static_cast<Mux*>(m),
+                        S{},
+                        Clock::now());
                   };
               } else {
                   std::get<Ks>(arbiters_).turnSwitch
-                    = [](void* m) { static_cast<Mux*>(m)->handler(); };
+                    = [](void* m) { static_cast<Mux*>(m)->turn(); };
               }
           }(),
           ...);
@@ -863,14 +872,14 @@ private:
 
     template<std::size_t I>
     void bindGate_() {
-        using D = typename detail::Nth<Devices>::template type<I>;
+        using D = typename Engine::detail::Nth<Devices>::template type<I>;
         if constexpr(detail::OnSwitch<typename D::GateT>) {
             // By the switch map and not by the segment: a MuxFrontGate is on segment 0.
-            constexpr auto K = detail::switchMap<Ds...>().ordinal[I];
+            constexpr auto K = detail::switchMap<Ds...>.ordinal[I];
             using Mux        = typename D::GateT::Mux;
-            using Turn       = void (*)(void*);
+            using TurnFn     = void (*)(void*);
             auto& arbiter    = std::get<K>(arbiters_);
-            if constexpr(requires(D& d, Mux& m, decltype(arbiter) a, Turn t) {
+            if constexpr(requires(D& d, Mux& m, decltype(arbiter) a, TurnFn t) {
                              d.gate().bind(m, a, t);
                          })
             {
@@ -890,7 +899,7 @@ private:
     template<std::size_t I,
              std::size_t... Ks>
     void bindFrontGate_(std::index_sequence<Ks...>) {
-        using G = typename detail::Nth<Devices>::template type<I>::GateT;
+        using G = typename Engine::detail::Nth<Devices>::template type<I>::GateT;
         (
           [&] {
               using BK = typename std::tuple_element_t<Ks, BridgeLinesT>::Bridge;
@@ -914,7 +923,7 @@ private:
         using Line = std::tuple_element_t<K, BridgeLinesT>;
         if constexpr(Line::PartDriven) {
             using Part = typename Line::Bridge::Part;
-            static_assert(detail::IndexOf<Part, Devices>::value < Count,
+            static_assert(Engine::detail::IndexOf<Part, Devices>::value < Count,
                           "the part a PartBridge is switched through is not on this Bus");
             static_assert(!std::is_same_v<typename detail::BridgeOfGate<typename Part::GateT>::type,
                                           typename Line::Bridge>,
@@ -924,15 +933,15 @@ private:
     }
 
     /// Every line's turn, in the Bus's order. Which lines wait for the wire is looked at for
-    /// all of them first: a line's handler takes its parts' requests off, and the lines after
+    /// all of them first: a line's turn takes its parts' requests off, and the lines after
     /// it must still see them. Whether the others are off is looked at line by line, so that of
     /// two that want to start in the same turn the second sees the first go.
     template<std::size_t... Ks>
-    void handleBridges_(std::index_sequence<Ks...>) {
+    void turnBridges_(std::index_sequence<Ks...>) {
         if constexpr(Bridges != 0) {
             std::array<bool, Bridges> const waiting{std::get<Ks>(bridges_).waiting()...};
-            (std::get<Ks>(bridges_).handler(mayStart_<Ks>(waiting, std::index_sequence<Ks...>{}),
-                                            contested_<Ks>(waiting, std::index_sequence<Ks...>{})),
+            (std::get<Ks>(bridges_).turn(mayStart_<Ks>(waiting, std::index_sequence<Ks...>{}),
+                                         contested_<Ks>(waiting, std::index_sequence<Ks...>{})),
              ...);
         }
     }
@@ -985,10 +994,10 @@ private:
         using type = std::tuple<SwitchArbiterAt<Ks>...>;
     };
 
-    static constexpr std::array<std::uint8_t, Count> SegmentOfDevice_
+    static constexpr std::array<std::uint8_t, Count> segmentOfDevice
       = detail::segmentTable<Ds...>();
 
-    static constexpr std::array<std::array<char, 2>, Segments> SegmentNames_ = [] {
+    static constexpr std::array<std::array<char, 2>, Segments> segmentNames = [] {
         std::array<std::array<char, 2>, Segments> names{};
         names[0] = {'U', '\0'};
         for(std::size_t segment = 1; segment < Segments; ++segment) {

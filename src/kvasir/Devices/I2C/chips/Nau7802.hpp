@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -201,12 +202,12 @@ namespace Nau7802Detail {
 /// verify on a part) and reads CTRL2 back. setup() rejects the part when the revision nibble is
 /// not 1111, when PUR is clear, or when CAL_ERR is set: 8.6 says that with a calibration error
 /// "all data output could be invalid" and 8.6.3 recommends calibrating again, which is what the
-/// engine's next bring-up does (UnidentifiedRetry). A calibration still running at the read-back
+/// engine's next bring-up does (unidentifiedRetry). A calibration still running at the read-back
 /// is not rejected -- it is recorded in State::calibrating -- because the wait is a guess and a
 /// part that is slow to calibrate is not a broken one.
 ///
 /// Conversion reads CR (PU_CTRL bit 5, 8.3) and, once set, ADCO: the result latches when 0x12 is
-/// addressed (11.9). The check retries every quarter conversion, up to the engine's MaxRetries;
+/// addressed (11.9). The check retries every quarter conversion, up to the engine's maxRetries;
 /// the first conversions after the bring-up are the "six cycles of data conversion" 8.8 has
 /// the part discard itself after a reset, so a few rejected<Conversion>() there are expected.
 /// Both channels share the one ADC and its digital filter, so the conversions right after a
@@ -236,7 +237,7 @@ namespace Nau7802Detail {
 ///   the rate and channel the application passes (`calibration(dev.value<Settings>())`). The
 ///   register is read back `CalibrationWait` later and counts as done when CALS is clear, CAL_ERR
 ///   clear and the rest as written; otherwise CALS is written again (ignored while one is
-///   running, 11.3), at most MaxRetries times, each counted by mismatches<Calibrate>().
+///   running, 11.3), at most maxRetries times, each counted by mismatches<Calibrate>().
 /// * `Calibration` -- on request only: CTRL2 and both channels' OCAL/GCAL in one burst, for an
 ///   application that saves a calibration.
 /// * `RestoreCalibration` -- item 0 is channel 1, item 1 channel 2: the seven OCAL/GCAL bytes in
@@ -287,31 +288,31 @@ struct Nau7802 {
     static constexpr auto StartupDelay = std::chrono::milliseconds{1};
 
     static constexpr std::array Init{
-      Step::write({.reg     = 0x00,
-                   .payload = {0x01},
-                   .delay   = std::chrono::milliseconds{1}}),   // RR (9.1 step 1)
-      Step::write(
+      Engine::Step::write({.reg     = 0x00,
+                           .payload = {0x01},
+                           .delay   = std::chrono::milliseconds{1}}),   // RR (9.1 step 1)
+      Engine::Step::write(
         {.reg     = 0x00,
          .payload = {0x02},
          .delay
          = std::chrono::milliseconds{2}}),   // RR clear, PUD; PUR after about 200 us (steps 2, 3)
-      Step::read({.reg = 0x1F, .count = 1, .offset = 0}),   // revision
-      Step::write({.reg = 0x01, .payload = {Nau7802Detail::ctrl1(LdoV, GainV)}}),
-      Step::write({.reg = 0x02, .payload = {Nau7802Detail::ctrl2(ChannelV, RateV)}}),
-      Step::write(
+      Engine::Step::read({.reg = 0x1F, .count = 1, .offset = 0}),   // revision
+      Engine::Step::write({.reg = 0x01, .payload = {Nau7802Detail::ctrl1(LdoV, GainV)}}),
+      Engine::Step::write({.reg = 0x02, .payload = {Nau7802Detail::ctrl2(ChannelV, RateV)}}),
+      Engine::Step::write(
         {.reg = 0x15, .payload = {0x30}}),   // REG_CHPS 11: the chopper clock off (step 4b)
-      Step::write({.reg = 0x1C, .payload = {Nau7802Detail::pgaPwr(Cfilter, ChannelV)}}),
-      Step::write({.reg     = 0x00,
-                   .payload = {Nau7802Detail::puCtrl(LdoV, Nau7802Detail::Cycle::running)},
-                   .delay   = AnalogSettle}),
-      Step::write({.reg     = 0x02,
-                   .payload = {Nau7802Detail::ctrl2(ChannelV,
-                                                    RateV,
-                                                    CalMode::internalOffset,
-                                                    Nau7802Detail::Calibration::start)},
-                   .delay   = CalibrationWait}),
-      Step::read({.reg = 0x00, .count = 1, .offset = 1}),   // PU_CTRL: PUR
-      Step::read({.reg = 0x02, .count = 1, .offset = 2}),   // CTRL2: CALS, CAL_ERR
+      Engine::Step::write({.reg = 0x1C, .payload = {Nau7802Detail::pgaPwr(Cfilter, ChannelV)}}),
+      Engine::Step::write({.reg     = 0x00,
+                           .payload = {Nau7802Detail::puCtrl(LdoV, Nau7802Detail::Cycle::running)},
+                           .delay   = AnalogSettle}),
+      Engine::Step::write({.reg     = 0x02,
+                           .payload = {Nau7802Detail::ctrl2(ChannelV,
+                                                            RateV,
+                                                            CalMode::internalOffset,
+                                                            Nau7802Detail::Calibration::start)},
+                           .delay   = CalibrationWait}),
+      Engine::Step::read({.reg = 0x00, .count = 1, .offset = 1}),   // PU_CTRL: PUR
+      Engine::Step::read({.reg = 0x02, .count = 1, .offset = 2}),   // CTRL2: CALS, CAL_ERR
     };
 
     struct State {
@@ -338,7 +339,7 @@ struct Nau7802 {
         static constexpr auto Period = Nau7802Detail::readPeriod(RateV);
 
         /// The rate CTRL2 holds now, which a Settings write changes.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return Nau7802Detail::readPeriod(state.config.rate);
         }
 
@@ -348,9 +349,10 @@ struct Nau7802 {
             return q < std::chrono::milliseconds{2} ? std::chrono::milliseconds{2} : q;
         }();
 
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 1, .offset = 0}),
-                                          Step::check(RetryAfter),
-                                          Step::read({.reg = 0x12, .count = 3, .offset = 1})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
+          Engine::Step::check(RetryAfter),
+          Engine::Step::read({.reg = 0x12, .count = 3, .offset = 1})};
 
         /// CR, PU_CTRL bit 5.
         [[nodiscard]] static constexpr bool ready(Bytes data) { return (data.u8(0) & 0x20U) != 0; }
@@ -378,7 +380,8 @@ struct Nau7802 {
 
     /// CTRL2 and both channels' calibration registers, 0x02..0x10, on request.
     struct Calibration {
-        static constexpr std::array Steps{Step::read({.reg = 0x02, .count = 15, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x02, .count = 15, .offset = 0})};
 
         struct Sample {
             bool                                             calibrating{};   ///< CALS
@@ -403,7 +406,7 @@ struct Nau7802 {
         /// CTRL1, CTRL2, PGA_PWR, then CS cleared and set: 11.1's CS synchronises conversion to
         /// its rising edge, so the conversions from here on are at the new settings; six of
         /// them go by before anything else of the part runs, for the shared filter to settle.
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   5>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
@@ -413,16 +416,16 @@ struct Nau7802 {
             buffer[3] = static_cast<std::byte>(
               Nau7802Detail::puCtrl(value.ldo, Nau7802Detail::Cycle::running));
             return {
-              Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1}),
-              Step::writeBuffer({.reg = 0x02, .offset = 1, .count = 1}),
-              Step::writeBuffer({.reg = 0x1C, .offset = 2, .count = 1}),
-              Step::write(
+              Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 1}),
+              Engine::Step::writeBuffer({.reg = 0x02, .offset = 1, .count = 1}),
+              Engine::Step::writeBuffer({.reg = 0x1C, .offset = 2, .count = 1}),
+              Engine::Step::write(
                 {.reg     = 0x00,
                  .payload = {Nau7802Detail::puCtrl(value.ldo, Nau7802Detail::Cycle::stopped)}}),
-              Step::writeBuffer({.reg    = 0x00,
-                                 .offset = 3,
-                                 .count  = 1,
-                                 .delay  = 6 * Nau7802Detail::conversionTime(value.rate)}),
+              Engine::Step::writeBuffer({.reg    = 0x00,
+                                         .offset = 3,
+                                         .count  = 1,
+                                         .delay  = 6 * Nau7802Detail::conversionTime(value.rate)}),
             };
         }
 
@@ -451,19 +454,19 @@ struct Nau7802 {
         static constexpr bool        Transient   = true;
         static constexpr auto        VerifyDelay = CalibrationWait;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0]
               = static_cast<std::byte>(Nau7802Detail::ctrl2(value.channel,
                                                             value.rate,
                                                             value.mode,
                                                             Nau7802Detail::Calibration::start));
-            return Step::writeBuffer({.reg = 0x02, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x02, .offset = 0, .count = 1});
         }
 
         /// Done: CALS clear, CAL_ERR clear, channel, rate and mode as written.
-        [[nodiscard]] static constexpr bool verify(Kvasir::I2C::Bytes written,
-                                                   Kvasir::I2C::Bytes readBack) {
+        [[nodiscard]] static constexpr bool verify(Kvasir::Bytes written,
+                                                   Kvasir::Bytes readBack) {
             auto const w = written.u8(0);
             auto const r = readBack.u8(0);
             return (r & 0x0CU) == 0 && (r & 0xF3U) == (w & 0xF3U);
@@ -476,9 +479,9 @@ struct Nau7802 {
         static constexpr std::size_t Items = 2;
         static constexpr std::size_t Bytes = 7;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             auto const o = static_cast<std::uint32_t>(value.offset);
             buffer[0]    = static_cast<std::byte>((o >> 16) & 0xFFU);
             buffer[1]    = static_cast<std::byte>((o >> 8) & 0xFFU);
@@ -487,13 +490,14 @@ struct Nau7802 {
             buffer[4]    = static_cast<std::byte>((value.gain >> 16) & 0xFFU);
             buffer[5]    = static_cast<std::byte>((value.gain >> 8) & 0xFFU);
             buffer[6]    = static_cast<std::byte>(value.gain & 0xFFU);
-            return Step::writeBuffer({.reg = item == 0 ? 0x03 : 0x0A, .offset = 0, .count = 7});
+            return Engine::Step::writeBuffer(
+              {.reg = item == 0 ? 0x03 : 0x0A, .offset = 0, .count = 7});
         }
     };
 
     using Primary = Conversion;
-    using Reads   = List<Conversion, Calibration>;
-    using Writes  = List<Settings, Calibrate, RestoreCalibration>;
+    using Reads   = Engine::List<Conversion, Calibration>;
+    using Writes  = Engine::List<Settings, Calibrate, RestoreCalibration>;
 };
 
 }   // namespace Kvasir::I2C::Chips

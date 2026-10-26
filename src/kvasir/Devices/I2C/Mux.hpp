@@ -48,7 +48,7 @@
 ///     };
 ///
 /// Both SHT3x are at 0x44, which is legal because they are never on the wire at the same
-/// time. The mux itself is an ordinary ungated Device and must have its `handler()` called
+/// time. The mux itself is an ordinary ungated Device and must have its `turn()` called
 /// like any other -- put it in the same `Bus`.
 namespace Kvasir::I2C {
 
@@ -131,7 +131,7 @@ struct DrainChannel {
 /// the channel: the channels of one switch are handed the same arbiter, which is what makes
 /// them exclude each other. Two switches get two arbiters and never interact.
 ///
-/// Plain, not atomic: every caller is the main loop -- `handler()` and the `progress_` under
+/// Plain, not atomic: every caller is the main loop -- `turn()` and the `progress_` under
 /// it. `request<G>()` is the only thing an interrupt calls, and it submits nothing.
 template<typename Policy = ShareChannel>
 struct BasicMuxArbiter {
@@ -144,7 +144,7 @@ struct BasicMuxArbiter {
     std::uint8_t  waiting{};          ///< a bit per channel refused since it last got it
     std::uint32_t stint{};            ///< steps at every grant: a hold from before it is over
     /// Runs the switch's own turn now (its channel write): bound by whoever binds the gates -
-    /// a Bus with its device set's engine, a hand-wired gate with the switch's handler().
+    /// a Bus with its device set's engine, a hand-wired gate with the switch's turn().
     void (*turnSwitch)(void*){};
 
     /// How long a channel held the switch, and when the current holder got it: typed
@@ -192,7 +192,7 @@ public:
     /// switch. Called once, before the client runs.
     void bind(Mux&     mux,
               Arbiter& arbiter) {
-        bind(mux, arbiter, [](void* m) { static_cast<Mux*>(m)->handler(); });
+        bind(mux, arbiter, [](void* m) { static_cast<Mux*>(m)->turn(); });
     }
 
     /// With the switch's turn run by the caller's engine (Bus: its device set's, SetOps.hpp);
@@ -325,28 +325,62 @@ private:
     bool          warned_{};
 };
 
-/// One channel of an I2C switch, as a gate: a MuxPort that always claims the same channel.
+/// Where a SwitchGate puts its switch while its part talks: one channel (ChannelPosition, a MuxGate) or closed
+/// (FrontPosition, a MuxFrontGate). `Mask` and `Front` are what the Bus reads off the gate.
 ///
 /// `Channel` is a template parameter and not a member because `Bus` decides whether two
 /// devices collide by comparing their gate *types* (Bus.hpp): two channels of one switch have
 /// to be different types for "the same part on two channels" to stay legal, and for two
 /// devices on the *same* channel to still be caught.
-template<typename MuxDevice, std::uint8_t Channel, typename Policy = ShareChannel>
-struct MuxGate {
+template<std::uint8_t Channel>
+struct ChannelPosition {
+    static constexpr bool         Front = false;
+    static constexpr std::uint8_t Mask  = static_cast<std::uint8_t>(1U << Channel);
+
+    static_assert(Channel < 8,
+                  "a TCA9548A has eight channels");
+
+    template<typename Port>
+    [[nodiscard]] constexpr std::uint8_t position() const {
+        return channel_;
+    }
+
+    /// The channel as a byte rather than the template parameter, though the parameter is where
+    /// it comes from. `Channel` stays in the *type*, which is what `Bus` compares to decide
+    /// whether two parts at one address can be on the wire together -- but nothing the
+    /// compiler generates depends on it any more, so the driver of a part on channel 2 and the
+    /// driver of the same part on channel 3 are identical code and the linker folds them into
+    /// one (`--icf=all` is in the SDK's link flags). Two SHT4x, two LCDs and four OLED panels
+    /// cost 4 566 bytes of second copies before this.
+    std::uint8_t channel_{Channel};
+};
+
+/// The switch closed (MuxPort::Closed): no channel open while the part talks.
+struct FrontPosition {
+    static constexpr bool         Front = true;
+    static constexpr std::uint8_t Mask  = 0;
+
+    template<typename Port>
+    [[nodiscard]] static constexpr std::uint8_t position() {
+        return Port::Closed;
+    }
+};
+
+/// A part gated by an I2C switch: a MuxPort that always claims the same position of its switch. The two kinds are
+/// MuxGate (behind the switch, on one channel) and MuxFrontGate (in front of it, the switch closed).
+template<typename MuxDevice, typename Position, typename Policy = ShareChannel>
+struct SwitchGate {
     static constexpr bool Gated = true;
-    static constexpr bool Front = false;
+    static constexpr bool Front = Position::Front;
 
     using Mux      = MuxDevice;
     using Channels = typename Mux::Chip::Channels;
     using Arbiter  = BasicMuxArbiter<Policy>;
 
-    static constexpr std::uint8_t Mask = static_cast<std::uint8_t>(1U << Channel);
+    static constexpr std::uint8_t Mask = Position::Mask;
 
-    static_assert(Channel < 8,
-                  "a TCA9548A has eight channels");
-
-    /// Say which switch this channel is on, and which arbiter it shares with the other
-    /// channels of that switch. Called once, before the device is handled.
+    /// Say which switch this gate is on, and which arbiter it shares with the other
+    /// gates of that switch. Called once, before the device is handled.
     void bind(Mux&     mux,
               Arbiter& arbiter) {
         port_.bind(mux, arbiter);
@@ -360,22 +394,22 @@ struct MuxGate {
 
     [[nodiscard]] bool bound() const { return port_.bound(); }
 
-    /// True once this part holds the switch *and* the switch has been told (MuxPort::claim).
-    bool claim() { return port_.claim(channel_); }
+    /// True once this part holds the switch *and* the switch has been told: the channel open, or the switch closed
+    /// (MuxPort::claim).
+    bool claim() { return port_.claim(position_.template position<Port>()); }
 
     void release() { port_.release(); }
 
 private:
-    MuxPort<MuxDevice, Policy> port_{};
-    /// The channel as a byte rather than the template parameter, though the parameter is where
-    /// it comes from. `Channel` stays in the *type*, which is what `Bus` compares to decide
-    /// whether two parts at one address can be on the wire together -- but nothing the
-    /// compiler generates depends on it any more, so the driver of a part on channel 2 and the
-    /// driver of the same part on channel 3 are identical code and the linker folds them into
-    /// one (`--icf=all` is in the SDK's link flags). Two SHT4x, two LCDs and four OLED panels
-    /// cost 4 566 bytes of second copies before this.
-    std::uint8_t channel_{Channel};
+    using Port = MuxPort<MuxDevice, Policy>;
+
+    Port                           port_{};
+    [[no_unique_address]] Position position_{};
 };
+
+/// One channel of an I2C switch, as a gate: a SwitchGate that always claims the same channel.
+template<typename MuxDevice, std::uint8_t Channel, typename Policy = ShareChannel>
+using MuxGate = SwitchGate<MuxDevice, ChannelPosition<Channel>, Policy>;
 
 /// A part in front of the switch that must have the wire to itself: a gate that claims the
 /// switch *closed* (MuxPort::Closed), so no channel is open while the part talks, and no part
@@ -383,9 +417,8 @@ private:
 ///
 /// A part in front of a switch is otherwise on the wire of whatever channel is open, which
 /// every well-behaved part tolerates -- it is not addressed, it does not answer. This gate is for
-/// the pair that does not get along: found with a u-blox SAM-M8Q in front and a TLV493D-A1B6
-/// behind channel 6 (seen with the RP2350's second core as a logic
-/// analyser). The receiver stretches the clock after its address, and when it lets go it puts
+/// the pair that does not get along: a u-blox SAM-M8Q in front and a TLV493D-A1B6 behind the
+/// switch. The receiver stretches the clock after its address, and when it lets go it puts
 /// its first data bit on SDA in the same 40 ns as it releases SCL (0.7 us before it on a quiet
 /// bus): with a 0 bit, SDA falls as SCL rises, which is a START to a listener whose SCL input
 /// sees the edge first. The count of waiting bytes is 0x0000 on nearly every poll, so what
@@ -402,36 +435,6 @@ private:
 ///     using Gnss = Device<I2c1, Clock, Chips::SamM8q<>, DefaultConfig, NoReset,
 ///                         MuxFrontGate<MuxDev>>;
 template<typename MuxDevice, typename Policy = ShareChannel>
-struct MuxFrontGate {
-    static constexpr bool Gated = true;
-    static constexpr bool Front = true;
-
-    using Mux      = MuxDevice;
-    using Channels = typename Mux::Chip::Channels;
-    using Arbiter  = BasicMuxArbiter<Policy>;
-
-    static constexpr std::uint8_t Mask = 0;
-
-    void bind(Mux&     mux,
-              Arbiter& arbiter) {
-        port_.bind(mux, arbiter);
-    }
-
-    void bind(Mux&     mux,
-              Arbiter& arbiter,
-              void (*turnSwitch)(void*)) {
-        port_.bind(mux, arbiter, turnSwitch);
-    }
-
-    [[nodiscard]] bool bound() const { return port_.bound(); }
-
-    /// True once this part holds the switch *and* the switch is closed (MuxPort::claim).
-    bool claim() { return port_.claim(MuxPort<MuxDevice, Policy>::Closed); }
-
-    void release() { port_.release(); }
-
-private:
-    MuxPort<MuxDevice, Policy> port_{};
-};
+using MuxFrontGate = SwitchGate<MuxDevice, FrontPosition, Policy>;
 
 }   // namespace Kvasir::I2C

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -47,12 +48,13 @@ struct Pcf85063a {
     /// 24-hour mode, and the crystal's load capacitance. Written at every bring-up, so a part
     /// that came up in 12-hour mode or at the wrong load after losing power is put back.
     static constexpr std::array Init{
-      Step::write({.reg = 0x00, .payload = {static_cast<std::uint8_t>(Load)}})};
+      Engine::Step::write({.reg = 0x00, .payload = {static_cast<std::uint8_t>(Load)}})};
 
     struct Time {
         static constexpr auto Period = std::chrono::milliseconds{1000};
 
-        static constexpr std::array Steps{Step::read({.reg = 0x04, .count = 7, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x04, .count = 7, .offset = 0})};
 
         struct Sample {
             std::uint8_t  second{};
@@ -99,7 +101,7 @@ struct Pcf85063a {
             return static_cast<std::uint8_t>(y > 99 ? 99 : y);
         }
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
@@ -110,16 +112,17 @@ struct Pcf85063a {
             buffer[4] = static_cast<std::byte>(toBcd(value.weekday));
             buffer[5] = static_cast<std::byte>(toBcd(value.month));
             buffer[6] = static_cast<std::byte>(toBcd(yearDigits(value.year)));
-            return {Step::write({.reg     = 0x00,
-                                 .payload = {static_cast<std::uint8_t>(
-                                   0x20U | static_cast<unsigned>(Load))}}),
-                    Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 7}),
-                    Step::write({.reg = 0x00, .payload = {static_cast<std::uint8_t>(Load)}})};
+            return {
+              Engine::Step::write(
+                {.reg     = 0x00,
+                 .payload = {static_cast<std::uint8_t>(0x20U | static_cast<unsigned>(Load))}}),
+              Engine::Step::writeBuffer({.reg = 0x04, .offset = 0, .count = 7}),
+              Engine::Step::write({.reg = 0x00, .payload = {static_cast<std::uint8_t>(Load)}})};
         }
     };
 
-    using Reads  = List<Time>;
-    using Writes = List<SetTime>;
+    using Reads  = Engine::List<Time>;
+    using Writes = Engine::List<SetTime>;
 };
 
 }   // namespace Kvasir::I2C::Chips

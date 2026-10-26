@@ -3,6 +3,8 @@
 // every frame is one 16-bit (address, data) word per chip of the cascade - and the driver.
 #include "../../Duration.hpp"
 #include "../Device.hpp"
+#include "kvasir/Hal/Spi.hpp"
+#include "kvasir/Util/Config.hpp"
 
 #include <array>
 #include <chrono>
@@ -14,10 +16,10 @@
 namespace Kvasir { namespace SPI {
 
     struct Max7219Defaults {
-        static constexpr std::uint8_t Intensity = 8;
-        static constexpr std::uint8_t ScanLimit = 7;
+        static constexpr std::uint8_t intensity = 8;
+        static constexpr std::uint8_t scanLimit = 7;
         /// A write-only part says nothing of a brown-out, which resets it ("Initial Power-Up").
-        static constexpr auto RefreshPeriod = std::chrono::milliseconds{1000};
+        static constexpr auto refreshPeriod = std::chrono::milliseconds{1000};
     };
 
     namespace Chips {
@@ -43,11 +45,11 @@ namespace Kvasir { namespace SPI {
                           "1..8 cascaded chips");
             static constexpr std::string_view Name = "MAX7219";
             /// Mode 0 (:189, :194), 10 MHz max (:194), tCP 100 ns (:139).
-            static constexpr ClockMode    Mode          = ClockMode::_0;
-            static constexpr Units::Hertz MaxClock      = Units::hertz(10'000'000);
-            static constexpr std::size_t  RegisterBytes = 0;
-            static constexpr std::size_t  Frame         = 2 * Modules;
-            /// No DOUT: present() means the frames went out.
+            static constexpr Hal::ClockMode Mode          = Hal::ClockMode::mode0;
+            static constexpr Units::Hertz   MaxClock      = Units::hertz(10'000'000);
+            static constexpr std::size_t    RegisterBytes = 0;
+            static constexpr std::size_t    Frame         = 2 * Modules;
+            /// No DOUT: answering() means the frames went out.
             static constexpr bool WriteOnly = true;
 
             static constexpr void word(std::span<std::byte> out,
@@ -67,12 +69,12 @@ namespace Kvasir { namespace SPI {
                     for(std::size_t m = 0; m < Modules; ++m) {
                         w[2 * m] = Max7219Detail::RegShutdown;
                     }
-                    Step s  = Step::command({.payload = {}});
-                    s.count = static_cast<std::uint8_t>(Frame);
+                    Engine::Step s = Engine::Step::command({.payload = {}});
+                    s.count        = static_cast<std::uint8_t>(Frame);
                     for(std::size_t i = 0; i < Frame; ++i) { s.bytes[i] = w[i]; }
                     return std::array{s};
                 } else {
-                    return std::array<Step, 0>{};
+                    return std::array<Engine::Step, 0>{};
                 }
             }();
 
@@ -87,16 +89,16 @@ namespace Kvasir { namespace SPI {
                 static constexpr Value       Initial = 0;
                 static constexpr auto        Period  = Refresh;
 
-                [[nodiscard]] static constexpr std::array<Step,
+                [[nodiscard]] static constexpr std::array<Engine::Step,
                                                           3>
                 encode(Value const&,
                        std::span<std::byte> buffer) {
                     word(buffer.subspan(0, Frame), Max7219Detail::RegTest, 0);
                     word(buffer.subspan(Frame, Frame), Max7219Detail::RegScanLimit, ScanLimit);
                     word(buffer.subspan(2 * Frame, Frame), Max7219Detail::RegDecodeMode, Decode);
-                    return {Step::commandBuffer({.offset = 0, .count = Frame}),
-                            Step::commandBuffer({.offset = Frame, .count = Frame}),
-                            Step::commandBuffer({.offset = 2 * Frame, .count = Frame})};
+                    return {Engine::Step::commandBuffer({.offset = 0, .count = Frame}),
+                            Engine::Step::commandBuffer({.offset = Frame, .count = Frame}),
+                            Engine::Step::commandBuffer({.offset = 2 * Frame, .count = Frame})};
                 }
             };
 
@@ -107,16 +109,16 @@ namespace Kvasir { namespace SPI {
                 static constexpr Value       Initial = {};
                 static constexpr auto        Period  = Refresh;
 
-                [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                           std::size_t          digit,
-                                                           std::span<std::byte> buffer) {
+                [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                                   std::size_t          digit,
+                                                                   std::span<std::byte> buffer) {
                     for(std::size_t m = 0; m < Modules; ++m) {
                         // the last chip in the chain gets the first word
                         buffer[2 * m]
                           = std::byte{static_cast<std::uint8_t>(Max7219Detail::RegDigit0 + digit)};
                         buffer[2 * m + 1] = std::byte{value[Modules - 1 - m]};
                     }
-                    return Step::commandBuffer({.offset = 0, .count = Frame});
+                    return Engine::Step::commandBuffer({.offset = 0, .count = Frame});
                 }
             };
 
@@ -126,12 +128,12 @@ namespace Kvasir { namespace SPI {
                 static constexpr Value       Initial = Intensity;
                 static constexpr auto        Period  = Refresh;
 
-                [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                           std::span<std::byte> buffer) {
+                [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                                   std::span<std::byte> buffer) {
                     word(buffer,
                          Max7219Detail::RegIntensity,
                          static_cast<std::uint8_t>(value & 0x0FU));
-                    return Step::commandBuffer({.offset = 0, .count = Frame});
+                    return Engine::Step::commandBuffer({.offset = 0, .count = Frame});
                 }
             };
 
@@ -141,14 +143,14 @@ namespace Kvasir { namespace SPI {
                 static constexpr Value       Initial = 1;
                 static constexpr auto        Period  = Refresh;
 
-                [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                           std::span<std::byte> buffer) {
+                [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                                   std::span<std::byte> buffer) {
                     word(buffer, Max7219Detail::RegShutdown, value);
-                    return Step::commandBuffer({.offset = 0, .count = Frame});
+                    return Engine::Step::commandBuffer({.offset = 0, .count = Frame});
                 }
             };
 
-            using Writes = List<Control, Digits, IntensityGroup, Power>;
+            using Writes = Engine::List<Control, Digits, IntensityGroup, Power>;
         };
     }   // namespace Chips
 
@@ -174,27 +176,14 @@ namespace Kvasir { namespace SPI {
         static constexpr std::uint8_t     Point        = 0x80;
         static constexpr std::uint8_t     MaxIntensity = 15;
 
-        static constexpr std::uint8_t IntensityDefault = [] {
-            if constexpr(requires { Config::Intensity; }) {
-                return static_cast<std::uint8_t>(Config::Intensity & MaxIntensity);
-            } else {
-                return Max7219Defaults::Intensity;
-            }
-        }();
-        static constexpr std::uint8_t ScanLimit = [] {
-            if constexpr(requires { Config::ScanLimit; }) {
-                return static_cast<std::uint8_t>(Config::ScanLimit & 0x07);
-            } else {
-                return Max7219Defaults::ScanLimit;
-            }
-        }();
-        static constexpr std::chrono::milliseconds RefreshPeriod = [] {
-            if constexpr(requires { Config::RefreshPeriod; }) {
-                return Kvasir::asDuration(Config::RefreshPeriod);
-            } else {
-                return std::chrono::milliseconds{Max7219Defaults::RefreshPeriod};
-            }
-        }();
+        static constexpr std::uint8_t IntensityDefault = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, intensity, Max7219Defaults::intensity) & MaxIntensity);
+        static constexpr std::uint8_t ScanLimit = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, scanLimit, Max7219Defaults::scanLimit) & 0x07);
+        static constexpr std::chrono::milliseconds RefreshPeriod = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config,
+                           refreshPeriod,
+                           std::chrono::milliseconds{Max7219Defaults::refreshPeriod}));
 
         using Chip
           = Chips::Max7219<Modules, Decode, ScanLimit, IntensityDefault, RefreshPeriod.count()>;
@@ -205,13 +194,13 @@ namespace Kvasir { namespace SPI {
         Max7219(Max7219 const&)            = delete;
         Max7219& operator=(Max7219 const&) = delete;
 
-        void handler() { device_.handler(); }
+        void turn() { device_.turn(); }
 
-        /// With `turn(device())` in place of the device's own turn: how a DeviceSet drives it
+        /// With `busTurn(device())` in place of the device's own turn: how a DeviceSet drives it
         /// together with the other parts of its port (DeviceSet.hpp), one engine for all of them.
-        template<typename Turn>
-        void handler(Turn&& turn) {
-            turn(device_);
+        template<typename BusTurn>
+        void turn(BusTurn&& busTurn) {
+            busTurn(device_);
         }
 
         /// Digit `digit` of module `module`: a BCD code with Decode, segments without.
@@ -264,15 +253,13 @@ namespace Kvasir { namespace SPI {
 
         [[nodiscard]] bool answering() const { return device_.answering(); }
 
-        [[nodiscard]] bool present() const { return device_.answering(); }
-
         [[nodiscard]] Link link() const { return device_.link(); }
 
         [[nodiscard]] std::uint32_t errors() const { return device_.errors(); }
 
         DeviceT& device() { return device_; }
 
-        DeviceT const& device() const { return device_; }
+        [[nodiscard]] DeviceT const& device() const { return device_; }
 
     private:
         DeviceT                                                   device_{};

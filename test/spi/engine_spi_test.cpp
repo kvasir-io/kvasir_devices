@@ -1,17 +1,13 @@
 /// SPI parts on the chip-description engine (SPI/Device.hpp, SPI/Transport.hpp) over the real queued
 /// master core: the BME280 on SPI, an empty bus and a failing one.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 #include "SpiRegisters.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <kd/Case.hpp>
+#include <kd/Check.hpp>
 #include <kvasir/Devices/SPI/chips/Bme280.hpp>
 #include <kvasir/Devices/SPI/chips/Max7219.hpp>
 #include <kvasir/Devices/SPI/chips/Mpu9250.hpp>
@@ -26,6 +22,11 @@ using Kvasir::Test::Spi::SpiRegisters;
 
 namespace {
 
+// Bus::Outcome (BusTypes.hpp): the values every bus result had
+static_assert(static_cast<int>(Kvasir::Bus::Outcome::failed) == 0
+              && static_cast<int>(Kvasir::Bus::Outcome::nack) == 1
+              && static_cast<int>(Kvasir::Bus::Outcome::ok) == 2);
+
 struct Tag {};
 
 using Bus = QueuedSpi::Bus<Tag>;
@@ -33,8 +34,8 @@ using Bme = Kvasir::SPI::Device<Bus, FakeClock, Kvasir::SPI::Chips::Bme280, Spi:
 using Bmp = Kvasir::SPI::Device<Bus, FakeClock, Kvasir::SPI::Chips::Bmp280, Spi::Cs>;
 
 // Two SPI devices are one engine port, so they share one Engine (Transport.hpp, TransportRequest).
-static_assert(std::is_same_v<Kvasir::I2C::detail::PortOf<Bme::TransportT>,
-                             Kvasir::I2C::detail::PortOf<Bmp::TransportT>>);
+static_assert(std::is_same_v<Kvasir::Engine::detail::PortOf<Bme::TransportT>,
+                             Kvasir::Engine::detail::PortOf<Bmp::TransportT>>);
 
 SpiRegisters part{};
 
@@ -75,55 +76,30 @@ void bmeRegisters() {
 }
 
 void fresh() {
-    Bus::reset();
-    Pins::reset();
-    FakeClock::reset();
-    Log::reset();
-    Bus::partSelected = [] { return !Pins::level[Spi::Cs::id]; };
-    Bus::exchange     = [](std::uint8_t m) { return part.exchange(m); };
+    Spi::Harness::fresh<Bus>([](std::uint8_t m) { return part.exchange(m); }, 0s);
 }
 
 /// Declared right after a case's device: resets the bus while the device still lives, so nothing
 /// queued completes into a dead frame in the next case.
-struct BusScope {
-    ~BusScope() { Bus::reset(); }
-};
+using BusScope = Spi::BusScope<Bus>;
 
-[[maybe_unused]] void dump() {
-    for(auto const& f : Bus::frames) {
-        std::printf("  %s mode %u %u Hz mosi",
-                    f.selected ? "CS " : "   ",
-                    f.setup.mode,
-                    f.setup.hz);
-        for(auto b : f.mosi) { std::printf(" %02x", b); }
-        std::printf(" | miso");
-        for(auto b : f.miso) { std::printf(" %02x", b); }
-        std::printf("\n");
-    }
-}
+/// 100 us turns, the clock last, no part to tick (SpiRegisters answers on the byte).
+constexpr Spi::Loop loop{.step = 100us, .order = Spi::ClockOrder::last};
 
 template<typename D,
          typename Pred>
 bool runUntil(D&                        d,
               Pred                      pred,
               std::chrono::milliseconds limit) {
-    auto const end = FakeClock::now() + limit;
-    while(FakeClock::now() < end) {
-        Bus::handler();
-        d.handler();
-        Bus::tick();
-        FakeClock::advance(100us);
-        if(pred()) { return true; }
-    }
-    return false;
+    return Spi::Harness::runUntil<Bus>(d, pred, limit, loop);
 }
 
 void bme280OnSpi() {
-    testCase("BME280 on SPI: the I2C description, its commands with R/W in bit 7");
+    Case const testcase{"BME280 on SPI: the I2C description, its commands with R/W in bit 7"};
     bmeRegisters();
     fresh();
-    Bme      d{};
-    BusScope scope{};
+    Bme            d{};
+    BusScope const scope{};
     check(Pins::level[Spi::Cs::id], "CS released by the constructor");
     check(runUntil(d, [&] { return d.answering(); }, 500ms), "bring-up completes");
     check(d.identified() && d.state().deviceId == 0x60, "Identity: chip id 0x60");
@@ -153,7 +129,7 @@ void bme280OnSpi() {
     check(runUntil(d, [&] { return d.samples() == 2; }, 3s), "second sample");
     check(FakeClock::now() - t0 >= 990ms, "one a second");
     checkEq(Log::warnings, 0, "no warnings");
-    if(failures != 0) { dump(); }
+    if(testcase.failed()) { Spi::Harness::dump<Bus>(); }   // before the scope empties the bus
 }
 
 void bmp280OnSpi() {
@@ -161,8 +137,8 @@ void bmp280OnSpi() {
     bmeRegisters();
     part.reg[0xD0] = 0x58;
     fresh();
-    Bmp      p{};
-    BusScope scope{};
+    Bmp            p{};
+    BusScope const scope{};
     check(runUntil(p, [&] { return p.samples() == 1; }, 2s), "first sample");
     bool ctrlHum = false;
     for(auto const& w : part.written) { ctrlHum = ctrlHum || w.first == 0xF2; }
@@ -175,8 +151,8 @@ void noPart(std::uint8_t floating) {
     fresh();
     Bus::exchange = {};
     Bus::floating = floating;
-    Bme      d{};
-    BusScope scope{};
+    Bme            d{};
+    BusScope const scope{};
     runUntil(d, [] { return false; }, 5s);
     check(!d.answering() && !d.identified(), "not answering");
     bool anyWrite = false;
@@ -191,8 +167,8 @@ void wrongPart() {
     bmeRegisters();
     part.reg[0xD0] = 0x55;
     fresh();
-    Bme      d{};
-    BusScope scope{};
+    Bme            d{};
+    BusScope const scope{};
     runUntil(d, [] { return false; }, 3s);
     check(!d.answering(), "not answering");
     check(part.written.empty(), "nothing written to it");
@@ -203,14 +179,14 @@ void busFaults() {
     testCase("a bus that fails transfers: the engine counts and brings the part up again");
     bmeRegisters();
     fresh();
-    Bme      d{};
-    BusScope scope{};
+    Bme            d{};
+    BusScope const scope{};
     runUntil(d, [&] { return d.samples() == 1; }, 2s);
     auto const bringUps = d.bringUps();
     for(int i = 0; i < 400 && d.errors() < 5; ++i) {
         Bus::overrunNext = true;
-        Bus::handler();
-        d.handler();
+        Bus::turn();
+        d.turn();
         Bus::tick();
         FakeClock::advance(100ms);
     }
@@ -233,8 +209,8 @@ void mpu9250() {
     std::uint8_t const frame[]{0x40, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x83, 0, 0, 0, 0};
     for(std::size_t i = 0; i < sizeof frame; ++i) { part.reg[0x3B + i] = frame[i]; }
     fresh();
-    Mpu      d{};
-    BusScope scope{};
+    Mpu            d{};
+    BusScope const scope{};
     check(runUntil(d, [&] { return d.samples() >= 1; }, 2s), "a sample");
     std::vector<std::pair<std::uint8_t, std::uint8_t>> const expect{
       {0x6B, 0x80},
@@ -267,8 +243,8 @@ void mpu9250() {
     part           = SpiRegisters{};
     part.reg[0x75] = 0x68;   // an MPU-6050
     fresh();
-    Mpu      other{};
-    BusScope otherScope{};
+    Mpu            other{};
+    BusScope const otherScope{};
     runUntil(other, [] { return false; }, 2s);
     check(!other.answering() && part.written.empty(), "not answering, nothing written");
 }
@@ -277,9 +253,9 @@ void mpu9250() {
 /// each chip is latched (MAX7219.md:236). Words are recorded per chip, chip 0 the one at DIN.
 struct Cascade {
     std::size_t                                                     chips{2};
-    std::vector<std::uint8_t>                                       shift{};
+    std::vector<std::uint8_t>                                       shift;
     std::uint32_t                                                   seenRises{};
-    std::vector<std::vector<std::pair<std::uint8_t, std::uint8_t>>> latched{};
+    std::vector<std::vector<std::pair<std::uint8_t, std::uint8_t>>> latched;
 
     std::uint8_t exchange(std::uint8_t mosi) {
         if(Pins::rises[Spi::Cs::id] != seenRises) {
@@ -315,8 +291,8 @@ void max7219() {
     fresh();
     Bus::exchange = [](std::uint8_t m) { return cascade.exchange(m); };
     using Display = Kvasir::SPI::Max7219<Bus, FakeClock, Spi::Cs, 2, 0xFF>;
-    Display  d{};
-    BusScope scope{};
+    Display        d{};
+    BusScope const scope{};
     d.setDigit(1, 3, 7);
     runUntil(d, [&] { return d.answering() && !d.pending(); }, 1s);
     cascade.latch();
@@ -335,7 +311,10 @@ void max7219() {
         blank = blank || w == std::pair<std::uint8_t, std::uint8_t>{0x04, 0x0F};
     }
     check(digit7 && blank, "module 1 digit 3 is 7, module 0's is blank");
-    bool test = false, scan = false, decode = false, intensity = false;
+    bool test      = false;
+    bool scan      = false;
+    bool decode    = false;
+    bool intensity = false;
     for(auto const& w : c0) {
         test      = test || w == std::pair<std::uint8_t, std::uint8_t>{0x0F, 0};
         scan      = scan || w == std::pair<std::uint8_t, std::uint8_t>{0x0B, 7};

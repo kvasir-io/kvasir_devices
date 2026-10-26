@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -32,8 +33,8 @@ struct As5600 {
     struct Angle {
         static constexpr auto       Period = std::chrono::milliseconds{20};
         static constexpr std::array Steps{
-          Step::read({.reg = 0x0B, .count = 3, .offset = 0}),    // STATUS, RAW ANGLE
-          Step::read({.reg = 0x0E, .count = 2, .offset = 3})};   // ANGLE
+          Engine::Step::read({.reg = 0x0B, .count = 3, .offset = 0}),    // STATUS, RAW ANGLE
+          Engine::Step::read({.reg = 0x0E, .count = 2, .offset = 3})};   // ANGLE
 
         struct Sample {
             CentiDegree   angle{};         ///< RAW ANGLE: 4096 counts over the full turn
@@ -46,12 +47,12 @@ struct As5600 {
 
         /// A frame with MH and ML both set, or with bits above the twelve of either angle
         /// word, is not one the part produces.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const status = data.u8(0);
             auto const raw    = data.be16(1);
             auto const scaled = data.be16(3);
             if((status & 0x18U) == 0x18U || (raw & 0xF000U) != 0 || (scaled & 0xF000U) != 0) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             Sample sample{};
             sample.magnet      = (status & 0x20U) != 0;
@@ -60,29 +61,29 @@ struct As5600 {
             sample.raw         = raw;
             sample.scaledAngle = scaled;
             sample.angle = Units::centiDegree(static_cast<std::int32_t>(sample.raw) * 36000 / 4096);
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
     struct Gain {
         static constexpr auto       Period = std::chrono::milliseconds{500};
         static constexpr std::array Steps{
-          Step::read({.reg = 0x1A, .count = 1, .offset = 0}),    // AGC
-          Step::read({.reg = 0x1B, .count = 2, .offset = 1})};   // MAGNITUDE
+          Engine::Step::read({.reg = 0x1A, .count = 1, .offset = 0}),    // AGC
+          Engine::Step::read({.reg = 0x1B, .count = 2, .offset = 1})};   // MAGNITUDE
 
         struct Sample {
             std::uint8_t  agc{};
             std::uint16_t magnitude{};
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const magnitude = data.be16(1);
-            if((magnitude & 0xF000U) != 0) { return Outcome<Sample>::reject(); }
-            return Outcome<Sample>::ok({data.u8(0), magnitude});
+            if((magnitude & 0xF000U) != 0) { return Engine::Outcome<Sample>::reject(); }
+            return Engine::Outcome<Sample>::ok({data.u8(0), magnitude});
         }
     };
 
-    using Reads = List<Angle, Gain>;
+    using Reads = Engine::List<Angle, Gain>;
 };
 
 }   // namespace Kvasir::I2C::Chips

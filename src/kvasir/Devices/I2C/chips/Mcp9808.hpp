@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -24,26 +25,25 @@ struct Mcp9808 {
     /// Configuration: CONFIG (0x01) SHDN, bit 8, clear -- converting (MCP9808.md:550); resolution
     /// register 0x08 = 11b, 0.0625 degC, which is what the description's decode assumes.
     static constexpr std::array Identity{
-      RegisterCheck{"manufacturer-id", 0x06, 2, true, 0xFFFF, 0x0054},
-      RegisterCheck{      "device-id", 0x07, 2, true, 0xFF00, 0x0400},
+      Engine::RegisterCheck{"manufacturer-id", 0x06, 2, true, 0xFFFF, 0x0054},
+      Engine::RegisterCheck{      "device-id", 0x07, 2, true, 0xFF00, 0x0400},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"not-shut-down", 0x01, 2, true, 0x0100, 0x0000},
-      RegisterCheck{   "resolution", 0x08, 1, true,   0x03,   0x03},
+      Engine::RegisterCheck{"not-shut-down", 0x01, 2, true, 0x0100, 0x0000},
+      Engine::RegisterCheck{   "resolution", 0x08, 1, true,   0x03,   0x03},
     };
     static constexpr Address7    Address       = 0x18;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 8>
-      Addresses{0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F};
+    static constexpr auto Addresses = addressRun<0x18, 8>();
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::write({.reg = 0x08,       .payload = {0x03}}
-      ),
-      Step::write({.reg = 0x01, .payload = {0x00, 0x00}}
-      ),
+      Engine::Step::write({.reg = 0x08, .payload = {0x03}}),
+      Engine::Step::write({.reg = 0x01, .payload = {0x00, 0x00}}),
     };
+    // clang-format on
 
     struct State {
         std::uint16_t manufacturer{};
@@ -60,7 +60,7 @@ struct Mcp9808 {
 
     struct Temperature {
         static constexpr auto       Period = std::chrono::milliseconds{250};
-        static constexpr std::array Steps{Step::read({.reg = 0x05, .count = 2})};
+        static constexpr std::array Steps{Engine::Step::read({.reg = 0x05, .count = 2})};
 
         struct Sample {
             CentiDegC temperature{};
@@ -88,9 +88,9 @@ struct Mcp9808 {
         static constexpr std::size_t Items = 3;
         static constexpr std::size_t Bytes = 2;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         limit,
-                                                   std::size_t          item,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
+                                                           std::size_t          item,
+                                                           std::span<std::byte> buffer) {
             // Clamped to the part's -40 .. +125 degC (Linux jc42.c clamps to the same): the
             // register holds -256 .. +255.75 degC, and past that the sign bit would wrap.
             auto const asked
@@ -100,7 +100,7 @@ struct Mcp9808 {
             auto const raw
               = static_cast<std::uint16_t>(static_cast<std::uint16_t>(quarters << 2) & 0x1FFCU);
             putBe16(buffer, 0, raw);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg = static_cast<std::uint16_t>(0x02 + item), .offset = 0, .count = 2});
         }
     };
@@ -110,8 +110,8 @@ struct Mcp9808 {
     static constexpr std::size_t Low      = 1;
     static constexpr std::size_t Critical = 2;
 
-    using Reads  = List<Temperature>;
-    using Writes = List<Limits>;
+    using Reads  = Engine::List<Temperature>;
+    using Writes = Engine::List<Limits>;
 };
 
 }   // namespace Kvasir::I2C::Chips

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 #include "kvasir/Util/Crc.hpp"
 
@@ -44,13 +45,13 @@ namespace Htu21dDetail {
     /// answered the previous trigger -- is rejected, as is a bad CRC, and so are the two
     /// diagnostic words ("Diagnostic Status"): all zeros, an open circuit, and all ones, a
     /// short, which would otherwise read -46.85 degC or 128.87 degC.
-    [[nodiscard]] constexpr Outcome<Sample> decode(Bytes data) {
-        if(!wordOk(data, 0) || !wordOk(data, 3)) { return Outcome<Sample>::reject(); }
+    [[nodiscard]] constexpr Engine::Outcome<Sample> decode(Bytes data) {
+        if(!wordOk(data, 0) || !wordOk(data, 3)) { return Engine::Outcome<Sample>::reject(); }
         auto const wt         = data.be16(0);
         auto const wh         = data.be16(3);
         auto const diagnostic = [](std::uint16_t w) { return w == 0x0000U || w == 0xFFFFU; };
-        if(diagnostic(wt) || diagnostic(wh)) { return Outcome<Sample>::reject(); }
-        if(isHumidity(wt) || !isHumidity(wh)) { return Outcome<Sample>::reject(); }
+        if(diagnostic(wt) || diagnostic(wh)) { return Engine::Outcome<Sample>::reject(); }
+        if(isHumidity(wt) || !isHumidity(wh)) { return Engine::Outcome<Sample>::reject(); }
         auto const st = static_cast<std::uint16_t>(wt & 0xFFFC);
         auto const sh = static_cast<std::uint16_t>(wh & 0xFFFC);
         Sample     sample{};
@@ -59,7 +60,7 @@ namespace Htu21dDetail {
         auto const rh = -600 + static_cast<std::int32_t>((12500LL * sh) >> 16);
         sample.humidity
           = Units::centiPercent(static_cast<std::uint32_t>(rh < 0 ? 0 : (rh > 10000 ? 10000 : rh)));
-        return Outcome<Sample>::ok(sample);
+        return Engine::Outcome<Sample>::ok(sample);
     }
 }   // namespace Htu21dDetail
 
@@ -75,23 +76,23 @@ struct Htu21d {
     static constexpr auto                    StartupDelay  = std::chrono::milliseconds{15};
 
     static constexpr std::array Init{
-      Step::command({.payload = {0xFE}, .delay = std::chrono::milliseconds{15}})};
+      Engine::Step::command({.payload = {0xFE}, .delay = std::chrono::milliseconds{15}})};
 
     struct Measurement {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
         static constexpr std::array Steps{
-          Step::command({.payload = {0xF3}, .delay = std::chrono::milliseconds{50}}),
-          Step::receive({.count = 3, .offset = 0}),
-          Step::command({.payload = {0xF5}, .delay = std::chrono::milliseconds{16}}),
-          Step::receive({.count = 3, .offset = 3})};
+          Engine::Step::command({.payload = {0xF3}, .delay = std::chrono::milliseconds{50}}),
+          Engine::Step::receive({.count = 3, .offset = 0}),
+          Engine::Step::command({.payload = {0xF5}, .delay = std::chrono::milliseconds{16}}),
+          Engine::Step::receive({.count = 3, .offset = 3})};
         using Sample = Htu21dDetail::Sample;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             return Htu21dDetail::decode(data);
         }
     };
 
-    using Reads = List<Measurement>;
+    using Reads = Engine::List<Measurement>;
 };
 
 /// Silicon Labs Si7021 (Si7021-A20 datasheet): the HTU21D's command set, plus an
@@ -109,27 +110,26 @@ struct Si7021 : Htu21d {
     struct Measurement {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
         static constexpr std::array Steps{
-          Step::command({.payload = {0xF3}, .delay = std::chrono::milliseconds{12}}),
-          Step::receive({.count = 3, .offset = 0}),
-          Step::command({.payload = {0xF5}, .delay = std::chrono::milliseconds{25}}),
-          Step::receive({.count = 3, .offset = 3})};
+          Engine::Step::command({.payload = {0xF3}, .delay = std::chrono::milliseconds{12}}),
+          Engine::Step::receive({.count = 3, .offset = 0}),
+          Engine::Step::command({.payload = {0xF5}, .delay = std::chrono::milliseconds{25}}),
+          Engine::Step::receive({.count = 3, .offset = 3})};
         using Sample = Htu21dDetail::Sample;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             return Htu21dDetail::decode(data);
         }
     };
 
-    using Reads = List<Measurement>;
+    using Reads = Engine::List<Measurement>;
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::command({.payload = {0xFE}, .delay = std::chrono::milliseconds{15}}
-      ),
-      Step::command({.payload = {0xFC, 0xC9}}
-      ),
-      Step::receive({.count = 6, .offset = 0}
-      ),
+      Engine::Step::command({.payload = {0xFE}, .delay = std::chrono::milliseconds{15}}),
+      Engine::Step::command({.payload = {0xFC, 0xC9}}),
+      Engine::Step::receive({.count = 6, .offset = 0}),
     };
+    // clang-format on
 
     struct State {
         std::uint8_t  deviceId{};   ///< SNB_3

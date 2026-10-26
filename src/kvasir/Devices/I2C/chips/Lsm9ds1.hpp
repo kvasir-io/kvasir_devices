@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -68,14 +69,14 @@ namespace Lsm9ds1Detail {
       std::chrono::milliseconds{0}};
 
     /// The accelerometer/gyroscope half's State: WHO_AM_I, and the full scales and rate the
-    /// CTRL registers hold now, which decode() and period() follow.
-    struct AgState : Groups::DeviceId {
+    /// CTRL registers hold now, which decode() and periodNow() follow.
+    struct AgState : Engine::Groups::DeviceId {
         std::uint8_t accelFs{};   ///< CTRL_REG6_XL FS_XL
         std::uint8_t gyroFs{};    ///< CTRL_REG1_G FS_G
         std::uint8_t odr{};       ///< CTRL_REG1_G ODR_G, which also paces the accelerometer
     };
 
-    struct MagState : Groups::DeviceId {
+    struct MagState : Engine::Groups::DeviceId {
         std::uint8_t fs{};   ///< CTRL_REG2_M FS
     };
 }   // namespace Lsm9ds1Detail
@@ -113,7 +114,7 @@ struct Lsm9ds1Ag {
     /// ST LSM9DS1. LSM9DS1.md:1534 (WHO_AM_I 0Fh of the accelerometer and gyroscope: 68h) and :1236
     /// (WHO_AM_I_M 0Fh of the magnetometer: 3Dh).
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x68},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x68},
     };
     static constexpr Address7    Address       = 0x6B;
     static constexpr std::size_t RegisterBytes = 1;
@@ -134,17 +135,18 @@ struct Lsm9ds1Ag {
     static constexpr auto StartupDelay = std::chrono::milliseconds{20};
 
     static constexpr std::array Init{
-      Step::write({.reg     = 0x22,
-                   .payload = {0x05},
-                   .delay   = std::chrono::milliseconds{50}}),   // CTRL_REG8: SW_RESET
-      Step::write(
+      Engine::Step::write({.reg     = 0x22,
+                           .payload = {0x05},
+                           .delay   = std::chrono::milliseconds{50}}),   // CTRL_REG8: SW_RESET
+      Engine::Step::write(
         {.reg = 0x22, .payload = {0x84}, .delay = std::chrono::milliseconds{50}}),   // BOOT
-      Step::write({.reg = 0x22, .payload = {0x44}}),   // BDU, IF_ADD_INC
-      Step::write(
+      Engine::Step::write({.reg = 0x22, .payload = {0x44}}),   // BDU, IF_ADD_INC
+      Engine::Step::write(
         {.reg = 0x10, .payload = {Ctrl1G}}),   // gyroscope on, which also runs the accelerometer
-      Step::write({.reg     = 0x20,
-                   .payload = {Ctrl6Xl},
-                   .delay   = std::chrono::milliseconds{30}}),   // accelerometer ODR and full scale
+      Engine::Step::write(
+        {.reg     = 0x20,
+         .payload = {Ctrl6Xl},
+         .delay   = std::chrono::milliseconds{30}}),   // accelerometer ODR and full scale
     };
 
     using State = Lsm9ds1Detail::AgState;
@@ -165,7 +167,7 @@ struct Lsm9ds1Ag {
         static constexpr bool Timestamped = true;
 
         /// The rate CTRL_REG1_G holds now, which a GyroConfig write changes.
-        [[nodiscard]] static constexpr std::chrono::milliseconds period(State const& state) {
+        [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             auto const p = Lsm9ds1Detail::OdrPeriod[state.odr & 0x07U];
             return p != std::chrono::milliseconds::zero() ? p : OutputPeriod;
         }
@@ -175,10 +177,10 @@ struct Lsm9ds1Ag {
         /// datasheet's multiple-read sequence (3.3, Figure 7) goes from OUT_TEMP straight to
         /// OUT_X_G and does not say a burst passes through 0x17.
         static constexpr std::array Steps{
-          Step::read({.reg = 0x15, .count = 2, .offset = 0}),   // OUT_TEMP_L/H
-          Step::read({.reg = 0x17, .count = 1, .offset = 2}),   // STATUS_REG
-          Step::read({.reg = 0x18, .count = 6, .offset = 3}),
-          Step::read({.reg = 0x28, .count = 6, .offset = 9}),
+          Engine::Step::read({.reg = 0x15, .count = 2, .offset = 0}),   // OUT_TEMP_L/H
+          Engine::Step::read({.reg = 0x17, .count = 1, .offset = 2}),   // STATUS_REG
+          Engine::Step::read({.reg = 0x18, .count = 6, .offset = 3}),
+          Engine::Step::read({.reg = 0x28, .count = 6, .offset = 9}),
         };
 
         struct Sample {
@@ -200,10 +202,12 @@ struct Lsm9ds1Ag {
         }
 
         /// 12-bit, 16 LSB per degree, zero at 25 degC; at the full scales the part holds now.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
             auto const status = data.u8(2);
-            if((status & 0x03U) == 0) { return Outcome<Sample>::unchanged(); }   // no XLDA, no GDA
+            if((status & 0x03U) == 0) {
+                return Engine::Outcome<Sample>::unchanged();
+            }   // no XLDA, no GDA
             Sample     sample{};
             auto const t       = Bytes::signExtend(data.le16(0) & 0x0FFFU, 12);
             sample.temperature = Units::milliDegC(25000 + t * 1000 / 16);
@@ -211,7 +215,7 @@ struct Lsm9ds1Ag {
                 sample.gyro[i]  = toRate(data.s16le(3 + 2 * i), state.gyroFs);
                 sample.accel[i] = toAccel(data.s16le(9 + 2 * i), state.accelFs);
             }
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
@@ -222,10 +226,10 @@ struct Lsm9ds1Ag {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl1G;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(Lsm9ds1Detail::validGyroConfig(value));
-            return Step::writeBuffer({.reg = 0x10, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x10, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -242,10 +246,10 @@ struct Lsm9ds1Ag {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl6Xl;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x20, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x20, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -254,8 +258,8 @@ struct Lsm9ds1Ag {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<GyroConfig, AccelConfig>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<GyroConfig, AccelConfig>;
 };
 
 /// The magnetometer half. WHO_AM_I_M 0x0F (0x3D), CTRL_REG1_M 0x20 (TEMP_COMP 7, OM 6:5,
@@ -272,7 +276,7 @@ struct Lsm9ds1Mag {
     /// ST LSM9DS1. LSM9DS1.md:1534 (WHO_AM_I 0Fh of the accelerometer and gyroscope: 68h) and :1236
     /// (WHO_AM_I_M 0Fh of the magnetometer: 3Dh).
     static constexpr std::array Identity{
-      RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x3D},
+      Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x3D},
     };
     static constexpr Address7    Address       = 0x1E;
     static constexpr std::size_t RegisterBytes = 1;
@@ -288,13 +292,13 @@ struct Lsm9ds1Mag {
     static constexpr auto StartupDelay = std::chrono::milliseconds{20};
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x20, .payload = {0xFC}}),     // temp comp, ultra-high perf, 80 Hz
-      Step::write({.reg = 0x21, .payload = {Ctrl2M}}),   // full scale
-      Step::write({.reg = 0x23, .payload = {0x0C}}),     // Z axis ultra-high performance
-      Step::write({.reg = 0x24, .payload = {0x40}}),     // CTRL_REG5_M: BDU
-      Step::write({.reg     = 0x22,
-                   .payload = {0x00},
-                   .delay   = std::chrono::milliseconds{20}}),   // continuous conversion
+      Engine::Step::write({.reg = 0x20, .payload = {0xFC}}),   // temp comp, ultra-high perf, 80 Hz
+      Engine::Step::write({.reg = 0x21, .payload = {Ctrl2M}}),   // full scale
+      Engine::Step::write({.reg = 0x23, .payload = {0x0C}}),     // Z axis ultra-high performance
+      Engine::Step::write({.reg = 0x24, .payload = {0x40}}),     // CTRL_REG5_M: BDU
+      Engine::Step::write({.reg     = 0x22,
+                           .payload = {0x00},
+                           .delay   = std::chrono::milliseconds{20}}),   // continuous conversion
     };
 
     using State = Lsm9ds1Detail::MagState;
@@ -314,7 +318,8 @@ struct Lsm9ds1Mag {
 
         /// 0x80 sets the sub-address auto-increment for this half of the part: STATUS_REG_M,
         /// then the six output bytes.
-        static constexpr std::array Steps{Step::read({.reg = 0xA7, .count = 7, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0xA7, .count = 7, .offset = 0})};
 
         struct Sample {
             NanoTesla x{};
@@ -328,12 +333,14 @@ struct Lsm9ds1Mag {
                                     / 10);
         }
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
-            if((data.u8(0) & 0x08U) == 0) { return Outcome<Sample>::unchanged(); }   // ZYXDA
-            return Outcome<Sample>::ok({field(data.s16le(1), state.fs),
-                                        field(data.s16le(3), state.fs),
-                                        field(data.s16le(5), state.fs)});
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(0) & 0x08U) == 0) {
+                return Engine::Outcome<Sample>::unchanged();
+            }   // ZYXDA
+            return Engine::Outcome<Sample>::ok({field(data.s16le(1), state.fs),
+                                                field(data.s16le(3), state.fs),
+                                                field(data.s16le(5), state.fs)});
         }
     };
 
@@ -343,10 +350,10 @@ struct Lsm9ds1Mag {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Ctrl2M;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x21, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x21, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -355,8 +362,8 @@ struct Lsm9ds1Mag {
         }
     };
 
-    using Reads  = List<Field>;
-    using Writes = List<Range>;
+    using Reads  = Engine::List<Field>;
+    using Writes = Engine::List<Range>;
 };
 
 }   // namespace Kvasir::I2C::Chips

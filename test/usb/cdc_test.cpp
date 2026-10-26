@@ -7,22 +7,20 @@
 #include <kvasir/Devices/USB/CdcAcm.hpp>
 
 using namespace Kvasir::Test;
+using namespace Kvasir::Test::Usb;
 
 namespace {
-struct Config {
-    static constexpr auto ManufacturerString = "Kvasir host test";
-    static constexpr auto ProductString      = "cdc";
-    static constexpr auto SerialNumberString = "1";
-    static constexpr auto ProductVersionBCD  = 0x0100;
-    static constexpr auto VendorID           = 0x1209;
-    static constexpr auto ProductID          = 0x0002;
+struct Config : TestConfig {
+    static constexpr auto productString = "cdc";
+    static constexpr auto productId     = 0x0002;
     // Small, so that back-pressure is reached with a handful of packets.
-    static constexpr std::size_t SendBufferSize = 512;
-    static constexpr std::size_t RecvBufferSize = 192;
+    static constexpr std::size_t sendBufferSize = 512;
+    static constexpr std::size_t recvBufferSize = 192;
 };
 
 // CdcAcm: interface 0 management (endpoint 1 IN, interrupt), interface 1 data (endpoint 2).
-constexpr std::size_t  DataEp  = 2;
+constexpr std::size_t DataEp   = 2;
+using Acm                      = Kvasir::USB::CDC::Request;
 constexpr std::uint8_t DataIn  = 0x82;
 constexpr std::uint8_t DataOut = 0x02;
 
@@ -30,7 +28,7 @@ template<typename Device>
 std::vector<std::byte> drain() {
     std::vector<std::byte> got;
     std::byte              b{};
-    while(Device::getRecvBuffer().pop_into(b)) { got.push_back(b); }
+    while(Device::getRecvBuffer().popInto(b)) { got.push_back(b); }
     return got;
 }
 
@@ -43,7 +41,10 @@ void run(char const* name) {
     auto const open = [] {
         Host::plugIn();
         check(Host::enumerate(), "enumerated");
-        check(Host::controlOut(Host::makeSetup(0x21, 0x22, 0x0003, 0, 0)).ok(), "DTR and RTS on");
+        check(Host::controlOut(
+                Host::makeSetup(classToInterface, Acm::setControlLineState, 0x0003, 0, 0))
+                .ok(),
+              "DTR and RTS on");
         // The application polls its receive queue, and that is what arms the OUT endpoint after
         // a (re)configuration: the reading side empties the queue first (BulkOutEndpoint).
         check(Device::getRecvBuffer().empty(), "nothing received yet");
@@ -53,9 +54,15 @@ void run(char const* name) {
     Host::plugIn();
     check(Host::enumerate(), "enumerated");
     check(!Device::isConnected() && !Device::isSendReady(), "configured is not yet open");
-    check(Host::controlOut(Host::makeSetup(0x21, 0x22, 0x0001, 0, 0)).ok(), "DTR on");
+    check(
+      Host::controlOut(Host::makeSetup(classToInterface, Acm::setControlLineState, 0x0001, 0, 0))
+        .ok(),
+      "DTR on");
     check(Device::isConnected() && Device::isSendReady(), "open");
-    check(Host::controlOut(Host::makeSetup(0x21, 0x22, 0x0000, 0, 0)).ok(), "DTR off");
+    check(
+      Host::controlOut(Host::makeSetup(classToInterface, Acm::setControlLineState, 0x0000, 0, 0))
+        .ok(),
+      "DTR off");
     check(!Device::isConnected(), "closed");
 
     testCase("SET_LINE_CODING has a data stage, and GET_LINE_CODING returns it");
@@ -67,12 +74,17 @@ void run(char const* name) {
                                               std::byte{0},
                                               std::byte{0},
                                               std::byte{8}};
-        check(Host::controlOut(Host::makeSetup(0x21, 0x20, 0, 0, 7), coding).ok(), "set");
-        auto const r = Host::controlIn(Host::makeSetup(0xA1, 0x21, 0, 0, 7));
+        check(
+          Host::controlOut(Host::makeSetup(classToInterface, Acm::setLineCoding, 0, 0, 7), coding)
+            .ok(),
+          "set");
+        auto const r
+          = Host::controlIn(Host::makeSetup(classFromInterface, Acm::getLineCoding, 0, 0, 7));
         check(r.ok(), "get");
         check(std::ranges::equal(r.data, coding), "what was set");
-        check(Host::controlOut(Host::makeSetup(0x21, 0x20, 0, 0, 3)).stalled,
-              "a line coding of the wrong length is refused");
+        check(
+          Host::controlOut(Host::makeSetup(classToInterface, Acm::setLineCoding, 0, 0, 3)).stalled,
+          "a line coding of the wrong length is refused");
     }
 
     testCase("SERIAL_STATE goes out on the notification endpoint");
@@ -153,12 +165,13 @@ void run(char const* name) {
         open();
         auto const msg = pattern(300, 5);
         check(Device::send(msg), "300 bytes queued");
-        auto first = Fake::hostIn(DataEp);
+        auto const first = Fake::hostIn(DataEp);
         check(first.handshake == Fake::Handshake::ack, "the first packet");
         Host::pump();
         check(Host::setHalt(DataIn).ok(), "SET_FEATURE(ENDPOINT_HALT)");
         check(Fake::hostIn(DataEp).handshake == Fake::Handshake::stall, "reads STALL");
-        auto const st = Host::controlIn(Host::makeSetup(0x82, 0, 0, DataIn, 2));
+        auto const st
+          = Host::controlIn(Host::makeSetup(fromEndpoint, Setup::Request::getStatus, 0, DataIn, 2));
         check(st.ok() && std::to_integer<int>(st.data[0]) == 1, "GET_STATUS says halted");
         check(Host::clearHalt(DataIn).ok(), "CLEAR_FEATURE(ENDPOINT_HALT)");
         auto const rest = Host::bulkIn(DataEp);
@@ -207,7 +220,10 @@ void run(char const* name) {
         Host::busReset();
         check(!Device::isConnected() && !Device::isSendReady(), "closed and unconfigured");
         check(Host::enumerate(), "enumerates again");
-        check(Host::controlOut(Host::makeSetup(0x21, 0x22, 0x0001, 0, 0)).ok(), "opens again");
+        check(Host::controlOut(
+                Host::makeSetup(classToInterface, Acm::setControlLineState, 0x0001, 0, 0))
+                .ok(),
+              "opens again");
         check(Host::bulkIn(DataEp).data.empty(), "nothing of the old message is left");
         auto const fresh = pattern(130, 11);
         check(Device::send(fresh), "a new message");

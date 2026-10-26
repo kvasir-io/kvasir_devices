@@ -25,7 +25,7 @@ using namespace Kvasir::I2C;
 namespace {
 
 using Near = Dev<Chips::Bh1750>;
-using Far  = Dev<Chips::Bh1750, At<0x5C>>;
+using Far  = Dev<Chips::Bh1750, Kvasir::Engine::At<0x5C>>;
 using Pair = Kvasir::I2C::Bus<FakeBus, FakeClock, Near, Far>;
 
 /// The switch, and what was done to it. `abandonBus` is the hook a firmware resets its bus
@@ -67,18 +67,18 @@ using Rail = PowerRail<FakeClock, Supply>;
 /// Every value redeclared, none the default's: a lambda of PowerRail's that read the wrong
 /// one would show.
 struct FastConfig {
-    static constexpr auto OffTime           = std::chrono::milliseconds{20};
-    static constexpr auto SettleTime        = std::chrono::milliseconds{7};
-    static constexpr auto AbsentBeforeCycle = std::chrono::milliseconds{1500};
-    static constexpr auto CycleIntervalMax  = std::chrono::milliseconds{4000};
+    static constexpr auto offTime           = std::chrono::milliseconds{20};
+    static constexpr auto settleTime        = std::chrono::milliseconds{7};
+    static constexpr auto absentBeforeCycle = std::chrono::milliseconds{1500};
+    static constexpr auto cycleIntervalMax  = std::chrono::milliseconds{4000};
 };
 
 using FastRail = PowerRail<FakeClock, Supply, FastConfig>;
 
 static_assert(FastRail::OffTime == 20ms && FastRail::SettleTime == 7ms
               && FastRail::AbsentBeforeCycle == 1500ms && FastRail::CycleIntervalMax == 4000ms);
-static_assert(Rail::OffTime == PowerRailDefaults::OffTime
-              && Rail::CycleIntervalMax == PowerRailDefaults::CycleIntervalMax);
+static_assert(Rail::OffTime == PowerRailDefaults::offTime
+              && Rail::CycleIntervalMax == PowerRailDefaults::cycleIntervalMax);
 
 /// A switch that claims its pin hands the claim to the rail; one that does not still is one.
 struct ClaimingSupply : Supply {
@@ -100,7 +100,7 @@ struct Powered {
     R& rail;
     B& bus;
 
-    void handler() { rail.handler(bus); }
+    void turn() { rail.turn(bus); }
 };
 
 /// off, on, off, on ...: never the same edge twice.
@@ -133,7 +133,7 @@ void powerRail() {
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(!Supply::isOn) { talkedWhileOff = true; }
-          if(farDead && a == Far::Address) { return FakeBusResult::notAcknowledged; }
+          if(farDead && a == Far::Address) { return FakeBusResult::nack; }
           return zeros(a, s, r);
       }};
 
@@ -195,7 +195,9 @@ void powerRail() {
     checkEq(Supply::abandoned, std::size_t{rail.cycles()}, "the bus is abandoned once per cycle");
     check(Supply::abandonedWhileOn, "while the rail is still on");
     check(alternates(Supply::switched), "and the switch only ever alternates");
-    checkEq(Supply::switched.size(), std::size_t{2} + 2 * rail.cycles(), "one off and on a cycle");
+    checkEq(Supply::switched.size(),
+            std::size_t{2} + (std::size_t{2} * rail.cycles()),
+            "one off and on a cycle");
 }
 
 void configured() {
@@ -209,15 +211,15 @@ void configured() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(farDead && a == Far::Address) { return FakeBusResult::notAcknowledged; }
+          if(farDead && a == Far::Address) { return FakeBusResult::nack; }
           return zeros(a, s, r);
       }};
 
     testCase("PowerRail: a Config's own times");
     check(rail.state() == FastRail::State::off, "off from the start");
-    runFor(powered, FastConfig::OffTime + 2ms);
+    runFor(powered, FastConfig::offTime + 2ms);
     check(rail.state() == FastRail::State::settling, "OffTime, then settling");
-    runFor(powered, FastConfig::SettleTime + 2ms);
+    runFor(powered, FastConfig::settleTime + 2ms);
     check(rail.state() == FastRail::State::on, "SettleTime, then on");
     check(runUntil(powered, [&] { return bus.answeringCount() == 2; }, 2s), "both parts up");
 
@@ -226,9 +228,9 @@ void configured() {
     check(runUntil(powered, [&] { return rail.cycles() == 1; }, 20s), "first cycle");
     checkEq(rail.cycleInterval(), 3000ms, "doubled");
     check(runUntil(powered, [&] { return rail.cycles() == 2; }, 20s), "second");
-    checkEq(rail.cycleInterval(), FastConfig::CycleIntervalMax, "clamped, not 6 s");
+    checkEq(rail.cycleInterval(), FastConfig::cycleIntervalMax, "clamped, not 6 s");
     check(runUntil(powered, [&] { return rail.cycles() == 3; }, 20s), "third");
-    checkEq(rail.cycleInterval(), FastConfig::CycleIntervalMax, "and stays there");
+    checkEq(rail.cycleInterval(), FastConfig::cycleIntervalMax, "and stays there");
 
     testCase("PowerRail: cycle() while the rail is off is that cycle, not one more");
     check(rail.state() == FastRail::State::off, "just cycled");
@@ -236,16 +238,16 @@ void configured() {
     farDead = false;
     check(runUntil(powered, [&] { return bus.answeringCount() == 2; }, 20s), "both answer");
     checkEq(rail.cycles(), 3U, "no fourth cycle came of it");
-    checkEq(rail.cycleInterval(), FastConfig::AbsentBeforeCycle, "and the wait is the first again");
+    checkEq(rail.cycleInterval(), FastConfig::absentBeforeCycle, "and the wait is the first again");
 
     testCase(
       "PowerRail: after a recovery the next absence waits AbsentBeforeCycle, not the maximum");
-    runFor(powered, 2 * FastConfig::AbsentBeforeCycle);
+    runFor(powered, 2 * FastConfig::absentBeforeCycle);
     farDead = true;
     check(runUntil(powered, [&] { return bus.absentCount() == 1; }, 10s), "parked again");
     auto const parkedAt = FakeClock::now();
     check(runUntil(powered, [&] { return rail.cycles() == 4; }, 20s), "cycled");
-    check(FakeClock::now() - parkedAt < FastConfig::AbsentBeforeCycle + 100ms,
+    check(FakeClock::now() - parkedAt < FastConfig::absentBeforeCycle + 100ms,
           "after the first wait");
 }
 
@@ -255,8 +257,8 @@ using MuxDev   = Dev<Chips::Tca9548a>;
 using Gated    = Device<FakeBus,
                         FakeClock,
                         Chips::Sht3x,
-                        DefaultConfig,
-                        NoReset,
+                        Kvasir::Engine::DefaultConfig,
+                        Kvasir::NoReset,
                         Kvasir::I2C::MuxGate<MuxDev, 0>>;
 using Switched = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, Gated>;
 
@@ -271,11 +273,11 @@ void muxOnTheRail() {
     bool       dead         = false;
     bool       behindClosed = false;
     wire.behind = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(dead) { return FakeBusResult::notAcknowledged; }
+        if(dead) { return FakeBusResult::nack; }
         // A part behind a closed channel is not on the wire.
         if(wire.control[0x70] != 0x01) {
             behindClosed = true;
-            return FakeBusResult::notAcknowledged;
+            return FakeBusResult::nack;
         }
         return crcZeros(a, s, r);
     };

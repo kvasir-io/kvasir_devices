@@ -1,7 +1,9 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
+#include "kvasir/Util/Config.hpp"
 #include "kvasir/Util/Crc.hpp"
 
 #include <array>
@@ -156,7 +158,7 @@ template<Address7                       Addr     = 0x37,
          Cy8cmbr3102Detail::Sensitivity Sens     = Cy8cmbr3102Detail::Sensitivity::counts500PerPf,
          Cy8cmbr3102Detail::AutoReset   Arst     = Cy8cmbr3102Detail::AutoReset::after5s,
          Cy8cmbr3102Detail::Spo0        Spo0Mode = Cy8cmbr3102Detail::Spo0::gpo,
-         typename Timing                         = DefaultTiming>
+         typename Timing                         = Engine::DefaultTiming>
 struct Cy8cmbr3102 {
     static constexpr std::string_view        Name          = "CY8CMBR3102";
     static constexpr Address7                Address       = Addr;
@@ -180,20 +182,10 @@ struct Cy8cmbr3102 {
                   "the CY8CMBR3102 has CS0 and CS1");
     static_assert(SensorId == 0 || Spo0Mode == Spo0::sensor,
                   "CS1 is the SPO0 pin: it is a sensor only with SPO0 set to sensor (TRM 1.5.1)");
-    static constexpr std::chrono::milliseconds Refresh = [] {
-        if constexpr(requires { Timing::Refresh; }) {
-            return Kvasir::asDuration(Timing::Refresh);
-        } else {
-            return std::chrono::milliseconds{100};
-        }
-    }();
-    static constexpr std::chrono::milliseconds ReadPeriod = [] {
-        if constexpr(requires { Timing::Period; }) {
-            return Kvasir::asDuration(Timing::Period);
-        } else {
-            return Refresh;
-        }
-    }();
+    static constexpr std::chrono::milliseconds Refresh
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, refresh, std::chrono::milliseconds{100}));
+    static constexpr std::chrono::milliseconds ReadPeriod
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, Refresh));
 
     static_assert(Refresh >= std::chrono::milliseconds{20}
                     && Refresh <= std::chrono::milliseconds{500}
@@ -294,9 +286,9 @@ struct Cy8cmbr3102 {
 
     /// CTRL_CMD_ERR and SYSTEM_STATUS, FAMILY_ID and DEVICE_ID, then CONFIG_CRC.
     static constexpr std::array Init{
-      Step::read({.reg = RegCtrlCmdErr, .count = 2, .offset = 0}),
-      Step::read({.reg = RegFamilyId, .count = 3, .offset = 2}),
-      Step::read({.reg = RegConfigCrc, .count = 2, .offset = 5}),
+      Engine::Step::read({.reg = RegCtrlCmdErr, .count = 2, .offset = 0}),
+      Engine::Step::read({.reg = RegFamilyId, .count = 3, .offset = 2}),
+      Engine::Step::read({.reg = RegConfigCrc, .count = 2, .offset = 5}),
     };
 
     struct State {
@@ -337,18 +329,18 @@ struct Cy8cmbr3102 {
     /// baseline, raw and average raw (LE16 each), 0xE6, SYNC_COUNTER2.
     static constexpr std::uint8_t DebugBytes = 13;
 
-    [[nodiscard]] static constexpr Outcome<Sample> decodeDebug(Bytes data) {
+    [[nodiscard]] static constexpr Engine::Outcome<Sample> decodeDebug(Bytes data) {
         if((data.u8(0) & 0x0FU) != (data.u8(12) & 0x0FU)) {
-            return Outcome<Sample>::retry(
+            return Engine::Outcome<Sample>::retry(
               std::chrono::milliseconds{5});   // the part updated the block under the read
         }
         if(data.u8(1) != SensorId) {
-            return Outcome<Sample>::retry(CommandLatency);   // SENSOR_ID not taken yet
+            return Engine::Outcome<Sample>::retry(CommandLatency);   // SENSOR_ID not taken yet
         }
-        return Outcome<Sample>::ok({.capacitance = Units::picoFarad(data.u8(2)),
-                                    .raw         = data.le16(7),
-                                    .baseline    = data.le16(5),
-                                    .difference  = data.le16(3)});
+        return Engine::Outcome<Sample>::ok({.capacitance = Units::picoFarad(data.u8(2)),
+                                            .raw         = data.le16(7),
+                                            .baseline    = data.le16(5),
+                                            .difference  = data.le16(3)});
     }
 
     /// Cyclic: select the sensor (idempotent, and what brings the selection back after a
@@ -356,13 +348,13 @@ struct Cy8cmbr3102 {
     struct Moisture {
         static constexpr auto       Period = ReadPeriod;
         static constexpr std::array Steps{
-          Step::write({.reg = RegSensorId, .payload = {SensorId}}),
-          Step::read({.reg = RegDebugBlock, .count = DebugBytes, .offset = 0}),
+          Engine::Step::write({.reg = RegSensorId, .payload = {SensorId}}),
+          Engine::Step::read({.reg = RegDebugBlock, .count = DebugBytes, .offset = 0}),
         };
 
         using Sample = Cy8cmbr3102::Sample;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             return decodeDebug(data);
         }
     };
@@ -372,16 +364,16 @@ struct Cy8cmbr3102 {
     /// SENSOR_ID (0 .. sensors - 1, TRM 1.5.79).
     struct Capacitance {
         static constexpr std::array Steps{
-          Step::write({.reg     = RegSensorId,
-                       .payload = {static_cast<std::uint8_t>(SensorId == 0 ? 1 : 0)},
-                       .delay   = CommandLatency}),
-          Step::write({.reg = RegSensorId, .payload = {SensorId}, .delay = CommandLatency}),
-          Step::read({.reg = RegDebugBlock, .count = DebugBytes, .offset = 0}),
+          Engine::Step::write({.reg     = RegSensorId,
+                               .payload = {static_cast<std::uint8_t>(SensorId == 0 ? 1 : 0)},
+                               .delay   = CommandLatency}),
+          Engine::Step::write({.reg = RegSensorId, .payload = {SensorId}, .delay = CommandLatency}),
+          Engine::Step::read({.reg = RegDebugBlock, .count = DebugBytes, .offset = 0}),
         };
 
         using Sample = Cy8cmbr3102::Sample;
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             return decodeDebug(data);
         }
     };
@@ -398,7 +390,7 @@ struct Cy8cmbr3102 {
         static constexpr std::size_t Bytes     = BlockBytes;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&,
                std::span<std::byte> buffer) {
@@ -406,11 +398,12 @@ struct Cy8cmbr3102 {
                 buffer[i] = static_cast<std::byte>(Configuration[i]);
             }
             return {
-              Step::writeBuffer({.reg = 0x00, .offset = 0, .count = BlockBytes}),
-              Step::write({.reg = RegCtrlCmd, .payload = {CmdSaveCheckCrc}, .delay = SaveTime}),
-              Step::write({.reg     = RegCtrlCmd,
-                           .payload = {static_cast<std::uint8_t>(Operation::reset)},
-                           .delay   = BootTime}),
+              Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = BlockBytes}),
+              Engine::Step::write(
+                {.reg = RegCtrlCmd, .payload = {CmdSaveCheckCrc}, .delay = SaveTime}),
+              Engine::Step::write({.reg     = RegCtrlCmd,
+                                   .payload = {static_cast<std::uint8_t>(Operation::reset)},
+                                   .delay   = BootTime}),
             };
         }
     };
@@ -419,8 +412,8 @@ struct Cy8cmbr3102 {
     /// whether the save took.
     struct Stored {
         static constexpr std::array Steps{
-          Step::read({.reg = RegCtrlCmdErr, .count = 1, .offset = 0}),
-          Step::read({.reg = RegConfigCrc, .count = 2, .offset = 1}),
+          Engine::Step::read({.reg = RegCtrlCmdErr, .count = 1, .offset = 0}),
+          Engine::Step::read({.reg = RegConfigCrc, .count = 2, .offset = 1}),
         };
 
         struct Sample {
@@ -443,10 +436,10 @@ struct Cy8cmbr3102 {
         static constexpr std::size_t Bytes     = 1;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer(
+            return Engine::Step::writeBuffer(
               {.reg    = RegCtrlCmd,
                .offset = 0,
                .count  = 1,
@@ -466,7 +459,7 @@ struct Cy8cmbr3102 {
         static constexpr std::size_t Bytes     = BlockBytes;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr std::array<Step,
+        [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
@@ -476,18 +469,19 @@ struct Cy8cmbr3102 {
                 buffer[i] = static_cast<std::byte>(block[i]);
             }
             return {
-              Step::writeBuffer({.reg = 0x00, .offset = 0, .count = BlockBytes}),
-              Step::write({.reg = RegCtrlCmd, .payload = {CmdSaveCheckCrc}, .delay = SaveTime}),
-              Step::write({.reg     = RegCtrlCmd,
-                           .payload = {static_cast<std::uint8_t>(Operation::reset)},
-                           .delay   = BootTime}),
+              Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = BlockBytes}),
+              Engine::Step::write(
+                {.reg = RegCtrlCmd, .payload = {CmdSaveCheckCrc}, .delay = SaveTime}),
+              Engine::Step::write({.reg     = RegCtrlCmd,
+                                   .payload = {static_cast<std::uint8_t>(Operation::reset)},
+                                   .delay   = BootTime}),
             };
         }
     };
 
     using Primary = Moisture;
-    using Reads   = List<Moisture, Capacitance, Stored>;
-    using Writes  = List<Provision, Command, SetAddress>;
+    using Reads   = Engine::List<Moisture, Capacitance, Stored>;
+    using Writes  = Engine::List<Provision, Command, SetAddress>;
 };
 
 /// The SparkFun Qwiic Soil Moisture Sensor (SEN-30480): the defaults above are its setup.

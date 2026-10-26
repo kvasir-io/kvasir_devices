@@ -1,15 +1,11 @@
 /// The AD7124 (SPI/chips/Ad7124.hpp) against a register model of the part over the queued SPI core.
-// clang-format off
-#include <support/LogStubs.hpp>
-#include <support/Check.hpp>
-// clang-format on
-
-#include "FakeQueuedSpi.hpp"
-#include "FakeSpi.hpp"
+#include "Harness.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <kd/Check.hpp>
+#include <kvasir/Devices/Engine/DeviceSet.hpp>
 #include <kvasir/Devices/SPI/chips/Ad7124.hpp>
 #include <support/FakeClock.hpp>
 #include <vector>
@@ -29,14 +25,14 @@ struct Part {
     std::array<std::uint32_t, 0x40>                     reg{};
     std::uint8_t                                        id{0x07};
     bool                                                calibrating{};
-    FakeClock::time_point                               calibrationDone{};
+    FakeClock::time_point                               calibrationDone;
     std::uint32_t                                       seenRises{};
     bool                                                haveComms{};
     std::uint8_t                                        comms{};
-    std::vector<std::uint8_t>                           bytes{};
+    std::vector<std::uint8_t>                           bytes;
     int                                                 ones{};
-    std::vector<std::pair<std::uint8_t, std::uint32_t>> written{};
-    FakeClock::time_point                               nextConversion{};
+    std::vector<std::pair<std::uint8_t, std::uint32_t>> written;
+    FakeClock::time_point                               nextConversion;
     std::uint8_t                                        channel{};
     std::uint32_t                                       code{0x800100};
 
@@ -54,7 +50,7 @@ struct Part {
         haveComms = false;
     }
 
-    bool continuous() const { return (reg[0x01] & 0x3CU) == 0; }
+    [[nodiscard]] bool continuous() const { return (reg[0x01] & 0x3CU) == 0; }
 
     /// From the data sheet, not the driver: one settling period zero-scale, four full-scale (:2756);
     /// tSETTLE = (4 x 32 x FS + dead time) / fCLK sinc4 (:2850), 3 x 32 sinc3 (:3026), dead time 61/95
@@ -132,7 +128,7 @@ struct Part {
         bytes.push_back(mosi);
         if(bytes.size() == n) {
             std::uint32_t v = 0;
-            for(auto b : bytes) { v = (v << 8U) | b; }
+            for(auto const b : bytes) { v = (v << 8U) | b; }
             if(calibrating) {   // "registers cannot be accessed ... the write operation is ignored"
                 reg[0x06] |= 0x40U;
                 ignoredWrites.emplace_back(r, v);
@@ -149,7 +145,7 @@ struct Part {
         return 0xFF;
     }
 
-    std::vector<std::pair<std::uint8_t, std::uint32_t>> ignoredWrites{};
+    std::vector<std::pair<std::uint8_t, std::uint32_t>> ignoredWrites;
 };
 
 Part part{};
@@ -159,49 +155,40 @@ struct Tag {};
 using Bus = QueuedSpi::Bus<Tag>;
 
 struct TwoCells : A::Ad7124Defaults {
-    static constexpr std::array<A::Ad7124Channel, 2> Channels{
+    static constexpr std::array<A::Ad7124Channel, 2> channels{
       {{1, 0}, {3, 2}}
     };
-    static constexpr A::Ad7124Gain  Gain  = A::Ad7124Gain::x8;
-    static constexpr A::Ad7124Power Power = A::Ad7124Power::full;
+    static constexpr A::Ad7124Gain  gain  = A::Ad7124Gain::x8;
+    static constexpr A::Ad7124Power power = A::Ad7124Power::full;
 };
 
 using Adc = A::Ad7124<Bus, FakeClock, Spi::Cs, TwoCells>;
+static_assert(Kvasir::Engine::WrapsDevice<Adc> && !Kvasir::Engine::DeviceLike<Adc>,
+              "a DeviceSet member as a driver with its device inside (DeviceSet.hpp)");
 
-constexpr std::uint32_t ConfigWord = A::Ad7124Detail::configValue(TwoCells::Polarity,
-                                                                  TwoCells::ReferenceBuffers,
-                                                                  TwoCells::InputBuffers,
-                                                                  TwoCells::Reference,
-                                                                  TwoCells::Gain);
+constexpr std::uint32_t ConfigWord = A::Ad7124Detail::configValue(TwoCells::polarity,
+                                                                  TwoCells::referenceBuffers,
+                                                                  TwoCells::inputBuffers,
+                                                                  TwoCells::reference,
+                                                                  TwoCells::gain);
 static_assert(ConfigWord == 0x0863,
               "bipolar, input buffers, REFIN1, gain 8");
 
 void fresh() {
-    Bus::reset();
-    Pins::reset();
-    FakeClock::set(1s);
-    Log::reset();
+    Spi::Harness::fresh<Bus>([](std::uint8_t m) { return part.exchange(m); });
     part = Part{};
-    part.powerOn();
-    Bus::partSelected = [] { return !Pins::level[Spi::Cs::id]; };
-    Bus::exchange     = [](std::uint8_t m) { return part.exchange(m); };
+    part.powerOn();   // after the clock is set: the part's power-on is a time point
 }
+
+/// 100 us turns, the clock first, then the part.
+constexpr Spi::Loop loop{.step = 100us, .order = Spi::ClockOrder::first};
 
 template<typename D,
          typename Pred>
 bool runUntil(D&                        d,
               Pred                      pred,
               std::chrono::milliseconds limit) {
-    auto const end = FakeClock::now() + limit;
-    while(FakeClock::now() < end) {
-        FakeClock::advance(100us);
-        part.tick();
-        Bus::handler();
-        d.handler();
-        Bus::tick();
-        if(pred()) { return true; }
-    }
-    return false;
+    return Spi::Harness::runUntil<Bus>(d, pred, limit, loop, [] { part.tick(); });
 }
 
 /// TwoCells calibrates at sinc4, FS 384, mid power (full power not allowed full-scale, :2760):
@@ -210,13 +197,15 @@ bool runUntil(D&                        d,
 void bringUp() {
     testCase("AD7124: reset, ID, setup, channels, calibration, continuous conversion");
     fresh();
-    Adc adc{};
-    check(runUntil(adc, [&] { return adc.present(); }, 5s), "comes up");
+    Adc                      adc{};
+    Spi::BusScope<Bus> const adcScope{};
+    check(runUntil(adc, [&] { return adc.answering(); }, 5s), "comes up");
     checkEq(adc.id(), 0x07, "ID 0x07");
     check(part.ignoredWrites.empty(), "nothing ignored: every write came after its calibration");
     static_assert(Adc::Chip::ZeroScaleWait >= 338ms,
                   "one settling period covers the model's 337.5 ms");
-    std::vector<std::uint8_t> order{};
+    std::vector<std::uint8_t> order;
+    order.reserve(part.written.size());
     for(auto const& w : part.written) { order.push_back(w.first); }
     std::vector<std::uint8_t> const
       expect{0x07, 0x03, 0x19, 0x21, 0x09, 0x0A, 0x29, 0x01, 0x01, 0x01};
@@ -239,8 +228,9 @@ void bringUp() {
 void conversions() {
     testCase("AD7124: the sequence's conversions, by channel index, codes signed");
     fresh();
-    Adc adc{};
-    runUntil(adc, [&] { return adc.present(); }, 5s);
+    Adc                      adc{};
+    Spi::BusScope<Bus> const adcScope{};
+    runUntil(adc, [&] { return adc.answering(); }, 5s);
     std::array<int, 2> seen{};
     runUntil(
       adc,
@@ -261,12 +251,13 @@ void conversions() {
 void resetItself() {
     testCase("AD7124: a part that reset itself (POR_FLAG) is configured again");
     fresh();
-    Adc adc{};
-    runUntil(adc, [&] { return adc.present(); }, 5s);
+    Adc                      adc{};
+    Spi::BusScope<Bus> const adcScope{};
+    runUntil(adc, [&] { return adc.answering(); }, 5s);
     part.powerOn();
     check(runUntil(
             adc,
-            [&] { return adc.bringUps() == 2 && adc.present(); },
+            [&] { return adc.bringUps() == 2 && adc.answering(); },
             3s),
           "brought up again");
     checkEq(part.reg[0x19], ConfigWord, "configured again");
@@ -275,8 +266,9 @@ void resetItself() {
 void errorFlag() {
     testCase("AD7124: ERROR_FLAG makes the driver read ERROR");
     fresh();
-    Adc adc{};
-    runUntil(adc, [&] { return adc.present(); }, 5s);
+    Adc                      adc{};
+    Spi::BusScope<Bus> const adcScope{};
+    runUntil(adc, [&] { return adc.answering(); }, 5s);
     part.reg[0x06] = 0x000800;   // REF_DET_ERR
     part.reg[0x00] |= 0x40U;
     check(runUntil(adc, [&] { return adc.errorReports() >= 1; }, 1s), "read");
@@ -288,9 +280,10 @@ void wrongId() {
     fresh();
     part.id = 0x27;   // device 2: neither the -4 (0) nor the -8 (1), revision 7
     part.powerOn();
-    Adc adc{};
+    Adc                      adc{};
+    Spi::BusScope<Bus> const adcScope{};
     runUntil(adc, [] { return false; }, 3s);
-    check(!adc.present(), "not answering");
+    check(!adc.answering(), "not answering");
     check(part.written.empty(), "nothing written");
     check(Log::warnings >= 1, "logged as unidentified");
 
@@ -299,8 +292,9 @@ void wrongId() {
         fresh();
         part.id = id;
         part.powerOn();
-        Adc other{};
-        check(runUntil(other, [&] { return other.present(); }, 5s), "comes up");
+        Adc                      other{};
+        Spi::BusScope<Bus> const otherScope{};
+        check(runUntil(other, [&] { return other.answering(); }, 5s), "comes up");
         checkEq(other.id(), id, "the id as read");
         checkEq(part.reg[0x19], ConfigWord, "configured");
     }
@@ -312,9 +306,10 @@ void noPart() {
         fresh();
         Bus::exchange = {};
         Bus::floating = level;
-        Adc adc{};
+        Adc                      adc{};
+        Spi::BusScope<Bus> const adcScope{};
         runUntil(adc, [] { return false; }, 3s);
-        check(!adc.present() && adc.conversions() == 0, "not answering, nothing converted");
+        check(!adc.answering() && adc.conversions() == 0, "not answering, nothing converted");
         bool configured = false;
         for(auto const& f : Bus::frames) {
             configured = configured || (f.mosi.size() > 1 && f.mosi[0] == 0x07);

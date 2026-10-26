@@ -1,7 +1,8 @@
 #pragma once
 
 #include "../../Bme280Compensation.hpp"
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -39,8 +40,8 @@ struct Bmx280 {
     /// or 0x56 / 0x57 on samples (BME280.md:1106, Table 17; BMP280.md:989 names 0x58 only): the
     /// mask 0xFE takes the sample pair as one value.
     static constexpr std::array Identity{
-      Humidity ? RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x60U}
-               : RegisterCheck{"chip-id", 0xD0, 1, true, 0xFE, 0x58U, 0x56U},
+      Humidity ? Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x60U}
+               : Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFE, 0x58U, 0x56U},
     };
     static constexpr Address7                Address = 0x76;
     static constexpr std::array<Address7, 2> Addresses{0x76, 0x77};
@@ -49,19 +50,23 @@ struct Bmx280 {
     static constexpr auto Init = [] {
         if constexpr(Humidity) {
             return std::array{
-              Step::write({.reg = 0xE0, .payload = {0xB6}, .delay = std::chrono::milliseconds{3}}),
-              Step::read({.reg = 0x88, .count = 26, .offset = 0}),
-              Step::read({.reg = 0xE1, .count = 7, .offset = 26}),
-              Step::write({.reg = 0xF2, .payload = {0x01}}),
-              Step::write({.reg = 0xF5, .payload = {0xA0}}),
-              Step::write({.reg = 0xF4, .payload = {0x27}, .delay = std::chrono::milliseconds{10}}),
+              Engine::Step::write(
+                {.reg = 0xE0, .payload = {0xB6}, .delay = std::chrono::milliseconds{3}}),
+              Engine::Step::read({.reg = 0x88, .count = 26, .offset = 0}),
+              Engine::Step::read({.reg = 0xE1, .count = 7, .offset = 26}),
+              Engine::Step::write({.reg = 0xF2, .payload = {0x01}}),
+              Engine::Step::write({.reg = 0xF5, .payload = {0xA0}}),
+              Engine::Step::write(
+                {.reg = 0xF4, .payload = {0x27}, .delay = std::chrono::milliseconds{10}}),
             };
         } else {
             return std::array{
-              Step::write({.reg = 0xE0, .payload = {0xB6}, .delay = std::chrono::milliseconds{3}}),
-              Step::read({.reg = 0x88, .count = 26, .offset = 0}),
-              Step::write({.reg = 0xF5, .payload = {0xA0}}),
-              Step::write({.reg = 0xF4, .payload = {0x27}, .delay = std::chrono::milliseconds{10}}),
+              Engine::Step::write(
+                {.reg = 0xE0, .payload = {0xB6}, .delay = std::chrono::milliseconds{3}}),
+              Engine::Step::read({.reg = 0x88, .count = 26, .offset = 0}),
+              Engine::Step::write({.reg = 0xF5, .payload = {0xA0}}),
+              Engine::Step::write(
+                {.reg = 0xF4, .payload = {0x27}, .delay = std::chrono::milliseconds{10}}),
             };
         }
     }();
@@ -85,7 +90,8 @@ struct Bmx280 {
 
     struct Measurement {
         static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Step::read({.reg = 0xF7, .count = Humidity ? 8 : 6})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0xF7, .count = Humidity ? 8 : 6})};
 
         struct Sample {
             CentiDegC    temperature{};   ///< 0.01 degC
@@ -93,16 +99,16 @@ struct Bmx280 {
             MilliPercent humidity{};   ///< 0.001 %RH (0 on a BMP280)
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& t) {
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& t) {
             std::int32_t const adcP = static_cast<std::int32_t>(data.be24(0) >> 4);
             std::int32_t const adcT = static_cast<std::int32_t>(data.be24(3) >> 4);
             if(adcP == Bme280Compensation::Skipped20 || adcT == Bme280Compensation::Skipped20) {
-                return Outcome<Sample>::reject();
+                return Engine::Outcome<Sample>::reject();
             }
             if constexpr(Humidity) {
                 if(data.be16(6) == Bme280Compensation::Skipped16) {
-                    return Outcome<Sample>::reject();
+                    return Engine::Outcome<Sample>::reject();
                 }
             }
             auto const tFine = t.tFine(adcT);
@@ -113,11 +119,11 @@ struct Bmx280 {
                 sample.humidity = Units::milliPercent(
                   t.humidityMilli(static_cast<std::int32_t>(data.be16(6)), tFine));
             }
-            return Outcome<Sample>::ok(sample);
+            return Engine::Outcome<Sample>::ok(sample);
         }
     };
 
-    using Reads = List<Measurement>;
+    using Reads = Engine::List<Measurement>;
 };
 
 using Bme280 = Bmx280<Bme280Compensation::Model::bme280>;

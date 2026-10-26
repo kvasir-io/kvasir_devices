@@ -14,9 +14,6 @@
 ///
 ///     template<Kvasir::Samples::Climate S>
 ///     void show(S const& s) { ... in(s.temperature, si::degree_Celsius) ... }
-///
-/// The device-level `TemperatureSource` (Quantities.hpp) is the same idea one step up:
-/// `d.latest().temperature` on any driver, on any bus.
 namespace Kvasir::Samples {
 
 namespace detail {

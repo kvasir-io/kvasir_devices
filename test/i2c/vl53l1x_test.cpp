@@ -17,6 +17,7 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
@@ -27,11 +28,13 @@ static_assert(
   [] {
       std::size_t longest = 0;
       for(auto const& s : Tof::InitSteps) {
-          if(s.kind == Step::Kind::write && s.count > longest) { longest = s.count; }
+          if(s.kind == Kvasir::Engine::Step::Kind::write && s.count > longest) {
+              longest = s.count;
+          }
       }
       return longest;
   }()
-    == Step::InlineBytes,
+    == Kvasir::Engine::Step::InlineBytes,
   "no write over eight bytes");
 static_assert(
   Tof::InitSteps.size() == 27,
@@ -56,8 +59,7 @@ std::size_t readsOf(std::uint16_t reg) {
 }
 
 void vl53l1x() {
-    testCase("VL53L1X");
-    fresh();
+    I2cCase const    testcase{"VL53L1X"};
     RegisterModel<2> m{0x29};
     m.set(0x010F, {0xEA, 0xCC});   // model id
     m.set(0x00E5, {0x01});         // booted
@@ -161,7 +163,7 @@ void vl53l1x() {
                                0xD2,
                                0x01,
                                0x00);
-        auto const got = Chips::Vl53l1x::Ranging::decode(Bytes{f});
+        auto const got = Chips::Vl53l1x::Ranging::decode(Kvasir::Bytes{f});
         return isOk(got) && got.value.distance == Kvasir::Units::milliMetre(1234)
             && equal(got.value.status, 0) && got.value.valid()
             && equal(got.value.ambientRate, Units::hertz(128000U))
@@ -198,7 +200,7 @@ void vl53l1x() {
                                0xD2,
                                0x01,
                                0x00);
-        auto const got = Chips::Vl53l1x::Ranging::decode(Bytes{f});
+        auto const got = Chips::Vl53l1x::Ranging::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.status, 2) && !got.value.valid();
     }());
     // a raw status ULD has no mapping for (0 is its 255) is a frame that cannot be read: rejected
@@ -222,7 +224,7 @@ void vl53l1x() {
                              0xD2,
                              0x01,
                              0x00);
-        return isReject(Chips::Vl53l1x::Ranging::decode(Bytes{f}));
+        return isReject(Chips::Vl53l1x::Ranging::decode(Kvasir::Bytes{f}));
     }());
 
     // no data-ready flag: the result is never read and the run is rejected
@@ -264,7 +266,7 @@ void vl53l1x() {
             [&] { return o.unidentified() == 1; },
             3s),
           "the bring-up read the id and turned it down");
-    check(!o.identified() && o.link() == Link::starting,
+    check(!o.identified() && o.link() == Kvasir::Link::starting,
           "0xEEAA is not a VL53L1X: starting, not answering");
     {
         auto const reads  = other.reads;
@@ -283,8 +285,6 @@ void vl53l1x() {
     check(runUntil(o, [&] { return o.valid(); }, 3s), "and the part comes up and ranges");
     check(o.identified(), "identified");
     checkEq(o.unidentified(), 1U, "turned down once");
-
-    if(failures != 0) { dump(); }
 }
 
 }   // namespace

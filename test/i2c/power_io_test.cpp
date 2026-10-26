@@ -23,12 +23,12 @@
 using namespace std::chrono_literals;
 using namespace Kvasir::Test;
 using namespace Kvasir::I2C;
+namespace Units = Kvasir::Units;
 
 namespace {
 
 void ina219() {
-    testCase("INA219");
-    fresh();
+    I2cCase const       testcase{"INA219"};
     RegisterModel<1, 2> m{0x40};
     m.set(0x01, {0x0F, 0xA0, 0xFA, 0x00, 0x00, 0x64, 0xFF, 0x9C});
     m.readOnly       = {0x01, 0x02, 0x03, 0x04};
@@ -52,16 +52,14 @@ void ina219() {
     // shunt 0x0FA0, bus 0xFA00, power 0x0064, current 0xFF9C at the default 100 mOhm, 100 uA
     static_assert([] {
         auto const f   = frame(0x0F, 0xA0, 0xFA, 0x00, 0x00, 0x64, 0xFF, 0x9C);
-        auto const got = Chips::Ina219<>::Power::decode(Bytes{f});
+        auto const got = Chips::Ina219<>::Power::decode(Kvasir::Bytes{f});
         return equal(got.shuntVoltage, 40000) && equal(got.busVoltage, 32000U)
             && equal(got.power, 200U) && equal(got.current, -10000);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ads1115() {
-    testCase("ADS1115");
-    fresh();
+    I2cCase const       testcase{"ADS1115"};
     RegisterModel<1, 2> m{0x48};
     m.onWrite = [&](std::uint32_t reg, RegisterModel<1, 2>::Reg const& r) {
         if(reg != 0x01 || (r[0] & 0x80U) == 0) { return; }
@@ -82,17 +80,15 @@ void ads1115() {
     // codes 1000, 2000, 3000, 4000 at the 2.048 V full scale
     static_assert([] {
         auto const f   = frame(0x03, 0xE8, 0x07, 0xD0, 0x0B, 0xB8, 0x0F, 0xA0);
-        auto const got = Chips::Ads1115<>::Sweep::decode(Bytes{f});
+        auto const got = Chips::Ads1115<>::Sweep::decode(Kvasir::Bytes{f});
         return got.code == std::array<std::int16_t, 4>{1000, 2000, 3000, 4000}
             && equal(Chips::Ads1115<>::Sweep::Sample::toVoltage(16384), 1024000)
             && equal(got.voltage(1), 125000);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ds1307() {
-    testCase("DS1307");
-    fresh();
+    I2cCase const    testcase{"DS1307"};
     RegisterModel<1> m{0x68};
     m.set(0x00, {0x45, 0x59, 0x23, 0x02, 0x31, 0x12, 0x24});
     FakeBus::respond = std::ref(m);
@@ -102,7 +98,7 @@ void ds1307() {
     // BCD 45 59 23 02 31 12 24: Tue 2024-12-31 23:59:45, CH clear
     static_assert([] {
         auto const  f   = frame(0x45, 0x59, 0x23, 0x02, 0x31, 0x12, 0x24);
-        auto const  got = Chips::Ds1307::Clock::decode(Bytes{f});
+        auto const  got = Chips::Ds1307::Clock::decode(Kvasir::Bytes{f});
         auto const& t   = got.value;
         return isOk(got) && t.second == 45 && t.minute == 59 && t.hour == 23 && t.weekday == 2
             && t.day == 31 && t.month == 12 && t.year == 24 && !t.halted;
@@ -110,9 +106,9 @@ void ds1307() {
     // CH set, as a part comes new: no time to report
     static_assert([] {
         auto const f = frame(0x80, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00);
-        return isReject(Chips::Ds1307::Clock::decode(Bytes{f}))
+        return isReject(Chips::Ds1307::Clock::decode(Kvasir::Bytes{f}))
             && isOk(Chips::Ds3231::Clock::decode(
-              Bytes{frame(0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00)}));
+              Kvasir::Bytes{frame(0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00)}));
     }());
     d.set<Chips::Ds1307::SetTime>({0, 30, 12, 5, 1, 2, 25});
     check(d.pending(), "pending");
@@ -129,12 +125,10 @@ void ds1307() {
             [&] { return d.latest<Chips::Ds1307::Clock>().hour == 12; },
             2s),
           "read back");
-    if(failures != 0) { dump(); }
 }
 
 void pca9685() {
-    testCase("PCA9685");
-    fresh();
+    I2cCase const    testcase{"PCA9685"};
     RegisterModel<1> m{0x40};
     FakeBus::respond = std::ref(m);
     Dev<Chips::Pca9685<>> d{};
@@ -153,19 +147,17 @@ void pca9685() {
     d.set<Chips::Pca9685<>::Channel>(3, Chips::Pca9685<>::Pwm::duty(2047));
     check(runUntil(d, [&] { return !d.pending(); }, 100ms), "dirty channel written");
     check(writes(from) == std::vector<std::vector<std::uint8_t>>{{0x12, 0x00, 0x00, 0xFF, 0x07}}, "LED3: on 0, off 2047, one transaction");
-    if(failures != 0) { dump(); }
 }
 
 void aled7709() {
-    testCase("ALED7709");
+    I2cCase const testcase{"ALED7709"};
     using Led = Chips::Aled7709<>;
-    fresh();
     RegisterModel<1> m{0x28};
     m.set(0x00, {0x13});   // DEVID: cut 1.3
     FakeBus::respond = std::ref(m);
     Dev<Led> d{};
     check(runUntil(d, [&] { return d.answering(); }, 200ms), "bring-up");
-    check(d.identityMatched() && d.identity(0) == 0x13, "DEVID read once, by the engine");
+    check(d.identityMatched(), "DEVID (cut 1.3) matched, read by the engine");
     check(FakeBus::log[0].isRead() && FakeBus::log[0].sent == std::vector<std::uint8_t>{0x00},
           "and before anything is written");
     // DIMCFG: REG_PWMI | FDIM 001 (200 Hz) | linear | local = 1000 1001b
@@ -204,25 +196,23 @@ void aled7709() {
     d.set<Led::ClearFaults>({});
     check(runUntil(d, [&] { return !d.pending(); }, 100ms), "clear faults");
     check(writes(clr) == std::vector<std::vector<std::uint8_t>>{{0x01, 0x81}}, "CLRF with DEN kept");
-    if(failures != 0) { dump(); }
 }
 
 void pcf8574() {
-    testCase("PCF8574");
-    fresh();
+    I2cCase const    testcase{"PCF8574"};
     std::uint8_t     port = 0x00;
     std::uint8_t     pins = 0xA5;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x20) { return FakeBus::Result::nack; }
           if(sent.size() == 1 && recv.empty()) {
               port = static_cast<std::uint8_t>(sent[0]);
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(sent.empty() && recv.size() == 1) {
               recv[0] = static_cast<std::byte>(pins & port);
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return FakeBus::Result::failed;
       }};
@@ -234,22 +224,23 @@ void pcf8574() {
     check(runUntil(d, [&] { return port == 0x0F; }, 100ms), "output written");
     check(runUntil(d, [&] { return d.samples() == 2; }, 100ms), "read again");
     checkEq(d.latest().port, 0x05, "driven-low pins read low");
-    if(failures != 0) { dump(); }
 }
 
 void easyC() {
-    testCase("MCP47A1 and the two easyC boards");
-    fresh();
+    I2cCase const             testcase{"MCP47A1 and the two easyC boards"};
     std::vector<std::uint8_t> dacW;
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte>) {
-        if(a != 0x2E) { return FakeBus::Result::notAcknowledged; }
-        dacW.clear();
-        for(auto const b : sent) { dacW.push_back(static_cast<std::uint8_t>(b)); }
-        return FakeBus::Result::succeeded;
-    };
+    ScopedHook const          answeringAgain{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte>) {
+          if(a != 0x2E) { return FakeBus::Result::nack; }
+          dacW.clear();
+          for(auto const b : sent) { dacW.push_back(static_cast<std::uint8_t>(b)); }
+          return FakeBus::Result::ok;
+      }};
     Dev<Chips::Mcp47a1<Units::milliVolt(3300)>> m47{};
     check(runUntil(m47, [&] { return !m47.absent(); }, 200ms), "not parked");
-    check(m47.link() == Link::starting, "no Init and nothing asked of it: starting, not answering");
+    check(m47.link() == Kvasir::Link::starting,
+          "no Init and nothing asked of it: starting, not answering");
     checkEq(Chips::Mcp47a1<Units::milliVolt(3300)>::codeFor(Units::milliVolt(1650)),
             std::uint8_t{32},
             "half of VDD is code 32");
@@ -280,7 +271,7 @@ void easyC() {
     // 0x01FF little endian: 511 of 1023, about half travel
     static_assert([] {
         auto const f   = frame(0xFF, 0x01);
-        auto const got = Chips::SolderedSlider<>::Position::decode(Bytes{f});
+        auto const got = Chips::SolderedSlider<>::Position::decode(Kvasir::Bytes{f});
         return equal(got.raw, 511U) && equal(got.percent(), Units::percent(49));
     }());
 
@@ -290,16 +281,16 @@ void easyC() {
     ScopedHook const            answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(a != 0x30) { return FakeBus::Result::notAcknowledged; }
+          if(a != 0x30) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               rotW.clear();
               for(auto const b : sent) { rotW.push_back(static_cast<std::uint8_t>(b)); }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           for(std::size_t i = 0; i < recv.size() && i < 5; ++i) {
               recv[i] = static_cast<std::byte>(rot[i]);
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::SolderedRotary<>> re{};
     check(runUntil(re, [&] { return re.valid(); }, 300ms), "encoder read");
@@ -307,7 +298,7 @@ void easyC() {
     // a bare five-byte read: int32 counter +10 first, then event 6 (clockwise)
     static_assert([] {
         auto const f   = frame(0x0A, 0x00, 0x00, 0x00, 0x06);
-        auto const got = Chips::SolderedRotary<>::Motion::decode(Bytes{f});
+        auto const got = Chips::SolderedRotary<>::Motion::decode(Kvasir::Bytes{f});
         return got.count == 10 && got.event == Chips::SolderedRotary<>::Event::clockwise
             && got.turned() && !got.pressed();
     }());
@@ -316,7 +307,7 @@ void easyC() {
     // -5 and event 1: a button click
     static_assert([] {
         auto const f   = frame(0xFB, 0xFF, 0xFF, 0xFF, 0x01);
-        auto const got = Chips::SolderedRotary<>::Motion::decode(Bytes{f});
+        auto const got = Chips::SolderedRotary<>::Motion::decode(Kvasir::Bytes{f});
         return got.count == -5 && got.pressed() && !got.turned();
     }());
     re.set<Chips::SolderedRotary<>::Reset>(0);
@@ -325,12 +316,10 @@ void easyC() {
             [&] { return rotW == std::vector<std::uint8_t>{0xAA}; },
             200ms),
           "0xAA zeroes the counter");
-    if(failures != 0) { dump(); }
 }
 
 void ds3502() {
-    testCase("DS3502");
-    fresh();
+    I2cCase const    testcase{"DS3502"};
     RegisterModel<1> ds{0x28};
     ds.set(0x00, {0x40});   // the IVR brought it up at mid scale
     FakeBus::respond = std::ref(ds);
@@ -342,7 +331,7 @@ void ds3502() {
     // tap 0x40 of 127 on a 10 k part
     static_assert([] {
         auto const f   = frame(0x40);
-        auto const got = Chips::Ds3502<Units::ohm(10000)>::Position::decode(Bytes{f});
+        auto const got = Chips::Ds3502<Units::ohm(10000)>::Position::decode(Kvasir::Bytes{f});
         return equal(got.tap, 0x40) && equal(got.resistance(), 5039);
     }());
 
@@ -377,7 +366,7 @@ void ds3502() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(dsNak) { return FakeBus::Result::notAcknowledged; }
+          if(dsNak) { return FakeBus::Result::nack; }
           return resp(a, sent, recv);
       }};
     ds.set(0x00, {0x00});   // the part comes back at its default
@@ -393,12 +382,10 @@ void ds3502() {
     checkEq(d5.writes<Chips::Ds3502<Units::ohm(10000)>::Persist>(),
             1U,
             "but the IVR write was not replayed");
-    if(failures != 0) { dump(); }
 }
 
 void ads1219() {
-    testCase("ADS1219");
-    fresh();
+    I2cCase const testcase{"ADS1219"};
     // a code per channel, answered by the MUX (bits 7:5, 011 + channel) of the last WREG:
     // +2^22 (half of the 2^23 full scale), 0x123456, 0x000100, 0xFEDCBA
     std::array<std::array<std::uint8_t, 3>, 4> code{
@@ -409,7 +396,7 @@ void ads1219() {
     ScopedHook const          answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x40) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x40) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               lastCmd.assign(sent.size(), 0);
               for(std::size_t i = 0; i < sent.size(); ++i) {
@@ -418,16 +405,16 @@ void ads1219() {
               if(lastCmd.size() == 2 && lastCmd[0] == 0x40) {
                   channel = ((lastCmd[1] >> 5) - 3U) & 0x03U;
               }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(lastCmd == std::vector<std::uint8_t>{0x20} && recv.size() == 1) {
               recv[0] = std::byte{0x00};   // the configuration register after RESET
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           for(std::size_t i = 0; i < recv.size() && i < 3; ++i) {
               recv[i] = static_cast<std::byte>(code[channel][i]);
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Ads1219<>> ad19{};
     check(runUntil(ad19, [&] { return ad19.valid(); }, 800ms), "a sweep");
@@ -447,7 +434,7 @@ void ads1219() {
     // 0x400000 (+2^22, half scale), 0x123456, 0x000100, 0xFEDCBA
     static_assert([] {
         auto const f   = frame(0x40, 0, 0, 0x12, 0x34, 0x56, 0x00, 0x01, 0x00, 0xFE, 0xDC, 0xBA);
-        auto const got = Chips::Ads1219<>::Sweep::decode(Bytes{f});
+        auto const got = Chips::Ads1219<>::Sweep::decode(Kvasir::Bytes{f});
         return got.code[0] == 4194304 && got.code[1] == 0x123456 && got.code[2] == 0x100
             && got.code[3] == -74566
             && equal(got.voltage(0), 1024000);   // against the internal 2.048 V
@@ -457,25 +444,25 @@ void ads1219() {
     // 0xC00000: negative codes sign extend
     static_assert([] {
         auto const f   = frame(0xC0, 0, 0, 0xC0, 0, 0, 0xC0, 0, 0, 0xC0, 0, 0);
-        auto const got = Chips::Ads1219<>::Sweep::decode(Bytes{f});
+        auto const got = Chips::Ads1219<>::Sweep::decode(Kvasir::Bytes{f});
         return got.code[1] == -4194304;
     }());
-    if(failures != 0) { dump(); }
 }
 
 void mpr121() {
-    testCase("MPR121");
-    fresh();
+    I2cCase          testcase{"MPR121"};
     RegisterModel<1> mpr{0x5A};
     mpr.set(0x00, {0x05, 0x00});   // electrodes 0 and 2 touched
     mpr.readOnly = {0x00, 0x01};
     // the soft reset leaves every register 0 but CDC (10h) and CDT (24h)
-    FakeBus::respond = [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-        if(s.size() == 2 && s[0] == std::byte{0x80} && s[1] == std::byte{0x63}) {
-            mpr.set(0x5C, {0x10, 0x24});
-        }
-        return mpr(a, s, r);
-    };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
+          if(s.size() == 2 && s[0] == std::byte{0x80} && s[1] == std::byte{0x63}) {
+              mpr.set(0x5C, {0x10, 0x24});
+          }
+          return mpr(a, s, r);
+      }};
     Dev<Chips::Mpr121<>> mp{};
     check(runUntil(mp, [&] { return mp.valid(); }, 500ms), "first sample");
     check(hasWrite({0x80, 0x63}), "soft reset first");
@@ -491,12 +478,13 @@ void mpr121() {
     // touch status 0x0005 little endian: electrodes 0 and 2, OVCF (bit 15) clear
     static_assert([] {
         auto const f   = frame(0x05, 0x00);
-        auto const got = MprTouch::decode(Bytes{f});
+        auto const got = MprTouch::decode(Kvasir::Bytes{f});
         return got.electrode(0) && got.electrode(2) && !got.electrode(1) && !got.overCurrent;
     }());
     // the ECR must be written after the thresholds, or they would be ignored
     {
-        std::size_t thr = 0, ecr = 0;
+        std::size_t thr = 0;
+        std::size_t ecr = 0;
         for(std::size_t i = 0; i < FakeBus::log.size(); ++i) {
             auto const& tx = FakeBus::log[i];
             if(tx.isWrite() && !tx.sent.empty() && tx.sent[0] == 0x41) { thr = i; }
@@ -504,9 +492,8 @@ void mpr121() {
         }
         check(thr != 0 && ecr > thr, "the run command comes after the configuration");
     }
-    testCase("MPR121: not an MPR121 at 0x5A");
+    testcase.next("MPR121: not an MPR121 at 0x5A");
     {
-        fresh();
         RegisterModel<1> mlx{0x5A};   // an MLX90614 answers, but not with 10h 24h after a reset
         FakeBus::respond = std::ref(mlx);
         Dev<Chips::Mpr121<>> no{};
@@ -514,23 +501,21 @@ void mpr121() {
         check(!no.identified(), "turned down");
         check(!hasWrite({0x5E, 0x00}), "and nothing past the check was written");
     }
-    if(failures != 0) { dump(); }
 }
 
 void mcp4018() {
-    testCase("MCP4018");
-    fresh();
+    I2cCase const    testcase{"MCP4018"};
     std::uint8_t     tap = 0x40;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x2F) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x2F) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               tap = static_cast<std::uint8_t>(sent[0]);
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           recv[0] = std::byte{tap};
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Mcp4018<Units::ohm(5000)>> mc{};
     check(runUntil(mc, [&] { return mc.valid(); }, 500ms), "first sample");
@@ -540,45 +525,44 @@ void mcp4018() {
         using Wiper    = Chips::Mcp4018<Units::ohm(5000)>::Wiper;
         auto const mid = frame(0x40);
         auto const top = frame(0x7F);
-        return equal(Wiper::decode(Bytes{mid}).resistance(), 2519)
-            && equal(Wiper::decode(Bytes{top}).resistance(), 5000);
+        return equal(Wiper::decode(Kvasir::Bytes{mid}).resistance(), 2519)
+            && equal(Wiper::decode(Kvasir::Bytes{top}).resistance(), 5000);
     }());
     mc.set<Chips::Mcp4018<Units::ohm(5000)>::Tap>(0x7F);
     check(runUntil(mc, [&] { return tap == 0x7F; }, 200ms), "full scale written as one byte");
     check(runUntil(mc, [&] { return mc.latest().tap == 0x7F; }, 500ms), "and read back");
-    if(failures != 0) { dump(); }
 }
 
 void ina228() {
-    testCase("INA228");
-    fresh();
+    I2cCase const testcase{"INA228"};
     using I228 = Chips::Ina228<Units::microOhm(2000), Units::milliAmp(10000)>;
     checkEq(I228::Calibration, std::uint16_t{500}, "SHUNT_CAL = 13107.2e6 x LSB x R");
-    FakeBus::respond
-      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-            if(addr != 0x40 || sent.empty()) { return FakeBus::Result::notAcknowledged; }
-            auto const reg = static_cast<std::uint8_t>(sent[0]);
-            if(recv.empty()) { return FakeBus::Result::succeeded; }
-            if(reg == 0x3E) {
-                recv[0] = std::byte{0x54};
-                recv[1] = std::byte{0x49};
-            } else if(reg == 0x3F) {
-                recv[0] = std::byte{0x22};
-                recv[1] = std::byte{0x81};
-            } else if(reg == 0x06) {
-                recv[0] = std::byte{0x0C};
-                recv[1] = std::byte{0x80};
-            } else if(reg == 0x0B) {   // DIAG_ALRT: MATHOF clear, TMPOL and MEMSTAT set
-                recv[0] = std::byte{0x00};
-                recv[1] = std::byte{0x81};
-            } else {   // the 24-bit measurements, each its own: a wrong offset reads another
-                auto const hi = reg == 0x04 ? 0x10 : reg == 0x05 ? 0x20 : reg == 0x07 ? 0x08 : 0x03;
-                recv[0]       = std::byte{static_cast<std::uint8_t>(hi)};
-                recv[1]       = std::byte{0x00};
-                recv[2]       = std::byte{0x00};
-            }
-            return FakeBus::Result::succeeded;
-        };
+    ScopedHook const answering{
+      FakeBus::respond,
+      [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(addr != 0x40 || sent.empty()) { return FakeBus::Result::nack; }
+          auto const reg = static_cast<std::uint8_t>(sent[0]);
+          if(recv.empty()) { return FakeBus::Result::ok; }
+          if(reg == 0x3E) {
+              recv[0] = std::byte{0x54};
+              recv[1] = std::byte{0x49};
+          } else if(reg == 0x3F) {
+              recv[0] = std::byte{0x22};
+              recv[1] = std::byte{0x81};
+          } else if(reg == 0x06) {
+              recv[0] = std::byte{0x0C};
+              recv[1] = std::byte{0x80};
+          } else if(reg == 0x0B) {   // DIAG_ALRT: MATHOF clear, TMPOL and MEMSTAT set
+              recv[0] = std::byte{0x00};
+              recv[1] = std::byte{0x81};
+          } else {   // the 24-bit measurements, each its own: a wrong offset reads another
+              auto const hi = reg == 0x04 ? 0x10 : reg == 0x05 ? 0x20 : reg == 0x07 ? 0x08 : 0x03;
+              recv[0]       = std::byte{static_cast<std::uint8_t>(hi)};
+              recv[1]       = std::byte{0x00};
+              recv[2]       = std::byte{0x00};
+          }
+          return FakeBus::Result::ok;
+      }};
     Dev<I228> i228{};
     check(runUntil(i228, [&] { return i228.valid(); }, 800ms), "first sample");
     check(i228.identified(), "manufacturer 0x5449, device 0x228x");
@@ -593,7 +577,7 @@ void ina228() {
     static_assert([] {
         auto const f
           = frame(0x10, 0, 0, 0x20, 0, 0, 0x0C, 0x80, 0x08, 0, 0, 0x03, 0, 0, 0x00, 0x81);
-        auto const  got = I228::Power::decode(Bytes{f});
+        auto const  got = I228::Power::decode(Kvasir::Bytes{f});
         auto const& v   = got.value;
         return isOk(got) && equal(v.shuntVoltage, 20480000)   // 20.48 mV at 312.5 nV/LSB
             && equal(v.busVoltage, 25600000U)                 // 25.6 V at 195.3125 uV/LSB
@@ -616,12 +600,10 @@ void ina228() {
             && !flags(0x0100).temperatureOverLimit();
     }());
     check(Chips::Ina237<>::Name == std::string_view{"INA237"}, "the INA237 is the INA238 map");
-    if(failures != 0) { dump(); }
 }
 
 void ads1015() {
-    testCase("ADS1015");
-    fresh();
+    I2cCase const testcase{"ADS1015"};
     // a left-justified code per channel, answered by the MUX of the last config write:
     // +FS (2047), 0x123, 0x456 and 1
     std::array<std::array<std::uint8_t, 2>, 4> conv{
@@ -631,16 +613,16 @@ void ads1015() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x48) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x48) { return FakeBus::Result::nack; }
           if(recv.empty()) {
               if(sent.size() == 3 && static_cast<std::uint8_t>(sent[0]) == 0x01) {
                   mux = (static_cast<std::uint8_t>(sent[1]) >> 4) & 0x03U;
               }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           recv[0] = static_cast<std::byte>(conv[mux][0]);
           recv[1] = static_cast<std::byte>(conv[mux][1]);
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Ads1015<>> a15{};
     check(runUntil(a15, [&] { return a15.valid(); }, 500ms), "a sweep");
@@ -653,7 +635,7 @@ void ads1015() {
     // 0x7FF0 (+FS, 2047 left-justified in 15:4), 0x1230, 0x4560, 0x0010
     static_assert([] {
         auto const f   = frame(0x7F, 0xF0, 0x12, 0x30, 0x45, 0x60, 0x00, 0x10);
-        auto const got = Chips::Ads1015<>::Sweep::decode(Bytes{f});
+        auto const got = Chips::Ads1015<>::Sweep::decode(Kvasir::Bytes{f});
         return got.code[0] == 2047 && got.code[1] == 0x123 && got.code[2] == 0x456
             && got.code[3] == 1 && equal(Chips::Ads1015<>::Sweep::Sample::toVoltage(2047), 2047000)
             && equal(got.voltage(0), 2047000);
@@ -663,15 +645,13 @@ void ads1015() {
     // 0x8000: -FS, and the sign with it
     static_assert([] {
         auto const f   = frame(0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00);
-        auto const got = Chips::Ads1015<>::Sweep::decode(Bytes{f});
+        auto const got = Chips::Ads1015<>::Sweep::decode(Kvasir::Bytes{f});
         return got.code[0] == -2048;
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ina3221() {
-    testCase("INA3221");
-    fresh();
+    I2cCase const       testcase{"INA3221"};
     RegisterModel<1, 2> i32{0x40};
     i32.set(0xFE, {0x54, 0x49});
     i32.set(0xFF, {0x32, 0x20});
@@ -697,19 +677,17 @@ void ina3221() {
     static_assert([] {
         auto const f
           = frame(0x03, 0x20, 0x2E, 0xE0, 0x06, 0x40, 0x17, 0x70, 0x09, 0x60, 0x0B, 0xB8);
-        auto const got = Chips::Ina3221<>::Power::decode(Bytes{f});
+        auto const got = Chips::Ina3221<>::Power::decode(Kvasir::Bytes{f});
         return equal(got.shuntVoltage[0], 4000000) && equal(got.busVoltage[0], 12000)
             && equal(got.current[0], 80000)   // 4 mV through 50 mOhm
             && equal(got.shuntVoltage[1], 8000000) && equal(got.busVoltage[1], 6000)
             && equal(got.current[2], 240000)   // 12 mV through 50 mOhm
             && equal(got.busVoltage[2], 3000);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void cy15b064j() {
-    testCase("CY15B064J");
-    fresh();
+    I2cCase const    testcase{"CY15B064J"};
     RegisterModel<2> fram{0x50};
     for(std::uint32_t i = 0; i < 8; ++i) { fram.set(0x0100 + i, {static_cast<std::uint8_t>(i)}); }
     FakeBus::respond = std::ref(fram);
@@ -730,7 +708,7 @@ void cy15b064j() {
     // the address in front, eight bytes behind it: the length is what was read
     static_assert([] {
         auto const f   = frame(0x01, 0x00, 0, 1, 2, 3, 4, 5, 6, 7);
-        auto const got = Chips::Cy15b064j<>::Block::decode(Bytes{f});
+        auto const got = Chips::Cy15b064j<>::Block::decode(Kvasir::Bytes{f});
         return got.address == 0x0100 && got.length == 8 && got.data[5] == 5;
     }());
 
@@ -743,12 +721,10 @@ void cy15b064j() {
     fr.set<Chips::Cy15b064j<>::Store>(sv);
     check(runUntil(fr, [&] { return fram.word(0x0202) == 0xCC; }, 200ms), "three bytes written");
     check(hasWrite({0x02, 0x00, 0xAA, 0xBB, 0xCC}), "address then payload, in one transaction");
-    if(failures != 0) { dump(); }
 }
 
 void eeprom24aa025e48() {
-    testCase("24AA025E48");
-    fresh();
+    I2cCase const    testcase{"24AA025E48"};
     RegisterModel<1> ee48{0x50};
     ee48.set(0xFA, {0x00, 0x04, 0xA3, 0x0B, 0x00, 0x01});
     FakeBus::respond = std::ref(ee48);
@@ -773,12 +749,10 @@ void eeprom24aa025e48() {
     check(FakeClock::current - tw >= 5ms, "the 5 ms write cycle was waited out");
     checkEq(ep.latest<Chips::Eeprom24aa025e48<>::Block>().data[0], std::uint8_t{0xDE}, "first");
     checkEq(ep.latest<Chips::Eeprom24aa025e48<>::Block>().length, std::uint8_t{4}, "four bytes");
-    if(failures != 0) { dump(); }
 }
 
 void ad7291() {
-    testCase("AD7291");
-    fresh();
+    I2cCase const testcase{"AD7291"};
     using Adc = Chips::Ad7291<0x20>;
     checkEq(Adc::mirrored(0x01), std::uint8_t{0x80}, "channel 0 is D15 in the command register");
     std::array<std::uint8_t, 16> burst{};
@@ -791,12 +765,12 @@ void ad7291() {
     ScopedHook const                       answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x20) { return FakeBus::Result::nack; }
           if(recv.empty()) {
               std::vector<std::uint8_t> w;
               for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
               cmdWrites.push_back(w);
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           auto const reg = static_cast<std::uint8_t>(sent[0]);
           if(reg == 0x01) {
@@ -807,11 +781,11 @@ void ad7291() {
               recv[0] = std::byte{0x8F};
               recv[1] = std::byte{0x60};
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Adc> ad7{};
     check(runUntil(ad7, [&] { return ad7.valid(); }, 800ms), "first burst");
-    check(cmdWrites.size() >= 1 && cmdWrites[0] == std::vector<std::uint8_t>{0x00, 0xFF, 0xA0},
+    check(!cmdWrites.empty() && cmdWrites[0] == std::vector<std::uint8_t>{0x00, 0xFF, 0xA0},
           "the expected command register value: FF A0");
     check(ad7.latest<Adc::Voltages>().valid(3), "channel 3 was in the burst");
     checkEq(ad7.latest<Adc::Voltages>().code[3],
@@ -825,14 +799,14 @@ void ad7291() {
             f[2 * i]     = static_cast<std::byte>(i << 4 | 0x01);
             f[2 * i + 1] = static_cast<std::byte>(i);
         }
-        auto const got = Adc::Voltages::decode(Bytes{f});
+        auto const got = Adc::Voltages::decode(Kvasir::Bytes{f});
         return got.valid(3) && got.code[3] == 0x103
             && equal(got.voltage(0), 156250);   // against 2.5 V / 4096
     }());
     // TSENSE: channel 8, -160 counts (0xF60) is -40.00 degC, sign from bit 11
     static_assert([] {
         auto const f   = frame(0x8F, 0x60);
-        auto const got = Adc::Temperature::decode(Bytes{f});
+        auto const got = Adc::Temperature::decode(Kvasir::Bytes{f});
         return isOk(got) && equal(got.value.temperature, -4000);
     }());
     // the command register cannot be read back, so it is rewritten on its period
@@ -840,12 +814,10 @@ void ad7291() {
     auto const at7  = FakeClock::current;
     while(FakeClock::current - at7 < 6s) { turn(ad7); }
     check(cmdWrites.size() > cmds, "and it is rewritten every five seconds");
-    if(failures != 0) { dump(); }
 }
 
 void ina238() {
-    testCase("INA238");
-    fresh();
+    I2cCase const testcase{"INA238"};
     // 2 mOhm shunt, 10 A full scale: CURRENT_LSB 305175 nA, SHUNT_CAL 500
     using Ina = Chips::Ina238<Units::microOhm(2000), Units::milliAmp(10000)>;
     checkEq(Ina::Calibration, std::uint16_t{500}, "SHUNT_CAL from the datasheet formula");
@@ -867,7 +839,7 @@ void ina238() {
               recv[0] = std::byte{0x00};   // 24-bit power: 0x003000 = 12288
               recv[1] = std::byte{0x30};
               recv[2] = std::byte{0x00};
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return in(addr, sent, recv);
       }};
@@ -886,7 +858,7 @@ void ina238() {
     // DIAG_ALRT 0x0081: TMPOL and MEMSTAT, MATHOF clear
     static_assert([] {
         auto const  f   = frame(0x10, 0, 0x20, 0, 0x0C, 0x80, 0x08, 0, 0, 0x30, 0, 0x00, 0x81);
-        auto const  got = Ina::Power::decode(Bytes{f});
+        auto const  got = Ina::Power::decode(Kvasir::Bytes{f});
         auto const& v   = got.value;
         return isOk(got) && equal(v.shuntVoltage, 20480000)   // 20.48 mV at 5 uV/LSB
             && equal(v.busVoltage, 25600000U)                 // 25.6 V at 3.125 mV/LSB
@@ -908,21 +880,19 @@ void ina238() {
             && flags(0x0004).powerOverLimit() && !flags(0x0004).busUnderLimit()
             && !flags(0x0100).temperatureOverLimit();
     }());
-    if(failures != 0) { dump(); }
 }
 
 void ad5665() {
-    testCase("AD5665R");
-    fresh();
+    I2cCase const                          testcase{"AD5665R"};
     std::vector<std::vector<std::uint8_t>> dacWrites;
     ScopedHook const                       answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte>) {
-          if(addr != 0x0F) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x0F) { return FakeBus::Result::nack; }
           std::vector<std::uint8_t> w;
           for(auto const b : sent) { w.push_back(static_cast<std::uint8_t>(b)); }
           dacWrites.push_back(w);
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Ad5665> dd{};
     check(runUntil(
@@ -948,12 +918,10 @@ void ad5665() {
             200ms),
           "reference command");
     check(hasWrite({0x38, 0x00, 0x01}), "internal reference on");
-    if(failures != 0) { dump(); }
 }
 
 void lmk1d1208i() {
-    testCase("LMK1D1208I (read-back verify on a real description)");
-    fresh();
+    I2cCase const    testcase{"LMK1D1208I (read-back verify on a real description)"};
     RegisterModel<1> lk{0x68};
     lk.set(0x85, {0x20});   // R5: REV_ID 2, DEV_ID 0 (Table 9-15)
     lk.readOnly = {0x85};
@@ -972,7 +940,7 @@ void lmk1d1208i() {
     // R5 0x20: REV_ID 2 in 7:4, DEV_ID 0 in 3:0
     static_assert([] {
         auto const f   = frame(0x20);
-        auto const got = Chips::Lmk1d1208i<>::Identity::decode(Bytes{f});
+        auto const got = Chips::Lmk1d1208i<>::Identity::decode(Kvasir::Bytes{f});
         return got.deviceId == 0 && got.revision == 2;
     }());
     check(lk.word(0x80) == 0x00 && lk.word(0x82) == 0xF1,
@@ -985,18 +953,16 @@ void lmk1d1208i() {
             500ms),
           "the read-back caught the dropped write");
     check(runUntil(ll, [&] { return lk.word(0x80) == 0x0F; }, 500ms), "and it was written again");
-    if(failures != 0) { dump(); }
 }
 
 /// The address is the Config's, not the type's: a second buffer strapped to 0x69 is the same
 /// chip type, and its traffic goes to 0x69.
-struct LmkAt69 : Kvasir::I2C::DefaultConfig {
-    static constexpr Kvasir::I2C::Address7 Address = 0x69;
+struct LmkAt69 : Kvasir::Engine::DefaultConfig {
+    static constexpr Kvasir::I2C::Address7 address = 0x69;
 };
 
 void lmk1d1208iSecondAddress() {
-    testCase("LMK1D1208I at 0x69 (IDX0 high): the same chip type, its own address");
-    fresh();
+    I2cCase const testcase{"LMK1D1208I at 0x69 (IDX0 high): the same chip type, its own address"};
     RegisterModel<1> lk{0x69};
     lk.set(0x85, {0x20});
     lk.readOnly      = {0x85};
@@ -1011,12 +977,10 @@ void lmk1d1208iSecondAddress() {
     check(onlyThere, "nothing went to 0x68");
     static_assert(
       std::is_same_v<Dev<Chips::Lmk1d1208i<>, LmkAt69>::Chip, Dev<Chips::Lmk1d1208i<>>::Chip>);
-    if(failures != 0) { dump(); }
 }
 
 void pca9557() {
-    testCase("PCA9557");
-    fresh();
+    I2cCase const    testcase{"PCA9557"};
     RegisterModel<1> pe{0x18};
     pe.set(0x00, {0x5A});
     pe.readOnly      = {0x00};
@@ -1027,7 +991,7 @@ void pca9557() {
     // 0x5A: bit 1 set, bit 0 clear
     static_assert([] {
         auto const f   = frame(0x5A);
-        auto const got = Chips::Pca9557::Pins::decode(Bytes{f});
+        auto const got = Chips::Pca9557::Pins::decode(Kvasir::Bytes{f});
         return got.port == 0x5A && got.pin(1) && !got.pin(0);
     }());
     check(
@@ -1040,12 +1004,10 @@ void pca9557() {
             [&] { return pe.word(0x03) == 0xF0 && pe.word(0x01) == 0x0C; },
             200ms),
           "low nibble as outputs, driven");
-    if(failures != 0) { dump(); }
 }
 
 void tca9555() {
-    testCase("TCA9555");
-    fresh();
+    I2cCase const    testcase{"TCA9555"};
     RegisterModel<1> te{0x20};
     te.set(0x00, {0x34, 0x12});
     te.readOnly      = {0x00, 0x01};
@@ -1056,7 +1018,7 @@ void tca9555() {
     // 34 12: port 0 low byte, port 1 high byte
     static_assert([] {
         auto const f = frame(0x34, 0x12);
-        return Chips::Tca9555::Pins::decode(Bytes{f}).port == 0x1234;
+        return Chips::Tca9555::Pins::decode(Kvasir::Bytes{f}).port == 0x1234;
     }());
     check(te.word(0x06) == 0xFF && te.word(0x07) == 0xFF, "configuration reset both ports");
     auto const from = FakeBus::log.size();
@@ -1068,12 +1030,10 @@ void tca9555() {
     check(te.word(0x06) == 0xFF && te.word(0x07) == 0x00, "port 1 is now all outputs");
     check(writes(from) == std::vector<std::vector<std::uint8_t>>{{0x02, 0x5A, 0xA5}, {0x06, 0xFF, 0x00}},
           "the output latches first, then the direction: a pin never drives its old value");
-    if(failures != 0) { dump(); }
 }
 
 void power() {
-    testCase("INA226 (datasheet Table 6-1)");
-    fresh();
+    I2cCase             testcase{"INA226 (datasheet Table 6-1)"};
     RegisterModel<1, 2> m{0x40};
     m.set(0xFE, {0x54, 0x49, 0x22, 0x60});
     m.set(0x01, {0x1F, 0x40, 0x25, 0x70, 0x12, 0xB8, 0x27, 0x10});
@@ -1089,30 +1049,29 @@ void power() {
     checkEq(d.latest().current, 10000000, "current from the read at offset 6");
     // Table 6-1: shunt 0x1F40, bus 0x2570, power 0x12B8, current 0x2710 at 2 mOhm, 1 mA/LSB
     static_assert([] {
-        auto const f = frame(0x1F, 0x40, 0x25, 0x70, 0x12, 0xB8, 0x27, 0x10);
-        auto const got
-          = Chips::Ina226<Units::milliOhm(2), Units::microAmp(1000)>::Power::decode(Bytes{f});
+        auto const f   = frame(0x1F, 0x40, 0x25, 0x70, 0x12, 0xB8, 0x27, 0x10);
+        auto const got = Chips::Ina226<Units::milliOhm(2), Units::microAmp(1000)>::Power::decode(
+          Kvasir::Bytes{f});
         return equal(got.shuntVoltage, 20000)   // 20 mV
             && equal(got.busVoltage, 11980U)    // 11.98 V
             && equal(got.current, 10000000)     // 10 A
             && equal(got.power, 119800U);       // 119.8 W
     }());
 
-    testCase("MCP3421");
-    fresh();
+    testcase.next("MCP3421");
     int              reads = 0;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x68) { return FakeBus::Result::notAcknowledged; }
-          if(!sent.empty()) { return FakeBus::Result::succeeded; }
+          if(addr != 0x68) { return FakeBus::Result::nack; }
+          if(!sent.empty()) { return FakeBus::Result::ok; }
           ++reads;
           std::array<std::uint8_t, 4> f{0x01,
                                         0x00,
                                         0x00,
                                         static_cast<std::uint8_t>(reads == 1 ? 0x9C : 0x1C)};
           for(std::size_t i = 0; i < 4; ++i) { recv[i] = static_cast<std::byte>(f[i]); }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Mcp3421> a{};
     check(runUntil(a, [&] { return a.samples() == 1; }, 1s), "first sample");
@@ -1122,31 +1081,29 @@ void power() {
     // RDY (bit 7 of the config byte) set: not converted yet, ask again in 50 ms
     static_assert([] {
         auto const f   = frame(0x01, 0x00, 0x00, 0x9C);
-        auto const got = Chips::Mcp3421::Conversion::decode(Bytes{f});
+        auto const got = Chips::Mcp3421::Conversion::decode(Kvasir::Bytes{f});
         return isRetry(got) && got.retryAfter == 50ms;
     }());
     // RDY clear: the 18-bit code 0x10000, 1.024 V at 15.625 uV a count
     static_assert([] {
         auto const f   = frame(0x01, 0x00, 0x00, 0x1C);
-        auto const got = Chips::Mcp3421::Conversion::decode(Bytes{f});
+        auto const got = Chips::Mcp3421::Conversion::decode(Kvasir::Bytes{f});
         return isOk(got) && got.value.code == 65536 && equal(got.value.voltage(), 1024000);
     }());
-    if(failures != 0) { dump(); }
 }
 
 void mcp3221() {
-    testCase("MCP3221");
-    fresh();
+    I2cCase const    testcase{"MCP3221"};
     int              reads = 0;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x4D) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x4D) { return FakeBus::Result::nack; }
           if(!sent.empty() || recv.size() != 2) { return FakeBus::Result::failed; }
           ++reads;
           recv[0] = std::byte{0xF7};   // the upper nibble is don't-care
           recv[1] = std::byte{0xFF};
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Mcp3221<>> d{};
     check(runUntil(d, [&] { return d.valid(); }, 100ms), "first sample");
@@ -1155,19 +1112,17 @@ void mcp3221() {
     // 0xF7FF: 12-bit code 0x7FF with the don't-care nibble masked, 2047 of 4096 at 3.3 V
     static_assert([] {
         auto const f   = frame(0xF7, 0xFF);
-        auto const got = Chips::Mcp3221<>::Conversion::decode(Bytes{f});
+        auto const got = Chips::Mcp3221<>::Conversion::decode(Kvasir::Bytes{f});
         return got.code == 0x7FF && equal(got.voltage(Units::milliVolt(3300)), 1649);
     }());
     auto const n = d.samples();
     runFor(d, 1s);
     checkEq(d.samples() - n, 50U, "50 samples a second");
     checkEq(reads, static_cast<int>(d.samples()), "one read a sample");
-    if(failures != 0) { dump(); }
 }
 
 void io() {
-    testCase("MCP23017");
-    fresh();
+    I2cCase          testcase{"MCP23017"};
     RegisterModel<1> m{0x20};
     m.set(0x12, {0xA5, 0x5A});
     m.readOnly       = {0x12, 0x13};
@@ -1185,13 +1140,13 @@ void io() {
     // GPIOA 0xA5, GPIOB 0x5A: pins A | B << 8
     static_assert([] {
         auto const f = frame(0xA5, 0x5A);
-        return Chips::Mcp23017::Pins::decode(Bytes{f}).port == 0x5AA5;
+        return Chips::Mcp23017::Pins::decode(Kvasir::Bytes{f}).port == 0x5AA5;
     }());
     d.set<Chips::Mcp23017::Output>(0x1234);
     check(runUntil(d, [&] { return !d.pending(); }, 100ms), "output written");
     check(m.word(0x14) == 0x34 && m.word(0x15) == 0x12, "OLATA 0x34, OLATB 0x12");
 
-    testCase("a write group set before the bring-up beats its Initial");
+    testcase.step("a write group set before the bring-up beats its Initial");
     // An application sets configuration next to the rest of its configuration, before the
     // device has ever been on the wire. A value set that early counts as set: the bring-up
     // writes it in place of Initial, and value<W>() reports what is on the chip.
@@ -1215,25 +1170,24 @@ void io() {
     check(early.word(0x00) == 0xFF && early.word(0x01) == 0xFF,
           "the group that was not set still gets its Initial");
 
-    testCase("MCP4725");
-    fresh();
+    testcase.next("MCP4725");
     std::vector<std::uint8_t> lastWrite;
     ScopedHook const          answeringThird{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x60) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x60) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               lastWrite.clear();
               for(auto const b : sent) { lastWrite.push_back(static_cast<std::uint8_t>(b)); }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           std::array<std::uint8_t, 5> f{0xC0, 0xAB, 0xC0, 0x0A, 0xBC};
           for(std::size_t i = 0; i < 5; ++i) { recv[i] = static_cast<std::byte>(f[i]); }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Mcp4725<>> dac{};
     runFor(dac, 100ms);
-    check(dac.link() == Link::starting && lastWrite.empty(),
+    check(dac.link() == Kvasir::Link::starting && lastWrite.empty(),
           "no Init and no Initial: nothing is sent, the part keeps the level its EEPROM loaded");
     dac.set<Chips::Mcp4725<>::Level>(0x0ABC);
     check(runUntil(
@@ -1259,7 +1213,7 @@ void io() {
     // C0 AB C0 0A BC: RDY and POR, DAC 0xABC, EEPROM 0xABC, both in normal mode
     static_assert([] {
         auto const f   = frame(0xC0, 0xAB, 0xC0, 0x0A, 0xBC);
-        auto const got = Chips::Mcp4725<>::Status::decode(Bytes{f});
+        auto const got = Chips::Mcp4725<>::Status::decode(Kvasir::Bytes{f});
         return got.ready && got.poweredOn && got.dac == 0xABC && got.eeprom == 0xABC
             && got.dacPowerDown == Chips::Mcp4725<>::PowerDown::normal
             && got.eepromPowerDown == Chips::Mcp4725<>::PowerDown::normal;
@@ -1279,19 +1233,18 @@ void io() {
             200ms),
           "and in bits 2:1 of the EEPROM command");
 
-    testCase("TCA9548A");
-    fresh();
+    testcase.next("TCA9548A");
     std::uint8_t     ctrl = 0xFF;
     ScopedHook const answeringAgain{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x70) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x70) { return FakeBus::Result::nack; }
           if(!sent.empty()) {
               ctrl = static_cast<std::uint8_t>(sent[0]);
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           recv[0] = std::byte{ctrl};
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Tca9548a> mux{};
     check(runUntil(mux, [&] { return mux.answering() && !mux.pending(); }, 100ms), "up");
@@ -1302,22 +1255,21 @@ void io() {
     check(runUntil(mux, [&] { return mux.samples() == 1; }, 100ms), "read back");
     checkEq(mux.latest(), 0x05, "control byte");
 
-    testCase("PCF8575");
-    fresh();
+    testcase.next("PCF8575");
     std::uint16_t    port = 0;
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(addr != 0x20) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x20) { return FakeBus::Result::nack; }
           if(sent.size() == 2) {
               port = static_cast<std::uint16_t>(static_cast<std::uint8_t>(sent[0])
                                                 | (static_cast<std::uint8_t>(sent[1]) << 8));
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           if(recv.size() == 2) {
               recv[0] = std::byte{0xA5};
               recv[1] = std::byte{0x5A};
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           return FakeBus::Result::failed;
       }};
@@ -1328,19 +1280,18 @@ void io() {
     // A5 5A: P0 low byte, P1 high byte
     static_assert([] {
         auto const f = frame(0xA5, 0x5A);
-        return Chips::Pcf8575::Pins::decode(Bytes{f}).port == 0x5AA5;
+        return Chips::Pcf8575::Pins::decode(Kvasir::Bytes{f}).port == 0x5AA5;
     }());
-    if(failures != 0) { dump(); }
 }
 
 void eeprom() {
-    testCase("AT24C32");
-    fresh();
+    I2cCase          testcase{"AT24C32"};
     RegisterModel<2> m{0x50};
     for(std::uint32_t i = 0; i < 32; ++i) { m.mem[0x0120 + i] = {static_cast<std::uint8_t>(i)}; }
     FakeBus::respond = std::ref(m);
     Dev<Chips::At24c32> d{};
-    check(d.link() == Link::starting, "a memory has no Init: starting until it is asked something");
+    check(d.link() == Kvasir::Link::starting,
+          "a memory has no Init: starting until it is asked something");
     checkEq(FakeBus::log.size(), 0U, "no bring-up transactions, nothing cyclic");
     d.request<Chips::At24c32::ReadPage>({0x0120});
     check(runUntil(d, [&] { return d.samples() == 1; }, 100ms), "page read");
@@ -1353,7 +1304,7 @@ void eeprom() {
     static_assert([] {
         std::array<std::byte, 34> f{std::byte{0x01}, std::byte{0x20}};
         for(std::size_t i = 0; i < 32; ++i) { f[2 + i] = static_cast<std::byte>(i); }
-        auto const got = Chips::At24c32::ReadPage::decode(Bytes{f});
+        auto const got = Chips::At24c32::ReadPage::decode(Kvasir::Bytes{f});
         return got.address == 0x0120 && got.data[5] == 5 && got.data[31] == 31;
     }());
     Chips::At24c32::WritePage::Value w{};
@@ -1369,7 +1320,7 @@ void eeprom() {
           "address then four bytes");
     check(m.mem[0x0203][0] == 0xEF, "landed");
 
-    testCase("AT24C32: a page write stops at the end of its page and of the memory");
+    testcase.step("AT24C32: a page write stops at the end of its page and of the memory");
     Chips::At24c32::WritePage::Value across{};
     across.address = 0x001C;
     across.length  = 8;
@@ -1385,15 +1336,14 @@ void eeprom() {
     check(FakeBus::log.back().sent == std::vector<std::uint8_t>{0x00, 0x1C, 0xA0, 0xA1, 0xA2, 0xA3},
           "the address and the four bytes that fit, not across into the next page");
 
-    testCase("CAT24C512");
-    fresh();
+    testcase.next("CAT24C512");
     RegisterModel<2> big{0x50};
     for(std::uint32_t i = 0; i < 128; ++i) {
         big.mem[0xFF80 + i] = {static_cast<std::uint8_t>(0x80 + i)};
     }
     FakeBus::respond = std::ref(big);
     Dev<Chips::At24c512> e{};
-    check(e.link() == Link::starting, "starting until it is asked something");
+    check(e.link() == Kvasir::Link::starting, "starting until it is asked something");
     // 128 is what a Step's count -- one byte -- still holds, and the last page of the part
     // is the far end of both the 16-bit address and that count.
     e.request<Chips::At24c512::ReadPage>({0xFF80});
@@ -1407,7 +1357,7 @@ void eeprom() {
     static_assert([] {
         std::array<std::byte, 130> f{std::byte{0xFF}, std::byte{0x80}};
         for(std::size_t i = 0; i < 128; ++i) { f[2 + i] = static_cast<std::byte>(0x80 + i); }
-        auto const got = Chips::At24c512::ReadPage::decode(Bytes{f});
+        auto const got = Chips::At24c512::ReadPage::decode(Kvasir::Bytes{f});
         return got.address == 0xFF80 && got.data[0] == 0x80 && got.data[127] == 0xFF;
     }());
     Chips::At24c512::WritePage::Value wide{};
@@ -1420,12 +1370,10 @@ void eeprom() {
             && FakeBus::log.back().sent[1] == 0x80 && FakeBus::log.back().sent[129] == 127,
           "two address bytes and a full page behind them");
     check(big.mem[0xFFFF][0] == 127, "the last byte of the part landed");
-    if(failures != 0) { dump(); }
 }
 
 void pa1010d() {
-    testCase("PA1010D");
-    fresh();
+    I2cCase const testcase{"PA1010D"};
     // the module pads with 0x0A when its buffer runs dry, also in the middle of a sentence it is
     // still writing: those are not line ends
     std::string stream
@@ -1437,16 +1385,16 @@ void pa1010d() {
     ScopedHook const          answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> s, std::span<std::byte> recv) {
-          if(addr != 0x10) { return FakeBus::Result::notAcknowledged; }
+          if(addr != 0x10) { return FakeBus::Result::nack; }
           if(!s.empty()) {
               command.clear();
               for(auto const b : s) { command.push_back(static_cast<std::uint8_t>(b)); }
-              return FakeBus::Result::succeeded;
+              return FakeBus::Result::ok;
           }
           for(auto& b : recv) {
               b = static_cast<std::byte>(pos < stream.size() ? stream[pos++] : '\n');
           }
-          return FakeBus::Result::succeeded;
+          return FakeBus::Result::ok;
       }};
     Dev<Chips::Pa1010d<>> d{};
     check(runUntil(
@@ -1460,8 +1408,10 @@ void pa1010d() {
     check(std::string(command.end() - 5, command.end()) == "*28\r\n", "checksum *28");
 
     Chips::Nmea nmea{};
-    int         gga = 0, rmc = 0;
-    std::string lat, sats;
+    int         gga = 0;
+    int         rmc = 0;
+    std::string lat;
+    std::string sats;
     for(int i = 0; i < 400 && (gga == 0 || rmc == 0); ++i) {
         if(d.fresh()) {
             nmea.feed(d.latest().chars, [&](Chips::Nmea const& n) {
@@ -1479,17 +1429,15 @@ void pa1010d() {
     checkEq(rmc, 1, "one RMC");
     check(lat == "4807.038" && sats == "08", "GGA fields");
     checkEq(nmea.badChecksum, 0U, "checksums fine");
-    if(failures != 0) { dump(); }
 }
 
 /// The level written again every second.
 struct Keepalive {
-    static constexpr std::chrono::seconds LevelPeriod{1};
+    static constexpr std::chrono::seconds levelPeriod{1};
 };
 
 void mcp4725Rewrite() {
-    testCase("MCP4725: Timing::LevelPeriod rewrites the level");
-    fresh();
+    I2cCase testcase{"MCP4725: Timing::LevelPeriod rewrites the level"};
     FakeBus::respond = zeros;
     using Dac        = Chips::Mcp4725<Units::milliVolt(3300), Keepalive>;
     Dev<Dac> dac{};
@@ -1499,8 +1447,7 @@ void mcp4725Rewrite() {
     check(dac.writes<Dac::Level>() >= 4, "and again every second");
     checkEq(writes().back(), (std::vector<std::uint8_t>{0x08, 0x00}), "the same level");
 
-    testCase("MCP4725: LevelPeriod rewrites nothing before the level is set");
-    fresh();
+    testcase.next("MCP4725: LevelPeriod rewrites nothing before the level is set");
     FakeBus::respond = zeros;
     Dev<Dac> unset{};
     runFor(unset, 2500ms);
@@ -1510,8 +1457,7 @@ void mcp4725Rewrite() {
     check(unset.writes<Dac::Level>() >= 2, "rewritten once it is set");
     checkEq(writes().back(), (std::vector<std::uint8_t>{0x04, 0x00}), "with the level set");
 
-    testCase("MCP4725: without it the level is written once");
-    fresh();
+    testcase.next("MCP4725: without it the level is written once");
     FakeBus::respond = zeros;
     Dev<Chips::Mcp4725<>> once{};
     once.set<Chips::Mcp4725<>::Level>(0x0800);
@@ -1523,8 +1469,7 @@ void mcp4725Rewrite() {
 template<typename Chip,
          std::size_t RegBytes>
 void memoryRoundTrip(char const* name) {
-    testCase(name);
-    fresh();
+    I2cCase const           testcase{name};
     RegisterModel<RegBytes> m{0x50};
     if constexpr(requires { Chip::UserAreaBytes; }) {
         m.set(0xFA, {0x00, 0x04, 0xA3, 0x12, 0x34, 0x56});
@@ -1548,10 +1493,13 @@ void memoryRoundTrip(char const* name) {
     auto const t = mem.template request<typename Chip::Block>({0x10, 4});
     check(runUntil(
             mem,
-            [&] { return mem.template answer<typename Chip::Block>(t) != Answer::pending; },
+            [&] {
+                return mem.template answer<typename Chip::Block>(t)
+                    != Kvasir::Engine::Answer::pending;
+            },
             500ms),
           "read");
-    check(mem.template answer<typename Chip::Block>(t) == Answer::ok, "ok");
+    check(mem.template answer<typename Chip::Block>(t) == Kvasir::Engine::Answer::ok, "ok");
     auto const& b = mem.template latest<typename Chip::Block>();
     checkEq(static_cast<unsigned>(b.length), 4U, "four bytes");
     checkEq(static_cast<unsigned>(b.data[3]), 0xA3U, "what was written");

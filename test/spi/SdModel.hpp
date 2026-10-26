@@ -17,14 +17,14 @@ struct SdModel {
     bool          appCmd{};
     int           opCondPolls{2};   // ACMD41s before it leaves idle
     std::uint32_t cSize{61'047};    // a "32 GB" card
-    std::map<std::uint32_t, std::array<std::uint8_t, 512>> blocks{};
-    std::deque<std::uint8_t>                               out{};
+    std::map<std::uint32_t, std::array<std::uint8_t, 512>> blocks;
+    std::deque<std::uint8_t>                               out;
     std::array<std::uint8_t, 6>                            cmd{};
     std::size_t                                            cmdAt{};
     // what a write is waiting for
     enum class Rx : std::uint8_t { command, writeToken, writeData } rx{Rx::command};
     std::uint32_t             writeLba{};
-    std::vector<std::uint8_t> writeBuf{};
+    std::vector<std::uint8_t> writeBuf;
     // faults to play
     bool corruptNextRead{};
     bool noTokenNextRead{};
@@ -50,7 +50,7 @@ struct SdModel {
 
     static constexpr std::uint16_t crc16(std::span<std::uint8_t const> d) {
         std::uint16_t crc = 0;
-        for(auto b : d) {
+        for(auto const b : d) {
             crc = static_cast<std::uint16_t>((crc << 8U) ^ Crc16Table[((crc >> 8U) ^ b) & 0xFFU]);
         }
         return crc;
@@ -59,7 +59,7 @@ struct SdModel {
     void block(std::span<std::uint8_t const> d) {
         out.push_back(0xFF);
         out.push_back(0xFE);
-        for(auto b : d) { out.push_back(b); }
+        for(auto const b : d) { out.push_back(b); }
         auto crc = crc16(d);
         out.push_back(static_cast<std::uint8_t>(crc >> 8U));
         out.push_back(static_cast<std::uint8_t>(crc));
@@ -155,7 +155,7 @@ struct SdModel {
                     break;
                 }
                 for(int i = 0; i < tokenDelayBytes; ++i) { out.push_back(0xFF); }
-                auto&                         b    = blocks[arg];
+                auto const&                   b    = blocks[arg];
                 std::array<std::uint8_t, 512> copy = b;
                 block(copy);
                 if(corruptNextRead) {

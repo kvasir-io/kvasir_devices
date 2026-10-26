@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -21,12 +22,12 @@ struct Sgp40 {
     static constexpr std::array<Address7, 1> Addresses{0x59};
     static constexpr std::size_t             RegisterBytes = 0;
 
+    // clang-format off
     static constexpr std::array Init{
-      Step::command({.payload = {0x36, 0x82}, .delay = std::chrono::milliseconds{1}}
-      ),
-      Step::receive({             .count = 9,                           .offset = 0}
-      ),
+      Engine::Step::command({.payload = {0x36, 0x82}, .delay = std::chrono::milliseconds{1}}),
+      Engine::Step::receive({.count = 9, .offset = 0}),
     };
+    // clang-format on
 
     struct State {
         std::uint64_t serial{};
@@ -46,33 +47,33 @@ struct Sgp40 {
     static constexpr std::array<std::uint8_t, 3> DefaultTemperature = Sensirion::framed(0x6666);
 
     struct Raw {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
+        static constexpr auto Period = std::chrono::milliseconds{1000};
+        // clang-format off
         static constexpr std::array Steps{
-          Step::command({.payload = {0x26,
-0x0F,
-DefaultHumidity[0],
-DefaultHumidity[1],
-DefaultHumidity[2],
-DefaultTemperature[0],
-DefaultTemperature[1],
-DefaultTemperature[2]},
-                         .delay   = std::chrono::milliseconds{30}                                     }
-          ),
-          Step::receive({                                                 .count = 3,      .offset = 0}
-          ),
+          Engine::Step::command({.payload = {0x26,
+                                             0x0F,
+                                             DefaultHumidity[0],
+                                             DefaultHumidity[1],
+                                             DefaultHumidity[2],
+                                             DefaultTemperature[0],
+                                             DefaultTemperature[1],
+                                             DefaultTemperature[2]},
+                                 .delay   = std::chrono::milliseconds{30}}),
+          Engine::Step::receive({.count = 3, .offset = 0}),
         };
+        // clang-format on
 
         struct Sample {
             std::uint16_t ticks{};
         };
 
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
-            if(!Sensirion::wordOk(data, 0)) { return Outcome<Sample>::reject(); }
-            return Outcome<Sample>::ok({data.be16(0)});
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
+            if(!Sensirion::wordOk(data, 0)) { return Engine::Outcome<Sample>::reject(); }
+            return Engine::Outcome<Sample>::ok({data.be16(0)});
         }
     };
 
-    using Reads = List<Raw>;
+    using Reads = Engine::List<Raw>;
 };
 
 }   // namespace Kvasir::I2C::Chips

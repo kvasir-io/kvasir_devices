@@ -1,8 +1,15 @@
 #pragma once
 
+#include "../Duration.hpp"
 #include "../Lines.hpp"
+#include "../Log.hpp"
+#include "../Quantities.hpp"
 #include "../ResetLine.hpp"
+#include "Bus.hpp"
 #include "Dcs.hpp"
+#include "kvasir/Util/Config.hpp"
+#include "kvasir/Util/Link.hpp"
+#include "kvasir/Util/Retry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,30 +21,31 @@
 #include <span>
 #include <string_view>
 
-/// Solomon Systech SSD1680 black/white e-paper controller over SPI with D/C and BUSY lines,
-/// as a gfx::MonoPanel: the driver owns the frame as page RAM, a gfx::MonoFrame draws
-/// straight into it, and only a frame whose pages actually changed is sent and refreshed.
+/// Solomon Systech SSD1680 black/white e-paper controller on a Display::DataBus (4-wire SPI with
+/// D/C: Display::SpiDcsBus) and a BUSY line, as a gfx::MonoPanel: the driver owns the frame as page
+/// RAM, a gfx::MonoFrame draws straight into it, and only a frame whose pages actually changed is
+/// sent and refreshed.
 ///
-///     using Epd = Kvasir::Display::Ssd1680<Clock, Spi, Kvasir::GpioReset<HW::Pin::rst>,
-///                                          Kvasir::GpioDataCommand<HW::Pin::dc>,
-///                                          Kvasir::GpioBusy<HW::Pin::busy>, EpdConfig>;
+///     using EpdBus = Kvasir::Display::SpiDcsBus<Spi, Clock, HW::Pin::cs, HW::Pin::dc, BusConfig>;
+///     using Epd    = Kvasir::Display::Ssd1680<Clock, EpdBus, Kvasir::GpioReset<HW::Pin::rst>,
+///                                             Kvasir::GpioBusy<HW::Pin::busy>, EpdConfig>;
 ///     gfx::MonoFrame<Epd, gfx::MonoCrispTraits> screen{};
 ///     ...
-///     Epd::handler();                                   // once per loop turn
+///     Epd::turn();                                      // once per loop turn
 ///     screen.frame([&](auto& c) { draw(c); });          // false while a refresh runs
 ///
 /// The canvas is landscape: `Width` is the gate lines (296), `Height` the source lines (128);
 /// a portrait canvas would be 37 pages, more than MonoCanvasView's 32-bit dirty mask. The
-/// frame is repacked into the controller's layout `ChunkRows` gate lines at a time while it
-/// is sent. Every command waits for BUSY low.
+/// frame is repacked into the controller's layout `chunkRows` gate lines at a time while it
+/// is sent. Every command waits for BUSY low, and for the one before it to be off the bus (a
+/// command is one transfer: its byte with D/C low, its parameters with D/C high; a RAM chunk one
+/// with D/C high). Nothing waits in a loop: turn() polls.
+///
+/// A failure (BUSY high past `busyTimeout`, a failed transfer) is logged once and counted
+/// (`failures()`); `retryAfter` later the panel is reset and brought up again, which resends
+/// the page RAM, so the picture that was showing comes back. While it keeps failing the pause
+/// doubles up to ten minutes (Kvasir::Retry); a bring-up that completes starts it over.
 namespace Kvasir { namespace Display {
-
-    /// An asynchronous, zero-copy send and its state.
-    template<typename S>
-    concept SpiBus = requires(std::span<std::byte const> const& bytes) {
-        { S::send_nocopy(bytes) };
-        { S::operationState() == S::OperationState::succeeded } -> std::convertible_to<bool>;
-    };
 
     /// SSD1680 datasheet, 10: Command Table.
     struct Ssd1680Cmd {
@@ -61,21 +69,27 @@ namespace Kvasir { namespace Display {
     /// Defaults for a panel config; a config derives from this and redeclares what it sets.
     struct Ssd1680Defaults {
         /// Source lines: a multiple of 8, at most 176; gate lines at most 296.
-        static constexpr int SourceLines = 128;
-        static constexpr int GateLines   = 296;
+        static constexpr int sourceLines = 128;
+        static constexpr int gateLines   = 296;
 
         /// Rotated by 180 degrees.
-        static constexpr bool Flip = false;
+        static constexpr bool flip = false;
 
         /// Partial refresh after one full refresh at bring-up: fast, no flash, ghosting
         /// that clean() clears.
-        static constexpr bool Partial = false;
+        static constexpr bool partial = false;
 
-        /// Gate lines per SPI transfer (`ChunkRows * SourceLines / 8` bytes of RAM).
-        static constexpr int ChunkRows = 16;
+        /// Gate lines per SPI transfer (`chunkRows * sourceLines / 8` bytes of RAM).
+        static constexpr int chunkRows = 16;
 
         /// A full refresh takes about three seconds.
-        static constexpr unsigned BusyTimeoutMs = 10'000;
+        static constexpr std::chrono::milliseconds busyTimeout{10'000};
+
+        /// After a failure the panel is reset and brought up again this much later (doubling
+        /// while it keeps failing); above 0. A bring-up is a full refresh, about three seconds
+        /// of flashing, and a stuck BUSY already costs busyTimeout per attempt: hence the long
+        /// pause.
+        static constexpr std::chrono::milliseconds retryAfter{10'000};
     };
 
     namespace ssd1680_detail {
@@ -142,53 +156,73 @@ namespace Kvasir { namespace Display {
         [[nodiscard]] constexpr std::uint8_t hi(int v) {
             return static_cast<std::uint8_t>((static_cast<unsigned>(v) >> 8U) & 0xFFU);
         }
+
+        /// What made the panel fail.
+        enum class Failure : std::uint8_t { busyTimeout, transfer };
     }   // namespace ssd1680_detail
 
     template<typename Clock,
-             SpiBus          Spi,
-             ResetLine       Reset,
-             DataCommandLine Dc,
-             BusyLine        Busy,
-             typename Config_ = Ssd1680Defaults>
+             DataBus   Bus,
+             ResetLine Reset,
+             BusyLine  Busy,
+             typename UserConfig = Ssd1680Defaults>
     struct Ssd1680 {
-        static_assert(std::derived_from<Config_,
+        static_assert(std::derived_from<UserConfig,
                                         Ssd1680Defaults>,
                       "derive the panel config from Kvasir::Display::Ssd1680Defaults");
-        using Config = Config_;
+        using Config = UserConfig;
+
+        static constexpr std::chrono::milliseconds RetryAfter
+          = Kvasir::asDuration(Config::retryAfter);
+        static constexpr std::chrono::milliseconds BusyTimeout
+          = Kvasir::asDuration(Config::busyTimeout);
+        static_assert(RetryAfter > std::chrono::milliseconds::zero(),
+                      "retryAfter is the pause before a failed panel is brought up again");
+        static_assert(BusyTimeout > std::chrono::milliseconds::zero(),
+                      "busyTimeout is how long BUSY may stay high; a full refresh takes about 3 s");
+
+        /// SCL at most 20 MHz writing (SSD1680 12.1 Table 12-1, SSD1680.md l.1744); the driver
+        /// never reads. Checked only when the bus says what it runs at (a mock bus does not).
+        static constexpr Units::Hertz MaxWriteClock = Units::hertz(20'000'000);
+        static_assert(Units::hertz(static_cast<unsigned long>(KVASIR_CONFIG_OR(Bus,
+                                                                               writeHz,
+                                                                               0UL)))
+                        <= MaxWriteClock,
+                      "the bus write clock exceeds the SSD1680's 20 MHz");
 
         static constexpr std::string_view Name = "SSD1680";
 
-        static constexpr int Width    = Config::GateLines;
-        static constexpr int Height   = Config::SourceLines;
+        static constexpr int Width    = Config::gateLines;
+        static constexpr int Height   = Config::sourceLines;
         static constexpr int Pages    = (Height + 7) / 8;
-        static constexpr int RowBytes = Config::SourceLines / 8;
+        static constexpr int RowBytes = Config::sourceLines / 8;
 
-        static_assert(Config::SourceLines > 0 && Config::SourceLines <= 176
-                        && Config::SourceLines % 8 == 0,
+        static_assert(Config::sourceLines > 0 && Config::sourceLines <= 176
+                        && Config::sourceLines % 8 == 0,
                       "the SSD1680 drives up to 176 source lines, in whole bytes");
-        static_assert(Config::GateLines > 0 && Config::GateLines <= 296,
+        static_assert(Config::gateLines > 0 && Config::gateLines <= 296,
                       "the SSD1680 drives up to 296 gate lines");
         static_assert(Pages <= 32,
                       "MonoCanvasView tracks dirty pages in 32 bits");
-        static_assert(Config::ChunkRows > 0,
+        static_assert(Config::chunkRows > 0,
                       "at least one gate line per transfer");
 
         using PageBytes = std::array<std::uint8_t, static_cast<std::size_t>(Width)>;
         using PageRam   = std::span<PageBytes, static_cast<std::size_t>(Pages)>;
 
-        static constexpr unsigned ResetPulseMs     = 10;
-        static constexpr unsigned ResetToCommandMs = 10;
+        static constexpr std::chrono::milliseconds ResetPulse{10};
+        static constexpr std::chrono::milliseconds ResetToCommand{10};
 
         /// BUSY is believed only this long after a transfer: a command that has not raised it
         /// yet must not look finished.
-        static constexpr unsigned BusySettleMs = 2;
+        static constexpr std::chrono::milliseconds BusySettle{2};
 
     private:
         using u8 = std::uint8_t;
         using ms = std::chrono::milliseconds;
         using tp = typename Clock::time_point;
 
-        static constexpr int LastGate = Config::GateLines - 1;
+        static constexpr int LastGate = Config::gateLines - 1;
 
         // Dcs::Script steps; the delay byte is unused, BUSY is waited for.
         static constexpr std::array<u8, 18> CommonBytes{
@@ -303,12 +337,12 @@ namespace Kvasir { namespace Display {
 
         static constexpr std::array<Item, 4> Refresh{Window, Ram, Activate, WaitIdle};
 
-        /// Also clean(): a full refresh, then with Partial the partial waveform.
-        static constexpr std::array<Item, Config::Partial ? 12 : 6> BringUp = [] {
-            std::array<Item, Config::Partial ? 12 : 6> p{};
+        /// Also clean(): a full refresh, then with partial the partial waveform.
+        static constexpr std::array<Item, Config::partial ? 12 : 6> BringUp = [] {
+            std::array<Item, Config::partial ? 12 : 6> p{};
             std::size_t                                i = 0;
             for(auto const& it : {Common, Full, Window, Ram, Activate, WaitIdle}) { p[i++] = it; }
-            if constexpr(Config::Partial) {
+            if constexpr(Config::partial) {
                 for(auto const& it : {Common, PartialInit, Window, Ram, Activate, WaitIdle}) {
                     p[i++] = it;
                 }
@@ -318,10 +352,11 @@ namespace Kvasir { namespace Display {
 
         enum class State : u8 { resetAssert, resetRelease, running, ready, failed };
 
-        enum class Tx : u8 { idle, command, params, data };
+        /// What is on the bus: a command (with its parameters) or a RAM chunk.
+        enum class Tx : u8 { idle, command, data };
 
         static constexpr std::size_t ChunkBytes
-          = static_cast<std::size_t>(Config::ChunkRows) * static_cast<std::size_t>(RowBytes);
+          = static_cast<std::size_t>(Config::chunkRows) * static_cast<std::size_t>(RowBytes);
 
         // Zero-initialised (nothing copied from flash); a zero frame is white.
         static inline State                             state_{State::resetAssert};
@@ -333,13 +368,35 @@ namespace Kvasir { namespace Display {
         static inline bool                              ramStarted_{};
         static inline bool                              cleanRequested_{};
         static inline bool                              drawnWhileBusy_{};
-        static inline std::span<u8 const>               params_{};
         static inline tp                                settled_{};
         static inline std::uint32_t                     refreshes_{};
-        static inline std::array<std::byte, 1>          command_{};
         static inline std::array<std::byte, ChunkBytes> chunk_{};
-        static inline std::array<PageBytes, std::size_t(Pages)>     ram_{};
-        static inline std::array<std::uint32_t, std::size_t(Pages)> hashes_{};
+        static inline std::array<PageBytes, std::size_t{Pages}>     ram_{};
+        static inline std::array<std::uint32_t, std::size_t{Pages}> hashes_{};
+        static inline Kvasir::Retry<
+          Clock,
+          ssd1680_detail::Failure,
+          Kvasir::RetryFromMs<static_cast<std::uint64_t>(RetryAfter.count())>>
+                                    retry_{};
+        static inline std::uint32_t failures_{};   ///< since power-up, not since the last success
+        static inline bool          up_{};         ///< a program completed since the last (re)start
+
+        /// Every way into State::failed: counted and logged once, the retry armed.
+        static void fail(ssd1680_detail::Failure why,
+                         tp                      now) {
+            state_ = State::failed;
+            tx_    = Tx::idle;
+            up_    = false;
+            ++failures_;
+            retry_.failed(why, now);
+            UC_LOG_W(
+              "{}: the panel or its bus failed ({}, failure {}), bringing it up again in {} ms",
+              Name,
+              why == ssd1680_detail::Failure::busyTimeout ? std::string_view{"BUSY stuck high"}
+                                                          : std::string_view{"a transfer failed"},
+              failures_,
+              static_cast<long long>(std::chrono::duration_cast<ms>(retry_.next - now).count()));
+        }
 
         /// Stands in for a copy of what was last sent.
         [[nodiscard]] static std::uint32_t hash(PageBytes const& page) {
@@ -352,14 +409,14 @@ namespace Kvasir { namespace Display {
         }
 
         [[nodiscard]] static bool differs(std::uint32_t pages) {
-            for(std::size_t p = 0; p < std::size_t(Pages); ++p) {
+            for(std::size_t p = 0; p < std::size_t{Pages}; ++p) {
                 if(((pages >> p) & 1U) != 0 && hash(ram_[p]) != hashes_[p]) { return true; }
             }
             return false;
         }
 
         static void start(std::span<Item const> program) {
-            for(std::size_t p = 0; p < std::size_t(Pages); ++p) { hashes_[p] = hash(ram_[p]); }
+            for(std::size_t p = 0; p < std::size_t{Pages}; ++p) { hashes_[p] = hash(ram_[p]); }
             program_    = program;
             item_       = 0;
             pos_        = 0;
@@ -373,25 +430,29 @@ namespace Kvasir { namespace Display {
             ramStarted_ = false;
             if(item_ >= program_.size()) {
                 state_ = State::ready;
+                up_    = true;
                 ++refreshes_;
+                if(retry_.pending) { retry_.succeeded(); }
             }
         }
 
-        static void send(std::span<std::byte const> const& bytes) { Spi::send_nocopy(bytes); }
-
+        /// A refusal is a failed transfer: the bus has no room, which nothing here causes.
         static void command(u8                  cmd,
-                            std::span<u8 const> params) {
-            Dc::command();
-            command_[0] = std::byte{cmd};
-            params_     = params;
-            tx_         = Tx::command;
-            send(std::span<std::byte const>{command_});
+                            std::span<u8 const> params,
+                            tp                  now) {
+            if(!Bus::writeCommand(cmd, std::as_bytes(params))) {
+                fail(ssd1680_detail::Failure::transfer, now);
+                return;
+            }
+            tx_ = Tx::command;
         }
 
         [[nodiscard]] static bool controllerIdle(tp now) {
             if(now < settled_) { return false; }
             if(Busy::busy()) {
-                if(now > settled_ + ms{Config::BusyTimeoutMs}) { state_ = State::failed; }
+                if(now > settled_ + BusyTimeout) {
+                    fail(ssd1680_detail::Failure::busyTimeout, now);
+                }
                 return false;
             }
             return true;
@@ -402,16 +463,16 @@ namespace Kvasir { namespace Display {
                            int rows) {
             std::size_t i = 0;
             for(int y = first; y < first + rows; ++y) {
-                if constexpr(Config::Flip) {
+                if constexpr(Config::flip) {
                     // Page and bit order both run backwards: each byte stays as it is.
                     auto const x = static_cast<std::size_t>(y);
-                    for(std::size_t k = 0; k < std::size_t(RowBytes); ++k) {
-                        auto const v = ram_[std::size_t(Pages) - 1 - k][x];
+                    for(std::size_t k = 0; k < std::size_t{RowBytes}; ++k) {
+                        auto const v = ram_[std::size_t{Pages} - 1 - k][x];
                         chunk_[i++]  = static_cast<std::byte>(static_cast<u8>(~v));
                     }
                 } else {
                     auto const x = static_cast<std::size_t>(Width - 1 - y);
-                    for(std::size_t k = 0; k < std::size_t(RowBytes); ++k) {
+                    for(std::size_t k = 0; k < std::size_t{RowBytes}; ++k) {
                         auto const v = ssd1680_detail::Reverse[ram_[k][x]];
                         chunk_[i++]  = static_cast<std::byte>(static_cast<u8>(~v));
                     }
@@ -420,26 +481,14 @@ namespace Kvasir { namespace Display {
         }
 
         static void run(tp now) {
+            if(Bus::failed()) {
+                fail(ssd1680_detail::Failure::transfer, now);
+                return;
+            }
             if(tx_ != Tx::idle) {
-                auto const st = Spi::operationState();
-                if constexpr(requires { Spi::OperationState::failed; }) {
-                    if(st == Spi::OperationState::failed) {
-                        tx_    = Tx::idle;
-                        state_ = State::failed;
-                        return;
-                    }
-                }
-                if(!(st == Spi::OperationState::succeeded)) { return; }
-                settled_ = now + ms{BusySettleMs};
-                if(tx_ == Tx::command) {
-                    Dc::data();
-                    if(!params_.empty()) {
-                        tx_ = Tx::params;
-                        send(std::as_bytes(params_));
-                        return;
-                    }
-                }
-                tx_ = Tx::idle;
+                if(!Bus::idle()) { return; }
+                settled_ = now + BusySettle;
+                tx_      = Tx::idle;
             }
 
             auto const& item = program_[item_];
@@ -454,7 +503,7 @@ namespace Kvasir { namespace Display {
                     }
                     if(!controllerIdle(now)) { return; }
                     pos_ = pos;
-                    command(step.cmd, step.params);
+                    command(step.cmd, step.params, now);
                 }
                 break;
 
@@ -462,20 +511,24 @@ namespace Kvasir { namespace Display {
                 if(!ramStarted_) {
                     if(!controllerIdle(now)) { return; }
                     ramStarted_ = true;
-                    command(Ssd1680Cmd::WriteRamBw, {});
+                    command(Ssd1680Cmd::WriteRamBw, {}, now);
                     return;
                 }
-                if(pos_ >= std::size_t(Width)) {
+                if(pos_ >= std::size_t{Width}) {
                     finishItem();
                     return;
                 }
                 {
-                    auto const rows = std::min(Config::ChunkRows, Width - static_cast<int>(pos_));
+                    auto const rows = std::min(Config::chunkRows, Width - static_cast<int>(pos_));
                     repack(static_cast<int>(pos_), rows);
                     pos_ += static_cast<std::size_t>(rows);
+                    if(!Bus::writeData(std::span<std::byte const>{chunk_}.first(
+                         static_cast<std::size_t>(rows) * std::size_t{RowBytes})))
+                    {
+                        fail(ssd1680_detail::Failure::transfer, now);
+                        return;
+                    }
                     tx_ = Tx::data;
-                    send(std::span<std::byte const>{chunk_}.first(static_cast<std::size_t>(rows)
-                                                                  * std::size_t(RowBytes)));
                 }
                 break;
 
@@ -489,18 +542,32 @@ namespace Kvasir { namespace Display {
         static void restart() {
             state_          = State::resetAssert;
             tx_             = Tx::idle;
+            up_             = false;
             cleanRequested_ = false;
             drawnWhileBusy_ = false;
-            if constexpr(requires { Spi::restart(); }) { Spi::restart(); }
+            Bus::clearError();
         }
 
         /// A frame may be drawn.
         [[nodiscard]] static bool ready() { return state_ == State::ready && !cleanRequested_; }
 
-        /// BUSY timed out or the master failed; nothing is sent until restart().
+        /// The transfer/contract state: BUSY timed out or the bus failed, and nothing is sent until
+        /// the panel is brought up again, retryAfter later (doubling while it keeps failing). Not
+        /// the health: that is link().
         [[nodiscard]] static bool failed() { return state_ == State::failed; }
 
+        /// The health (SDK Runtime/README.md "Observability"; Health::LinkCheck watches it):
+        /// answering from the first completed bring-up on (a refresh keeps it so), absent while failed, starting
+        /// until then. Back to answering by itself: the retry (retryAfter, doubling) brings the panel up again.
+        [[nodiscard]] static Link link() {
+            if(state_ == State::failed) { return Link::absent; }
+            return up_ ? Link::answering : Link::starting;
+        }
+
         [[nodiscard]] static std::uint32_t refreshes() { return refreshes_; }
+
+        /// Failures since power-up; restart() does not clear it.
+        [[nodiscard]] static std::uint32_t failures() { return failures_; }
 
         [[nodiscard]] static PageRam pageRam() { return PageRam{ram_}; }
 
@@ -516,12 +583,13 @@ namespace Kvasir { namespace Display {
         /// A full refresh at the next opportunity: clears partial-refresh ghosting.
         static void clean() { cleanRequested_ = true; }
 
-        /// From the main loop.
-        static void handler() {
+        /// From the main loop; runs the bus's turn() too.
+        static void turn() {
+            Bus::turn();
             auto const now = Clock::now();
             switch(state_) {
             case State::resetAssert:
-                reset_.begin(now, ms{ResetPulseMs}, ms{ResetToCommandMs});
+                reset_.begin(now, ResetPulse, ResetToCommand);
                 state_ = State::resetRelease;
                 break;
 
@@ -545,7 +613,9 @@ namespace Kvasir { namespace Display {
                 }
                 break;
 
-            case State::failed: break;
+            case State::failed:
+                if(retry_.due(now)) { restart(); }
+                break;
             }
         }
     };

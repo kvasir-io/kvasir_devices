@@ -36,7 +36,7 @@ struct Dht20 {
 
     static constexpr std::uint8_t CalibratedBits = 0x18;
 
-    static constexpr std::array Init{Step::receive({.count = 1, .offset = 0})};
+    static constexpr std::array Init{Engine::Step::receive({.count = 1, .offset = 0})};
 
     struct State {
         std::uint8_t status{};
@@ -62,31 +62,26 @@ struct Dht20 {
     };
 
     struct Restore {
+        // clang-format off
         static constexpr std::array Steps{
-          Step::command({.payload = {0x1B, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}
-          ),
-          Step::receive({.count = 3, .offset = 0, .delay = std::chrono::milliseconds{10}}
-          ),
-          Step::writeBuffer(
-            {.reg = 0xBB, .offset = 1, .count = 2, .delay = std::chrono::milliseconds{5}}
-          ),
-          Step::command({.payload = {0x1C, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}
-          ),
-          Step::receive({.count = 3, .offset = 3, .delay = std::chrono::milliseconds{10}}
-          ),
-          Step::writeBuffer(
-            {.reg = 0xBC, .offset = 4, .count = 2, .delay = std::chrono::milliseconds{5}}
-          ),
-          Step::command({.payload = {0x1E, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}
-          ),
-          Step::receive({.count = 3, .offset = 6, .delay = std::chrono::milliseconds{10}}
-          ),
-          Step::writeBuffer(
-            {.reg = 0xBE, .offset = 7, .count = 2, .delay = std::chrono::milliseconds{10}}
-          ),
-          Step::receive({.count = 1, .offset = 9}
-          ),
+          Engine::Step::command(
+            {.payload = {0x1B, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}),
+          Engine::Step::receive({.count = 3, .offset = 0, .delay = std::chrono::milliseconds{10}}),
+          Engine::Step::writeBuffer(
+            {.reg = 0xBB, .offset = 1, .count = 2, .delay = std::chrono::milliseconds{5}}),
+          Engine::Step::command(
+            {.payload = {0x1C, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}),
+          Engine::Step::receive({.count = 3, .offset = 3, .delay = std::chrono::milliseconds{10}}),
+          Engine::Step::writeBuffer(
+            {.reg = 0xBC, .offset = 4, .count = 2, .delay = std::chrono::milliseconds{5}}),
+          Engine::Step::command(
+            {.payload = {0x1E, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}),
+          Engine::Step::receive({.count = 3, .offset = 6, .delay = std::chrono::milliseconds{10}}),
+          Engine::Step::writeBuffer(
+            {.reg = 0xBE, .offset = 7, .count = 2, .delay = std::chrono::milliseconds{10}}),
+          Engine::Step::receive({.count = 1, .offset = 9}),
         };
+        // clang-format on
 
         struct Sample {
             std::uint8_t status{};   ///< read after the restore
@@ -99,7 +94,7 @@ struct Dht20 {
         [[nodiscard]] static constexpr Sample decode(Bytes data) { return {data.u8(9)}; }
     };
 
-    using Reads = List<Measurement, Restore>;
+    using Reads = Engine::List<Measurement, Restore>;
 };
 
 }   // namespace Kvasir::I2C::Chips

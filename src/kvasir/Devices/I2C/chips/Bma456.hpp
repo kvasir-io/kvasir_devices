@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -28,6 +29,12 @@ namespace Kvasir::I2C::Chips {
 /// blob is deliberately not uploaded: the feature engine reports init_err and the step
 /// counter and gesture features do not work, but raw acceleration is unaffected.
 ///
+/// A read takes STATUS (0x03) first: drdy_acc (bit 7) is set by a new sample and "gets reset when one
+/// accelerometer DATA register is read out" (BMA456 datasheet, Register (0x03) STATUS), so the order matters. A
+/// frame without it - a poll before the first conversion after the bring-up, whose data registers still hold their
+/// reset value 0, or one that beat the next 50 Hz sample - is Outcome::unchanged(), not a sample of 0 g. A sample
+/// that lands between the two reads is skipped (the data read clears its flag), never delivered twice.
+///
 /// The temperature byte reads 0x80 ("invalid") until the part's first temperature update,
 /// which comes every 1.28 s: a Motion sample then carries the acceleration with
 /// `temperatureValid` false, rather than being dropped.
@@ -51,7 +58,7 @@ struct Bma456 {
     static constexpr std::string_view Name = "BMA456";
     /// Bosch BMA456. BMA456.md:455: CHIP_ID (0x00) is 0x16.
     static constexpr std::array Identity{
-      RegisterCheck{"chip-id", 0x00, 1, true, 0xFF, 0x16},
+      Engine::RegisterCheck{"chip-id", 0x00, 1, true, 0xFF, 0x16},
     };
     static constexpr Address7    Address       = 0x18;
     static constexpr std::size_t RegisterBytes = 1;
@@ -69,23 +76,24 @@ struct Bma456 {
     static constexpr std::uint8_t AccConf = 0x87;
 
     static constexpr std::array Init{
-      Step::write({.reg = 0x7E, .payload = {0xB6}, .delay = StartupDelay}),   // CMD: softreset
-      Step::write({.reg     = 0x7C,
-                   .payload = {0x00},
-                   .delay   = std::chrono::milliseconds{1}}),   // PWR_CONF: no power save
-      Step::write({.reg = 0x59, .payload = {0x00}}),            // INIT_CTRL: begin config load
-      Step::write(
+      Engine::Step::write(
+        {.reg = 0x7E, .payload = {0xB6}, .delay = StartupDelay}),   // CMD: softreset
+      Engine::Step::write({.reg     = 0x7C,
+                           .payload = {0x00},
+                           .delay   = std::chrono::milliseconds{1}}),   // PWR_CONF: no power save
+      Engine::Step::write({.reg = 0x59, .payload = {0x00}}),   // INIT_CTRL: begin config load
+      Engine::Step::write(
         {.reg     = 0x59,
          .payload = {0x01},
-         .delay   = std::chrono::milliseconds{150}}),       // and end it; the engine takes 150 ms
-      Step::write({.reg = 0x40, .payload = {AccConf}}),     // ACC_CONF
-      Step::write({.reg = 0x41, .payload = {RangeCode}}),   // ACC_RANGE
-      Step::write({.reg     = 0x7D,
-                   .payload = {0x04},
-                   .delay   = std::chrono::milliseconds{50}}),   // PWR_CTRL: accelerometer on
+         .delay   = std::chrono::milliseconds{150}}),   // and end it; the engine takes 150 ms
+      Engine::Step::write({.reg = 0x40, .payload = {AccConf}}),     // ACC_CONF
+      Engine::Step::write({.reg = 0x41, .payload = {RangeCode}}),   // ACC_RANGE
+      Engine::Step::write({.reg     = 0x7D,
+                           .payload = {0x04},
+                           .delay = std::chrono::milliseconds{50}}),   // PWR_CTRL: accelerometer on
     };
 
-    struct State : Groups::DeviceId {
+    struct State : Engine::Groups::DeviceId {
         std::uint8_t range{RangeCode};   ///< ACC_RANGE as written now
     };
 
@@ -101,9 +109,14 @@ struct Bma456 {
         static constexpr auto Period = std::chrono::milliseconds{20};   ///< the 50 Hz ODR
 
         static constexpr std::array Steps{
-          Step::read({.reg = 0x12, .count = 6, .offset = 0}),   // acceleration, little endian
-          Step::read({.reg = 0x22, .count = 1, .offset = 6}),   // temperature
+          Engine::Step::read(
+            {.reg = 0x03, .count = 1, .offset = 7}),   // STATUS, before the data clears it
+          Engine::Step::read(
+            {.reg = 0x12, .count = 6, .offset = 0}),   // acceleration, little endian
+          Engine::Step::read({.reg = 0x22, .count = 1, .offset = 6}),   // temperature
         };
+
+        static constexpr std::uint8_t DrdyAcc = 0x80U;   ///< STATUS bit 7
 
         struct Sample {
             MicroG x{};
@@ -120,17 +133,18 @@ struct Bma456 {
         }
 
         /// At the range the part holds now; the temperature only when its byte is not the
-        /// part's "invalid" marker.
-        [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes        data,
-                                                              State const& state) {
+        /// part's "invalid" marker; nothing without drdy_acc.
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.u8(7) & DrdyAcc) == 0) { return Engine::Outcome<Sample>::unchanged(); }
             bool const temperatureValid = data.u8(6) != Bma456Detail::InvalidTemperature;
-            return Outcome<Sample>::ok({toAccel(data.s16le(0), state.range),
-                                        toAccel(data.s16le(2), state.range),
-                                        toAccel(data.s16le(4), state.range),
-                                        temperatureValid
-                                          ? Units::degC(static_cast<std::int32_t>(data.s8(6)) + 23)
-                                          : Units::degC(0),
-                                        temperatureValid});
+            return Engine::Outcome<Sample>::ok(
+              {toAccel(data.s16le(0), state.range),
+               toAccel(data.s16le(2), state.range),
+               toAccel(data.s16le(4), state.range),
+               temperatureValid ? Units::degC(static_cast<std::int32_t>(data.s8(6)) + 23)
+                                : Units::degC(0),
+               temperatureValid});
         }
     };
 
@@ -138,7 +152,7 @@ struct Bma456 {
     /// because Init has already put the configured values there. Anything set here is written
     /// again after a reset.
     template<std::uint16_t Reg>
-    using Byte = Groups::Byte<Reg>;
+    using Byte = Engine::Groups::Byte<Reg>;
 
     using Config       = Byte<0x40>;   ///< ACC_CONF: performance mode, bandwidth, ODR
     using PowerControl = Byte<0x7D>;
@@ -149,10 +163,10 @@ struct Bma456 {
         static constexpr std::size_t Bytes   = 1;
         static constexpr Value       Initial = Range;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
-            return Step::writeBuffer({.reg = 0x41, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x41, .offset = 0, .count = 1});
         }
 
         static constexpr void applied(Value const& value,
@@ -161,8 +175,8 @@ struct Bma456 {
         }
     };
 
-    using Reads  = List<Motion>;
-    using Writes = List<Config, PowerControl, RangeSetting>;
+    using Reads  = Engine::List<Motion>;
+    using Writes = Engine::List<Config, PowerControl, RangeSetting>;
 };
 
 }   // namespace Kvasir::I2C::Chips

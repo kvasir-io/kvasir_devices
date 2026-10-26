@@ -3,13 +3,14 @@
 // R/W bit, 1 = read (BME280.md:1481, 6.3) - the transport's default.
 #include "../../I2C/chips/Bme280.hpp"
 #include "../Device.hpp"
+#include "kvasir/Hal/Spi.hpp"
 
 namespace Kvasir { namespace SPI { namespace Chips {
 
     template<Bme280Compensation::Model Model = Bme280Compensation::Model::bme280>
     struct Bmx280 : I2C::Chips::Bmx280<Model> {
         /// Mode '00' or '11', chosen by SCK's level at CSB's falling edge (6.3, BME280.md:1456).
-        static constexpr ClockMode Mode = ClockMode::_0;
+        static constexpr Hal::ClockMode Mode = Hal::ClockMode::mode0;
         /// F_spi up to 10 MHz (Table 34, BME280.md:1616).
         static constexpr Units::Hertz MaxClock = Units::hertz(10'000'000);
     };

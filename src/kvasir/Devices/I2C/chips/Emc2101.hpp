@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -31,8 +32,8 @@ struct Emc2101 {
     /// SMSC EMC2101. EMC2101.md:2179..2180: the product ID (FDh) is 16h, or 28h for the EMC2101-R;
     /// :2192: the SMSC ID (FEh) is 5Dh.
     static constexpr std::array Identity{
-      RegisterCheck{"product-id", 0xFD, 1, true, 0xFF, 0x16, 0x28},
-      RegisterCheck{"smsc-id", 0xFE, 1, true, 0xFF, 0x5D},
+      Engine::RegisterCheck{"product-id", 0xFD, 1, true, 0xFF, 0x16, 0x28},
+      Engine::RegisterCheck{"smsc-id", 0xFE, 1, true, 0xFF, 0x5D},
     };
     static constexpr Address7                Address = 0x4C;
     static constexpr std::array<Address7, 1> Addresses{0x4C};
@@ -58,12 +59,13 @@ struct Emc2101 {
 
         /// 0x46 before 0x47: reading the low byte latches the high one.
         static constexpr std::array Steps{
-          Step::read({.reg = 0x00, .count = 1, .offset = 0}),   // internal temperature
-          Step::read({.reg = 0x01, .count = 1, .offset = 1}),   // external, whole degrees
-          Step::read({.reg = 0x10, .count = 1, .offset = 2}),   // external, fraction in bits 7:5
-          Step::read({.reg = 0x46, .count = 1, .offset = 3}),   // tachometer low
-          Step::read({.reg = 0x47, .count = 1, .offset = 4}),   // tachometer high
-          Step::read({.reg = 0x02, .count = 1, .offset = 5}),   // status
+          Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),   // internal temperature
+          Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1}),   // external, whole degrees
+          Engine::Step::read(
+            {.reg = 0x10, .count = 1, .offset = 2}),   // external, fraction in bits 7:5
+          Engine::Step::read({.reg = 0x46, .count = 1, .offset = 3}),   // tachometer low
+          Engine::Step::read({.reg = 0x47, .count = 1, .offset = 4}),   // tachometer high
+          Engine::Step::read({.reg = 0x02, .count = 1, .offset = 5}),   // status
         };
 
         /// Table 5.2: an open DP-DN, or DP shorted to VDD, reads exactly +127.000 degC; a
@@ -132,7 +134,7 @@ struct Emc2101 {
 
     /// One configuration register, put back after every bring-up and checked afterwards.
     template<std::uint16_t Reg, std::uint8_t Init>
-    using Byte = Groups::VerifiedByte<Reg, Init, ByteTiming>;
+    using Byte = Engine::Groups::VerifiedByte<Reg, Init, ByteTiming>;
 
     /// MASK, DIS_TO and TACH set. MASK is set because reading the status register sets it
     /// whenever an alarm bit is up (6.4), so a Config read back without it would mismatch and
@@ -154,9 +156,9 @@ struct Emc2101 {
         return static_cast<std::uint8_t>(p * FanSettingMax / 100U);
     }
 
-    using Reads = List<Sensors>;
-    using Writes
-      = List<Config, ConversionRate, FanConfig, FanSetting, PwmFrequency, PwmDivide, Filter>;
+    using Reads  = Engine::List<Sensors>;
+    using Writes = Engine::
+      List<Config, ConversionRate, FanConfig, FanSetting, PwmFrequency, PwmDivide, Filter>;
 };
 
 }   // namespace Kvasir::I2C::Chips

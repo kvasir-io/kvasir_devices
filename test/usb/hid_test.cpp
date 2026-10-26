@@ -8,15 +8,20 @@
 #include <kvasir/Devices/USB/SimpleBulk.hpp>
 
 using namespace Kvasir::Test;
+using namespace Kvasir::Test::Usb;
+using DT = Kvasir::USB::DescriptorType;
 
 namespace {
+using HidRequest           = Kvasir::USB::HID::Request;
+constexpr auto ReportValue = descriptorValue(Kvasir::USB::HID::ReportDescriptorType);
+
 struct Knob {
     // Vendor usage page, one 4-byte input report and one 2-byte output report, no report ids.
     static constexpr auto ReportDescriptor = std::to_array<std::uint8_t>(
       {0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08,
        0x95, 0x04, 0x09, 0x02, 0x81, 0x02, 0x95, 0x02, 0x09, 0x03, 0x91, 0x02, 0xC0});
     static constexpr std::size_t  InputReportSize = 4;
-    static constexpr std::uint8_t PollIntervalMs  = 5;
+    static constexpr std::uint8_t pollIntervalMs  = 5;
 
     static inline std::vector<std::byte> lastOutput{};
     static inline bool                   accept{true};
@@ -41,20 +46,16 @@ struct Knob {
 template<typename C, typename Cfg, typename D, std::size_t I, std::size_t E>
 using KnobHid = Kvasir::USB::HID::Mixin<C, Cfg, D, I, E, Knob>;
 
-struct Config {
-    static constexpr auto        ManufacturerString = "Kvasir host test";
-    static constexpr auto        ProductString      = "hid";
-    static constexpr auto        SerialNumberString = "1";
-    static constexpr auto        ProductVersionBCD  = 0x0100;
-    static constexpr auto        VendorID           = 0x1209;
-    static constexpr auto        ProductID          = 0x0004;
-    static constexpr std::size_t SendBufferSize     = 256;
-    static constexpr std::size_t RecvBufferSize     = 256;
+struct Config : TestConfig {
+    static constexpr auto        productString  = "hid";
+    static constexpr auto        productId      = 0x0004;
+    static constexpr std::size_t sendBufferSize = 256;
+    static constexpr std::size_t recvBufferSize = 256;
 
     static inline int suspends{};
     static inline int resumes{};
 
-    static void SuspendCallback(bool suspended) { ++(suspended ? suspends : resumes); }
+    static void suspendCallback(bool suspended) { ++(suspended ? suspends : resumes); }
 };
 
 template<typename Fake>
@@ -71,11 +72,11 @@ void run(char const* name) {
     Host::plugIn();
     check(Host::enumerate(), "enumerated");
     {
-        auto const dev = Host::getDescriptor(1, 0, 18);
+        auto const dev = Host::getDescriptor(DT::device, 0, 18);
         check(dev.ok() && std::to_integer<int>(dev.data[4]) == 0
                 && std::to_integer<int>(dev.data[6]) == 0,
               "bDeviceClass and bDeviceProtocol 0");
-        auto const cfg = Host::getDescriptor(2, 0, 255);
+        auto const cfg = Host::getDescriptor(DT::configuration, 0, 255);
         check(cfg.ok(), "the configuration");
         // 9 configuration + 9 interface, then the HID descriptor
         check(cfg.data.size() > 27 && std::to_integer<int>(cfg.data[18]) == 9
@@ -84,11 +85,14 @@ void run(char const* name) {
         checkEq(std::to_integer<unsigned>(cfg.data[25]),
                 Knob::ReportDescriptor.size(),
                 "with the report descriptor's length");
-        auto const report = Host::controlIn(Host::makeSetup(0x81, 6, 0x2200, 0, 255));
+        auto const report = Host::controlIn(
+          Host::makeSetup(fromInterface, Setup::Request::getDescriptor, ReportValue, 0, 255));
         check(report.ok() && report.data.size() == Knob::ReportDescriptor.size(),
               "GET_DESCRIPTOR(report) to the interface");
         check(std::to_integer<int>(report.data[0]) == 0x06, "and it is the traits' bytes");
-        check(Host::controlIn(Host::makeSetup(0x81, 6, 0x2200, 1, 255)).stalled,
+        check(Host::controlIn(
+                Host::makeSetup(fromInterface, Setup::Request::getDescriptor, ReportValue, 1, 255))
+                .stalled,
               "not from the bulk interface");
     }
 
@@ -111,21 +115,35 @@ void run(char const* name) {
     testCase("SET_REPORT, GET_REPORT and SET_IDLE on endpoint 0");
     {
         auto const out = pattern(2, 9);
-        check(Host::controlOut(Host::makeSetup(0x21, 0x09, 0x0200, 0, 2), out).ok(), "SET_REPORT");
+        check(
+          Host::controlOut(Host::makeSetup(classToInterface, HidRequest::setReport, 0x0200, 0, 2),
+                           out)
+            .ok(),
+          "SET_REPORT");
         check(Knob::lastOutput == out, "reaches the application");
         Knob::accept = false;
-        check(Host::controlOut(Host::makeSetup(0x21, 0x09, 0x0200, 0, 2), out).stalled,
-              "one it refuses is a STALL");
+        check(
+          Host::controlOut(Host::makeSetup(classToInterface, HidRequest::setReport, 0x0200, 0, 2),
+                           out)
+            .stalled,
+          "one it refuses is a STALL");
         Knob::accept  = true;
-        auto const in = Host::controlIn(Host::makeSetup(0xA1, 0x01, 0x0100, 0, 4));
+        auto const in = Host::controlIn(
+          Host::makeSetup(classFromInterface, HidRequest::getReport, 0x0100, 0, 4));
         check(in.ok() && in.data.size() == 4 && std::to_integer<int>(in.data[0]) == 0xA0,
               "GET_REPORT(input)");
-        check(Host::controlIn(Host::makeSetup(0xA1, 0x01, 0x0300, 0, 4)).stalled,
-              "GET_REPORT of a type the application has none of");
-        check(Host::controlOut(Host::makeSetup(0x21, 0x0A, 0x7D00, 0, 0)).ok(), "SET_IDLE");
-        auto const idle = Host::controlIn(Host::makeSetup(0xA1, 0x02, 0, 0, 1));
+        check(
+          Host::controlIn(Host::makeSetup(classFromInterface, HidRequest::getReport, 0x0300, 0, 4))
+            .stalled,
+          "GET_REPORT of a type the application has none of");
+        check(Host::controlOut(Host::makeSetup(classToInterface, HidRequest::setIdle, 0x7D00, 0, 0))
+                .ok(),
+              "SET_IDLE");
+        auto const idle
+          = Host::controlIn(Host::makeSetup(classFromInterface, HidRequest::getIdle, 0, 0, 1));
         check(idle.ok() && std::to_integer<int>(idle.data[0]) == 0x7D, "GET_IDLE returns it");
-        check(Host::controlOut(Host::makeSetup(0x21, 0x0B, 0, 0, 0)).stalled,
+        check(Host::controlOut(Host::makeSetup(classToInterface, HidRequest::setProtocol, 0, 0, 0))
+                .stalled,
               "SET_PROTOCOL: no boot protocol");
     }
 

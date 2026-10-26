@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../Device.hpp"
+#include "../../Engine/Description.hpp"
+#include "../Address.hpp"
 #include "../Quantities.hpp"
 
 #include <array>
@@ -54,14 +55,14 @@ struct Mcp47a1 {
         using Value                        = std::uint8_t;
         static constexpr std::size_t Bytes = 1;
 
-        [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                   std::span<std::byte> buffer) {
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                           std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value >= FullScale ? FullScale : value);
-            return Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
+            return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
         }
     };
 
-    using Writes = List<Level>;
+    using Writes = Engine::List<Level>;
 };
 
 }   // namespace Kvasir::I2C::Chips

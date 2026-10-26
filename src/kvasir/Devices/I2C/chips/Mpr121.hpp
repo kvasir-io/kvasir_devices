@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../Device.hpp"
-#include "../Groups.hpp"
+#include "../../Engine/Description.hpp"
+#include "../../Engine/Groups.hpp"
+#include "../Address.hpp"
 
 #include <array>
 #include <chrono>
@@ -44,15 +45,15 @@ struct Mpr121 {
     /// is that many electrodes (MPR121.md:497, :798); the reset value is 0x00, stop mode, so this also says the bring-up got to its last write.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
     static constexpr std::array AfterBringUp{
-      RegisterCheck{"running",
-                    0x5E, 1,
-                    true, Electrodes == 12 ? 0x0CU : 0x0FU,
-                    Electrodes == 12 ? 0x0CU : Electrodes},
+      Engine::RegisterCheck{"running",
+                            0x5E, 1,
+                            true, Electrodes == 12 ? 0x0CU : 0x0FU,
+                            Electrodes == 12 ? 0x0CU : Electrodes},
     };
     static constexpr Address7    Address       = 0x5A;
     static constexpr std::size_t RegisterBytes = 1;
 
-    static constexpr std::array<Address7, 4> Addresses{0x5A, 0x5B, 0x5C, 0x5D};
+    static constexpr auto Addresses = addressRun<0x5A, 4>();
 
     static_assert(Electrodes >= 1 && Electrodes <= 12,
                   "the MPR121 has twelve electrodes");
@@ -72,37 +73,39 @@ struct Mpr121 {
     static constexpr unsigned ElectrodePairs = 12;
 
     static constexpr auto Init = [] {
-        std::array<Step, 14 + 2 * ElectrodePairs> s{};
-        std::size_t                               i = 0;
-        s[i++]                                      = Step::write(
+        std::array<Engine::Step, 14 + 2 * ElectrodePairs> s{};
+        std::size_t                                       i = 0;
+        s[i++]                                              = Engine::Step::write(
           {.reg = 0x80, .payload = {0x63}, .delay = std::chrono::milliseconds{1}});   // soft reset
-        s[i++] = Step::read({.reg = 0x5C, .count = 2, .offset = 0});   // CDC, CDT at reset
-        s[i++] = Step::identify();
-        s[i++] = Step::write(
+        s[i++] = Engine::Step::read({.reg = 0x5C, .count = 2, .offset = 0});   // CDC, CDT at reset
+        s[i++] = Engine::Step::identify();
+        s[i++] = Engine::Step::write(
           {.reg = 0x5E, .payload = {0x00}});   // stop mode: everything below is writable
-        s[i++] = Step::write({.reg = 0x2B, .payload = {0x01}});   // MHD rising
-        s[i++] = Step::write({.reg = 0x2C, .payload = {0x01}});   // NHD rising
-        s[i++] = Step::write({.reg = 0x2D, .payload = {0x00}});   // NCL rising
-        s[i++] = Step::write({.reg = 0x2E, .payload = {0x00}});   // FDL rising
-        s[i++] = Step::write({.reg = 0x2F, .payload = {0x01}});   // MHD falling
-        s[i++] = Step::write({.reg = 0x30, .payload = {0x01}});   // NHD falling
-        s[i++] = Step::write({.reg = 0x31, .payload = {0xFF}});   // NCL falling
-        s[i++] = Step::write({.reg = 0x32, .payload = {0x02}});   // FDL falling
+        s[i++] = Engine::Step::write({.reg = 0x2B, .payload = {0x01}});   // MHD rising
+        s[i++] = Engine::Step::write({.reg = 0x2C, .payload = {0x01}});   // NHD rising
+        s[i++] = Engine::Step::write({.reg = 0x2D, .payload = {0x00}});   // NCL rising
+        s[i++] = Engine::Step::write({.reg = 0x2E, .payload = {0x00}});   // FDL rising
+        s[i++] = Engine::Step::write({.reg = 0x2F, .payload = {0x01}});   // MHD falling
+        s[i++] = Engine::Step::write({.reg = 0x30, .payload = {0x01}});   // NHD falling
+        s[i++] = Engine::Step::write({.reg = 0x31, .payload = {0xFF}});   // NCL falling
+        s[i++] = Engine::Step::write({.reg = 0x32, .payload = {0x02}});   // FDL falling
         for(unsigned e = 0; e < ElectrodePairs; ++e) {
-            s[i++] = Step::write({.reg     = static_cast<std::uint16_t>(0x41 + 2 * e),
-                                  .payload = {static_cast<std::uint8_t>(TouchThreshold)}});
-            s[i++] = Step::write({.reg     = static_cast<std::uint16_t>(0x42 + 2 * e),
-                                  .payload = {static_cast<std::uint8_t>(ReleaseThreshold)}});
+            s[i++] = Engine::Step::write({.reg     = static_cast<std::uint16_t>(0x41 + 2 * e),
+                                          .payload = {static_cast<std::uint8_t>(TouchThreshold)}});
+            s[i++]
+              = Engine::Step::write({.reg     = static_cast<std::uint16_t>(0x42 + 2 * e),
+                                     .payload = {static_cast<std::uint8_t>(ReleaseThreshold)}});
         }
-        s[i++] = Step::write({.reg = 0x5C, .payload = {0x10}});   // CDC 16 uA
-        s[i++]
-          = Step::write({.reg = 0x5D, .payload = {0x20}});   // CDT 0.5 us, SFI 4 samples, ESI 1 ms
+        s[i++] = Engine::Step::write({.reg = 0x5C, .payload = {0x10}});   // CDC 16 uA
+        s[i++] = Engine::Step::write(
+          {.reg = 0x5D, .payload = {0x20}});   // CDT 0.5 us, SFI 4 samples, ESI 1 ms
         return s;
     }();
 
     struct Touch {
         static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             std::uint16_t touched{};   ///< bit N: electrode N is touched
@@ -123,7 +126,8 @@ struct Mpr121 {
 
     /// The 10-bit filtered capacitance of each electrode, on demand: request<Filtered>().
     struct Filtered {
-        static constexpr std::array Steps{Step::read({.reg = 0x04, .count = 26, .offset = 0})};
+        static constexpr std::array Steps{
+          Engine::Step::read({.reg = 0x04, .count = 26, .offset = 0})};
 
         struct Sample {
             std::array<std::uint16_t, 13> counts{};   ///< 12 electrodes plus the proximity one
@@ -140,7 +144,7 @@ struct Mpr121 {
 
     /// The electrode configuration register, which is also the run/stop control: writing 0
     /// stops the part, and it is the one register writable while it runs.
-    using Config = Groups::InitialByte<0x5E, Ecr>;
+    using Config = Engine::Groups::InitialByte<0x5E, Ecr>;
 
     struct State {
         std::uint8_t cdc{};   ///< 0x5C as the reset left it
@@ -162,14 +166,14 @@ struct Mpr121 {
         static constexpr std::size_t Bytes     = 1;
         static constexpr bool        Transient = true;
 
-        [[nodiscard]] static constexpr Step encode(Value const&,
-                                                   std::span<std::byte>) {
-            return Step::write({.reg = 0x01, .payload = {0x80}});
+        [[nodiscard]] static constexpr Engine::Step encode(Value const&,
+                                                           std::span<std::byte>) {
+            return Engine::Step::write({.reg = 0x01, .payload = {0x80}});
         }
     };
 
-    using Reads  = List<Touch, Filtered>;
-    using Writes = List<Config, ClearOverCurrent>;
+    using Reads  = Engine::List<Touch, Filtered>;
+    using Writes = Engine::List<Config, ClearOverCurrent>;
 };
 
 }   // namespace Kvasir::I2C::Chips

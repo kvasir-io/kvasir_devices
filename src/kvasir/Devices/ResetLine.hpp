@@ -23,18 +23,6 @@ struct NoReset {
     static void release() {}
 };
 
-namespace detail {
-    /// The reset line's pin claim, if any, becomes the driver's.
-    template<typename R>
-    struct ResetClaims {};
-
-    template<typename R>
-        requires requires { typename R::Claims; }
-    struct ResetClaims<R> {
-        using Claims = typename R::Claims;
-    };
-}   // namespace detail
-
 /// Non-blocking: `begin(now)` holds the line; `done(now)` releases it after `low` and
 /// answers true once `settle` more has passed.
 template<ResetLine Reset, typename Clock>

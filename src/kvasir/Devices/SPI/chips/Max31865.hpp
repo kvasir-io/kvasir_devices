@@ -5,7 +5,10 @@
 #include "../../Duration.hpp"
 #include "../../Log.hpp"
 #include "../../Quantities.hpp"
+#include "../../SampleSlot.hpp"
 #include "../Device.hpp"
+#include "kvasir/Hal/Spi.hpp"
+#include "kvasir/Util/Config.hpp"
 #include "kvasir/Util/Periodic.hpp"
 
 #include <array>
@@ -75,21 +78,21 @@ namespace Kvasir { namespace SPI {
         faultCycle,   ///< a fault-detection cycle with automatic delay, which works the FORCE- switch
     };
 
-    /// Derive and redeclare what you change; the engine's knobs (I2C/Device.hpp EngineDefaults) too.
+    /// Derive and redeclare what you change; the engine's knobs (Engine/DeviceConfig.hpp EngineDefaults) too.
     struct Max31865Defaults {
-        static constexpr auto StartupDelay = std::chrono::milliseconds{500};
+        static constexpr auto startupDelay = std::chrono::milliseconds{500};
         /// No conversion within this: the part is started over. A conversion takes 16.7 / 20 ms, the
         /// first one 52 / 62.5 ms (MAX31865.md:148-151).
-        static constexpr auto ConversionTimeout = std::chrono::milliseconds{500};
+        static constexpr auto conversionTimeout = std::chrono::milliseconds{500};
         /// VBIAS on, auto conversion, 2- or 4-wire, no fault detection cycle, 50 Hz filter.
-        static constexpr std::uint8_t Configuration = 0xC1;
+        static constexpr std::uint8_t configuration = 0xC1;
         /// Conversions rejected in a row before a bring-up (50 = 1 s at 50 Hz). 0: never.
-        static constexpr std::uint16_t RejectedRestart   = 50;
-        static constexpr auto          RegisterCheck     = std::chrono::seconds{10};
-        static constexpr auto          UnidentifiedRetry = std::chrono::seconds{1};
+        static constexpr std::uint16_t rejectedRestart   = 50;
+        static constexpr auto          registerCheck     = std::chrono::seconds{10};
+        static constexpr auto          unidentifiedRetry = std::chrono::seconds{1};
         /// Bring-ups in a row that brought no reading before the levers (Max31865Lever) are
         /// tried, one per bring-up, in turn with a plain one. 0: never.
-        static constexpr std::uint8_t PlainBringUps = 2;
+        static constexpr std::uint8_t plainBringUps = 2;
     };
 
     namespace Chips {
@@ -97,8 +100,8 @@ namespace Kvasir { namespace SPI {
         struct Max31865 {
             static constexpr std::string_view Name = "MAX31865";
             /// Modes 1 and 3 (MAX31865.md:616, :671); SCLK up to 5 MHz (tCLK, :184).
-            static constexpr ClockMode    Mode     = ClockMode::_3;
-            static constexpr Units::Hertz MaxClock = Units::hertz(5'000'000);
+            static constexpr Hal::ClockMode Mode     = Hal::ClockMode::mode3;
+            static constexpr Units::Hertz   MaxClock = Units::hertz(5'000'000);
 
             /// Bit 7 set for a write (table 1, :479), the reverse of the transport's default.
             static constexpr std::uint8_t readCommand(std::uint8_t reg) {
@@ -121,26 +124,24 @@ namespace Kvasir { namespace SPI {
             /// (:659), and 00h..07h read back for setup(): no identity register, and a missing part
             /// floats SDO to all ones or zeros. 07h in that read is what the part set again at once
             /// ("if an over/undervoltage fault persists", :534).
+            // clang-format off
             static constexpr std::array Init{
-              Step::write({.reg     = Max31865Detail::RegConfiguration,
-                           .payload = {Stopped},
-                           .delay   = std::chrono::milliseconds{5}}
-              ),
-              Step::read({.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 8}
-              ),
-              Step::write({.reg     = Max31865Detail::RegConfiguration,
-                           .payload = {static_cast<std::uint8_t>(Configuration
-                                                                 | Max31865Detail::FaultClear)}}
-              ),
-              Step::write({.reg     = Max31865Detail::RegHighThreshold,
-                           .payload = {Max31865Detail::ThresholdsPor[0],
-                                       Max31865Detail::ThresholdsPor[1],
-                                       Max31865Detail::ThresholdsPor[2],
-                                       Max31865Detail::ThresholdsPor[3]}}
-              ),
-              Step::read({.reg = Max31865Detail::RegConfiguration, .count = 8, .offset = 0}
-              ),
+              Engine::Step::write({.reg     = Max31865Detail::RegConfiguration,
+                                   .payload = {Stopped},
+                                   .delay   = std::chrono::milliseconds{5}}),
+              Engine::Step::read({.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 8}),
+              Engine::Step::write({.reg     = Max31865Detail::RegConfiguration,
+                                   .payload = {static_cast<std::uint8_t>(
+                                     Configuration | Max31865Detail::FaultClear)}}),
+              Engine::Step::write({.reg     = Max31865Detail::RegHighThreshold,
+                                   .payload = {Max31865Detail::ThresholdsPor[0],
+                                               Max31865Detail::ThresholdsPor[1],
+                                               Max31865Detail::ThresholdsPor[2],
+                                               Max31865Detail::ThresholdsPor[3]}}),
+              Engine::Step::read(
+                {.reg = Max31865Detail::RegConfiguration, .count = 8, .offset = 0}),
             };
+            // clang-format on
 
             /// The fault status around the last bring-up's clear.
             struct State {
@@ -177,12 +178,13 @@ namespace Kvasir { namespace SPI {
             /// status clear follow. Reading 02h raises DRDY again.
             struct Conversion {
                 static constexpr std::array Steps{
-                  Step::read({.reg = Max31865Detail::RegRtd, .count = 2, .offset = 0}),
-                  Step::stopUnless(),
-                  Step::read({.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 2}),
-                  Step::write({.reg     = Max31865Detail::RegConfiguration,
-                               .payload = {static_cast<std::uint8_t>(
-                                 Configuration | Max31865Detail::FaultClear)}}),
+                  Engine::Step::read({.reg = Max31865Detail::RegRtd, .count = 2, .offset = 0}),
+                  Engine::Step::stopUnless(),
+                  Engine::Step::read(
+                    {.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 2}),
+                  Engine::Step::write({.reg     = Max31865Detail::RegConfiguration,
+                                       .payload = {static_cast<std::uint8_t>(
+                                         Configuration | Max31865Detail::FaultClear)}}),
                 };
 
                 struct Sample {
@@ -194,8 +196,8 @@ namespace Kvasir { namespace SPI {
                     return (data.u8(1) & 0x01U) != 0;
                 }
 
-                [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
-                    return Outcome<Sample>::ok(Sample{
+                [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
+                    return Engine::Outcome<Sample>::ok(Sample{
                       .word   = data.be16(0),
                       .status = static_cast<std::uint8_t>(data.size() > 2 ? data.u8(2) : 0U)});
                 }
@@ -205,16 +207,16 @@ namespace Kvasir { namespace SPI {
             /// raises DRDY (MAX31865.md:301, :712), so one conversion goes unread.
             struct Registers {
                 static constexpr auto       Period = std::chrono::milliseconds{RegisterCheckMs};
-                static constexpr std::array Steps{
-                  Step::read({.reg = Max31865Detail::RegConfiguration, .count = 7, .offset = 0})};
+                static constexpr std::array Steps{Engine::Step::read(
+                  {.reg = Max31865Detail::RegConfiguration, .count = 7, .offset = 0})};
 
                 struct Sample {
                     std::uint8_t configuration{};
                 };
 
-                [[nodiscard]] static constexpr Outcome<Sample> decode(Bytes data) {
-                    if(!registersRight(data)) { return Outcome<Sample>::reject(); }
-                    return Outcome<Sample>::ok(Sample{.configuration = data.u8(0)});
+                [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
+                    if(!registersRight(data)) { return Engine::Outcome<Sample>::reject(); }
+                    return Engine::Outcome<Sample>::ok(Sample{.configuration = data.u8(0)});
                 }
             };
 
@@ -225,18 +227,19 @@ namespace Kvasir { namespace SPI {
                 static constexpr std::size_t Bytes     = 1;
                 static constexpr bool        Transient = true;
 
-                [[nodiscard]] static constexpr Step encode(Value const&         value,
-                                                           std::span<std::byte> buffer) {
+                [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
+                                                                   std::span<std::byte> buffer) {
                     buffer[0] = static_cast<std::byte>(value);
-                    return Step::writeBuffer(
+                    return Engine::Step::writeBuffer(
                       {.reg = Max31865Detail::RegConfiguration, .offset = 0, .count = 1});
                 }
             };
 
             using Primary = Conversion;
-            using Reads   = std::
-              conditional_t<RegisterCheckMs != 0, List<Conversion, Registers>, List<Conversion>>;
-            using Writes = List<Kick>;
+            using Reads   = std::conditional_t<RegisterCheckMs != 0,
+                                               Engine::List<Conversion, Registers>,
+                                               Engine::List<Conversion>>;
+            using Writes  = Engine::List<Kick>;
         };
     }   // namespace Chips
 
@@ -261,60 +264,33 @@ namespace Kvasir { namespace SPI {
              typename Config      = Max31865Defaults>
     class Max31865 {
     public:
-        static constexpr std::chrono::milliseconds StartupDelay = [] {
-            if constexpr(requires { Config::StartupDelay; }) {
-                return Kvasir::asDuration(Config::StartupDelay);
-            } else {
-                return std::chrono::milliseconds{Max31865Defaults::StartupDelay};
-            }
-        }();
-        static constexpr std::chrono::milliseconds ConversionTimeout = [] {
-            if constexpr(requires { Config::ConversionTimeout; }) {
-                return Kvasir::asDuration(Config::ConversionTimeout);
-            } else {
-                return std::chrono::milliseconds{Max31865Defaults::ConversionTimeout};
-            }
-        }();
-        static constexpr std::uint16_t RejectedRestart = [] {
-            if constexpr(requires { Config::RejectedRestart; }) {
-                return static_cast<std::uint16_t>(Config::RejectedRestart);
-            } else {
-                return Max31865Defaults::RejectedRestart;
-            }
-        }();
-        static constexpr std::chrono::milliseconds RegisterCheck = [] {
-            if constexpr(requires { Config::RegisterCheck; }) {
-                return Kvasir::asDuration(Config::RegisterCheck);
-            } else {
-                return std::chrono::milliseconds{Max31865Defaults::RegisterCheck};
-            }
-        }();
-        static constexpr std::uint8_t Configuration = [] {
-            if constexpr(requires { Config::Configuration; }) {
-                return static_cast<std::uint8_t>(Config::Configuration);
-            } else {
-                return Max31865Defaults::Configuration;
-            }
-        }();
-        static constexpr std::uint8_t PlainBringUps = [] {
-            if constexpr(requires { Config::PlainBringUps; }) {
-                return static_cast<std::uint8_t>(Config::PlainBringUps);
-            } else {
-                return Max31865Defaults::PlainBringUps;
-            }
-        }();
+        static constexpr std::chrono::milliseconds StartupDelay = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config,
+                           startupDelay,
+                           std::chrono::milliseconds{Max31865Defaults::startupDelay}));
+        static constexpr std::chrono::milliseconds ConversionTimeout = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config,
+                           conversionTimeout,
+                           std::chrono::milliseconds{Max31865Defaults::conversionTimeout}));
+        static constexpr std::uint16_t RejectedRestart = static_cast<std::uint16_t>(
+          KVASIR_CONFIG_OR(Config, rejectedRestart, Max31865Defaults::rejectedRestart));
+        static constexpr std::chrono::milliseconds RegisterCheck = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config,
+                           registerCheck,
+                           std::chrono::milliseconds{Max31865Defaults::registerCheck}));
+        static constexpr std::uint8_t Configuration = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, configuration, Max31865Defaults::configuration));
+        static constexpr std::uint8_t PlainBringUps = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, plainBringUps, Max31865Defaults::plainBringUps));
 
         using Lever                         = Max31865Lever;
         static constexpr std::size_t Levers = 3;
 
         struct EngineConfig : Config {
-            static constexpr auto UnidentifiedRetry = [] {
-                if constexpr(requires { Config::UnidentifiedRetry; }) {
-                    return Kvasir::asDuration(Config::UnidentifiedRetry);
-                } else {
-                    return std::chrono::milliseconds{Max31865Defaults::UnidentifiedRetry};
-                }
-            }();
+            static constexpr auto unidentifiedRetry = Kvasir::asDuration(
+              KVASIR_CONFIG_OR(Config,
+                               unidentifiedRetry,
+                               std::chrono::milliseconds{Max31865Defaults::unidentifiedRetry}));
         };
 
         struct Chip : Chips::Max31865<Configuration, RegisterCheck.count()> {
@@ -335,16 +311,16 @@ namespace Kvasir { namespace SPI {
         Max31865(Max31865 const&)            = delete;   // the engine's callbacks point at it
         Max31865& operator=(Max31865 const&) = delete;
 
-        void handler() {
-            handler([](auto& d) { d.handler(); });
+        void turn() {
+            turn([](auto& d) { d.turn(); });
         }
 
-        /// With `turn(device())` in place of the device's own turn: how a DeviceSet drives it
+        /// With `busTurn(device())` in place of the device's own turn: how a DeviceSet drives it
         /// together with the other parts of its port (DeviceSet.hpp), one engine for all of them.
-        template<typename Turn>
-        void handler(Turn&& turn) {
+        template<typename BusTurn>
+        void turn(BusTurn&& busTurn) {
             auto const now = Clock::now();
-            turn(device_);
+            busTurn(device_);
             if(kicking_) {
                 // the lever's write first, then the bring-up; a part that stopped answering
                 // meanwhile is the engine's, and the write is not to land after its bring-up
@@ -400,7 +376,7 @@ namespace Kvasir { namespace SPI {
                 asked_  = true;
             } else if(asked_
                       && device_.template answer<typename Chip::Conversion>(ticket_)
-                           != I2C::Answer::pending)
+                           != Engine::Answer::pending)
             {
                 asked_ = false;   // failed or rejected: DRDY decides again next turn
             }
@@ -412,32 +388,28 @@ namespace Kvasir { namespace SPI {
 
         [[nodiscard]] bool valid() const { return device_.answering() && valid_; }
 
-        [[nodiscard]] Sample const& latest() const { return sample_; }
+        [[nodiscard]] Sample const& latest() const { return slot_.latest(); }
 
-        [[nodiscard]] std::uint32_t seq() const { return samples_; }
+        [[nodiscard]] std::uint32_t seq() const { return slot_.seq(); }
 
-        [[nodiscard]] std::uint32_t samples() const { return samples_; }
+        [[nodiscard]] std::uint32_t samples() const { return slot_.samples(); }
 
-        [[nodiscard]] bool fresh(std::uint32_t& seen) const {
-            if(seen == samples_) { return false; }
-            seen = samples_;
-            return true;
-        }
+        [[nodiscard]] bool fresh(std::uint32_t& seen) const { return slot_.fresh(seen); }
 
         [[nodiscard]] std::optional<std::uint16_t> code() const {
             if(!valid()) { return std::nullopt; }
-            return sample_.code;
+            return slot_.latest().code;
         }
 
         [[nodiscard]] std::optional<Units::MilliOhm> resistance() const {
             if(!valid()) { return std::nullopt; }
-            return sample_.resistance;
+            return slot_.latest().resistance;
         }
 
         /// Empty while not valid(): an open or shorted RTD is a rejection.
         [[nodiscard]] std::optional<Units::MilliDegC> temperature() const {
             if(!valid()) { return std::nullopt; }
-            return sample_.temperature;
+            return slot_.latest().temperature;
         }
 
         /// As read with the last flagged conversion; 0 since the last bring-up otherwise.
@@ -487,7 +459,7 @@ namespace Kvasir { namespace SPI {
 
         DeviceT& device() { return device_; }
 
-        DeviceT const& device() const { return device_; }
+        [[nodiscard]] DeviceT const& device() const { return device_; }
 
         [[nodiscard]] static constexpr Units::MilliOhm resistanceFor(std::uint16_t code) {
             return Units::milliOhm(std::uint64_t{code} * Units::value(Reference) * 1000U / 32768U);
@@ -546,10 +518,9 @@ namespace Kvasir { namespace SPI {
                 }
                 return;
             }
-            sample_   = {temperatureFor(code), resistanceFor(code), code};
+            slot_.publish({temperatureFor(code), resistanceFor(code), code});
             valid_    = true;
             rejected_ = 0;
-            ++samples_;
             if(barren_ != 0) {
                 UC_LOG_W("max31865: reading back after {} bring-ups, the last after {}",
                          barren_,
@@ -591,26 +562,25 @@ namespace Kvasir { namespace SPI {
                 device_.restart();
                 return;
             }
-            // written while the part still answers; the bring-up follows it in handler()
+            // written while the part still answers; the bring-up follows it in turn()
             device_.template rewrite<typename Chip::Kick>(kick_(lever_));
             kicking_ = true;
         }
 
-        DeviceT       device_{};
-        Sample        sample_{};
-        bool          valid_{};
-        bool          wasUp_{};
-        bool          asked_{};
-        bool          kicking_{};            ///< a lever's write is on its way, the bring-up waits
-        Lever         lever_{Lever::none};   ///< before the last bring-up restart_() started
-        std::uint16_t barren_{};
+        DeviceT            device_{};
+        SampleSlot<Sample> slot_{};
+        bool               valid_{};
+        bool               wasUp_{};
+        bool               asked_{};
+        bool               kicking_{};   ///< a lever's write is on its way, the bring-up waits
+        Lever              lever_{Lever::none};   ///< before the last bring-up restart_() started
+        std::uint16_t      barren_{};
         std::array<std::uint16_t, Levers> pulled_{};
         std::array<std::uint16_t, Levers> recovered_{};
-        I2C::Ticket                       ticket_{};
+        Engine::Ticket                    ticket_{};
         Kvasir::Deadline<Clock>           conversionDue_{};   ///< armed from the first turn on
         std::uint8_t                      fault_{};
         std::uint32_t                     faults_{};
-        std::uint32_t                     samples_{};
         std::uint32_t                     seenConversion_{};
         std::uint32_t                     seenRegisters_{};
         std::uint32_t unidentifiedWhenUp_{};   ///< unidentified() when the part last answered
