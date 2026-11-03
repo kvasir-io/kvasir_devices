@@ -35,7 +35,7 @@ static_assert(Chips::Cy8cmbr3102Detail::crc16(std::array<std::uint8_t,
 
 // The block: SparkFun's moisture setup on the 3102 factory defaults, the CRC behind it, LE.
 static_assert([] {
-    auto const& b = Soil::Configuration;
+    auto const& b = Soil::configuration;
     return b[0x00] == 0x01 && b[0x01] == 0x00   // SENSOR_EN: CS0 only
         && b[0x08] == 0x00                      // 500 counts/pF
         && b[0x0C] == 128 && b[0x0D] == 128     // BASE_THRESHOLD0/1
@@ -46,7 +46,7 @@ static_assert([] {
         && b[0x4F] == 0x58                      // auto-reset 5 s both, ATH_EN
         && b[0x51] == 0x37 && b[0x52] == 5      // address, 100 ms
         && b[0x55] == 10                        // STATE_TIMEOUT
-        && b[0x7E] == (Soil::ConfigCrc & 0xFF) && b[0x7F] == (Soil::ConfigCrc >> 8);
+        && b[0x7E] == (Soil::configCrc & 0xFF) && b[0x7F] == (Soil::configCrc >> 8);
 }());
 
 // The template parameters reach the block, and the CRC follows it.
@@ -60,10 +60,10 @@ using Other = Chips::Cy8cmbr3102<0x38,
                                  Chips::Cy8cmbr3102Detail::AutoReset::after20s,
                                  Chips::Cy8cmbr3102Detail::Spo0::sensor,
                                  SlowRefresh>;
-static_assert(Other::Configuration[0x00] == 0x02 && Other::Configuration[0x08] == 0x0C
-              && Other::Configuration[0x40] == 0x00 && Other::Configuration[0x4C] == 0x01
-              && Other::Configuration[0x4F] == 0xA8 && Other::Configuration[0x51] == 0x38
-              && Other::Configuration[0x52] == 10 && Other::ConfigCrc != Soil::ConfigCrc);
+static_assert(Other::configuration[0x00] == 0x02 && Other::configuration[0x08] == 0x0C
+              && Other::configuration[0x40] == 0x00 && Other::configuration[0x4C] == 0x01
+              && Other::configuration[0x4F] == 0xA8 && Other::configuration[0x51] == 0x38
+              && Other::configuration[0x52] == 10 && Other::configCrc != Soil::configCrc);
 
 // The debug block: SYNC1 7, sensor 0, 23 pF, difference 0x0012, baseline 0x0456, raw 0x0468,
 // average 0, 0xE6, SYNC2 7.
@@ -194,13 +194,13 @@ std::size_t debugReads() {
 
 void identified() {
     I2cCase const testcase{"CY8CMBR3102 identified, configured, reading"};
-    Part          part{Soil::ConfigCrc};
+    Part          part{Soil::configCrc};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
     check(d.identified(), "FAMILY_ID 0x9A, DEVICE_ID 0x0A01");
     checkEq(d.state().deviceId, 0x0A01U, "DEVICE_ID, little endian");
-    checkEq(d.state().storedCrc, Soil::ConfigCrc, "CONFIG_CRC as stored");
+    checkEq(d.state().storedCrc, Soil::configCrc, "CONFIG_CRC as stored");
     check(d.state().configured, "the stored CRC is the description's: nothing to provision");
     check(d.state().lastError == Soil::CommandError::none, "CTRL_CMD_ERR");
     checkEq(d.latest().raw, 0x0468U, "DEBUG_RAW_COUNT0 reached the sample");
@@ -218,7 +218,7 @@ void identified() {
 
 void rejected() {
     I2cCase const testcase{"CY8CMBR3102 rejects another family member"};
-    Part          part{Soil::ConfigCrc, 0x0A06};   // a CY8CMBR3106S
+    Part          part{Soil::configCrc, 0x0A06};   // a CY8CMBR3106S
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     runFor(d, 500ms);
@@ -257,11 +257,11 @@ void provision() {
         check(ws[0].size() == 129 && ws[0][0] == 0x00, "one write of 0x00..0x7F");
         bool same = true;
         for(std::size_t i = 0; i < 128 && ws[0].size() == 129; ++i) {
-            same = same && ws[0][i + 1] == Soil::Configuration[i];
+            same = same && ws[0][i + 1] == Soil::configuration[i];
         }
         check(same, "the compile-time block, CRC included");
-        checkEq(ws[0][0x7F], Soil::ConfigCrc & 0xFFU, "CONFIG_CRC low byte at 0x7E");
-        checkEq(ws[0][0x80], Soil::ConfigCrc >> 8U, "high byte at 0x7F");
+        checkEq(ws[0][0x7F], Soil::configCrc & 0xFFU, "CONFIG_CRC low byte at 0x7E");
+        checkEq(ws[0][0x80], Soil::configCrc >> 8U, "high byte at 0x7F");
         check(ws[1] == std::vector<std::uint8_t>{0x86, 0x02}, "then SAVE_CHECK_CRC (TRM 1.5.80)");
         check(ws[2] == std::vector<std::uint8_t>{0x86, 0xFF}, "then the software reset");
         check(at[2] - at[1] >= 500ms, "the save is given 500 ms before the reset");
@@ -276,7 +276,7 @@ void provision() {
             500ms),
           "Stored read back");
     check(d.latest<Soil::Stored>().configured
-            && d.latest<Soil::Stored>().storedCrc == Soil::ConfigCrc,
+            && d.latest<Soil::Stored>().storedCrc == Soil::configCrc,
           "CONFIG_CRC now this configuration's");
 
     auto const after = FakeBus::log.size();
@@ -286,7 +286,7 @@ void provision() {
 
 void setAddress() {
     I2cCase const testcase{"CY8CMBR3102 SetAddress and Command"};
-    Part          part{Soil::ConfigCrc};
+    Part          part{Soil::configCrc};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");
@@ -301,19 +301,19 @@ void setAddress() {
     runFor(d, 2s);
     auto const block = Soil::configurationFor(0x42);
     check(block[0x51] == 0x42, "I2C_ADDR in the block");
-    check(Soil::crc(block) != Soil::ConfigCrc, "and a CRC of its own");
+    check(Soil::crc(block) != Soil::configCrc, "and a CRC of its own");
     check(block[0x7E] == (Soil::crc(block) & 0xFF), "behind it");
     check(part.m.get(0x51)[0] == 0x42 && part.m.get(0x7E)[0] == block[0x7E],
           "the block reached the part");
     check(hasWrite({0x86, 0x02}, from) && hasWrite({0x86, 0xFF}, from), "saved and reset");
-    std::array<std::byte, Soil::BlockBytes> buf{};
+    std::array<std::byte, Soil::blockBytes> buf{};
     static_cast<void>(Soil::SetAddress::encode(0x05, buf));
     check(buf[0x51] == std::byte{0x37}, "an address outside 8..119 writes Addr");
 }
 
 void syncMismatch() {
     I2cCase const    testcase{"CY8CMBR3102 sync counters disagree: retried, then read"};
-    Part             part{Soil::ConfigCrc};
+    Part             part{Soil::configCrc};
     int              torn = 2;
     ScopedHook const answering{
       FakeBus::respond,
@@ -335,7 +335,7 @@ void syncMismatch() {
 
 void wakeNaks() {
     I2cCase const    testcase{"CY8CMBR3102 NAKs while it wakes: put on the wire again"};
-    Part             part{Soil::ConfigCrc};
+    Part             part{Soil::configCrc};
     int              naks = 3;   // the bring-up's first read
     ScopedHook const answering{
       FakeBus::respond,
@@ -369,7 +369,7 @@ void wakeNaks() {
 
 void capacitance() {
     I2cCase const testcase{"CY8CMBR3102 Capacitance on demand: SENSOR_ID away and back"};
-    Part          part{Soil::ConfigCrc};
+    Part          part{Soil::configCrc};
     FakeBus::respond = std::ref(part.m);
     Dev<Soil> d{};
     check(runUntil(d, [&] { return d.valid(); }, 1s), "first sample");

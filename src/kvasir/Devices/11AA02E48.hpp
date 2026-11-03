@@ -33,8 +33,8 @@ namespace Kvasir { namespace Eeprom11AA02E48 {
                              6>>
     readMacBlocking() {
         using std::chrono::microseconds;
-        static constexpr microseconds HalfBit = Timing::halfBit;
-        static_assert(HalfBit >= microseconds{5} && HalfBit <= microseconds{50},
+        static constexpr microseconds halfBit = Timing::halfBit;
+        static_assert(halfBit >= microseconds{5} && halfBit <= microseconds{50},
                       "UNI/O bit period T_E = 2 x HalfBit is 10 .. 100 us");
         bool error = false;
         // Counted here, logged once the line is released: a log call between two half bits
@@ -47,18 +47,18 @@ namespace Kvasir { namespace Eeprom11AA02E48 {
 
         // Each half bit is sampled a quarter bit into it, and the bit's remainder is waited out
         // from that sample on, so the sample point does not drift when HalfBit is odd.
-        static constexpr microseconds Quarter = HalfBit / 2;
-        static constexpr microseconds Rest    = HalfBit - Quarter;
+        static constexpr microseconds quarter = halfBit / 2;
+        static constexpr microseconds rest    = halfBit - quarter;
 
         // The SAK is the part's to drive: the line is released first, since a NoMAK before it
         // leaves the master driving low.
         auto checkSak = [&, first = true]() mutable {
             setPin();
-            Clock::delay(Quarter);
+            Clock::delay(quarter);
             bool const startBit = apply(read(Pin{}));
-            Clock::delay(HalfBit);
+            Clock::delay(halfBit);
             bool const bit = apply(read(Pin{}));
-            Clock::delay(Rest);
+            Clock::delay(rest);
             if(first) {
                 first = false;
                 return;
@@ -69,14 +69,14 @@ namespace Kvasir { namespace Eeprom11AA02E48 {
         auto outBit = [&](bool v) {
             if(v) {
                 clearPin();
-                Clock::delay(HalfBit);
+                Clock::delay(halfBit);
                 setPin();
             } else {
                 setPin();
-                Clock::delay(HalfBit);
+                Clock::delay(halfBit);
                 clearPin();
             }
-            Clock::delay(HalfBit);
+            Clock::delay(halfBit);
         };
 
         auto const outByte = [&](std::byte v, bool mak) {
@@ -88,12 +88,12 @@ namespace Kvasir { namespace Eeprom11AA02E48 {
         auto const inByte = [&](bool mak) {
             std::byte v{};
             for(std::size_t i{}; i < 8; ++i) {
-                Clock::delay(Quarter);
+                Clock::delay(quarter);
                 bool const startBit = apply(read(Pin{}));
-                Clock::delay(HalfBit);
+                Clock::delay(halfBit);
                 bool const bit = apply(read(Pin{}));
                 v |= (bit ? 0x1_b : 0x0_b) << (7 - i);
-                Clock::delay(Rest);
+                Clock::delay(rest);
                 if(startBit == bit) { ++violations; }
             }
             outBit(mak);
@@ -111,14 +111,14 @@ namespace Kvasir { namespace Eeprom11AA02E48 {
         outByte(0xA0_b, true);
         outByte(0x03_b, true);
 
-        static constexpr std::size_t N = 6;
+        static constexpr std::size_t n = 6;
         outByte(0x00_b, true);
-        outByte(std::byte{0xFF - (N - 1)}, true);
+        outByte(std::byte{0xFF - (n - 1)}, true);
 
-        std::array<std::byte, N> mac{};
+        std::array<std::byte, n> mac{};
         // MAK after each byte but the last, which gets NoMAK: that ends the READ (4.1) and
         // the part answers it with its SAK and returns to standby, leaving the line to the master.
-        for(std::size_t i{}; i < N; ++i) { mac[i] = inByte(i + 1 < N); }
+        for(std::size_t i{}; i < n; ++i) { mac[i] = inByte(i + 1 < n); }
 
         setPin();
         if(violations != 0) {

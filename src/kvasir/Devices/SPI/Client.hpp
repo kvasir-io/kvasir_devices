@@ -12,7 +12,7 @@
 
 namespace Kvasir::SPI {
 
-namespace detail {
+namespace Detail {
     /// The pin's two functions, apart from ChipSelect's `Deselect`: `select` is one function per pin.
     template<typename Cs>
     struct CsPin {
@@ -20,15 +20,15 @@ namespace detail {
 
         static void deselect() { apply(set(Cs{})); }
     };
-}   // namespace detail
+}   // namespace Detail
 
 /// A GPIO chip select, active low. `select` is also the device's identity for a hold (QueueCore): one pin,
 /// one holder. Deselect = false: CS stays low after the frame (LTC2400 shows EOC on SDO, ADS8675's CS
 /// rise starts a conversion), `lines.deselect` is null.
 template<typename Cs, bool Deselect = true>
 struct ChipSelect {
-    static constexpr void (*select)()   = &detail::CsPin<Cs>::select;
-    static constexpr void (*deselect)() = &detail::CsPin<Cs>::deselect;
+    static constexpr void (*select)()   = &Detail::CsPin<Cs>::select;
+    static constexpr void (*deselect)() = &Detail::CsPin<Cs>::deselect;
 
     /// CS high before anything else: a part that sees CS low early answers garbage. For constructors.
     static void release() { apply(set(Cs{})); }

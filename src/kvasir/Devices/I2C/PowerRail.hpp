@@ -90,25 +90,25 @@ struct PowerRailDefaults {
 /// The switch's pin claim, if it has one, becomes the rail's (ForwardClaims), so a Startup that is handed the rail
 /// sees the pin as taken.
 template<typename Clock, typename Switch, typename Config = PowerRailDefaults>
-struct PowerRail : Kvasir::detail::ForwardClaims<Switch> {
+struct PowerRail : Kvasir::Detail::ForwardClaims<Switch> {
     using TimePoint = typename Clock::time_point;
 
-    static constexpr std::chrono::milliseconds OffTime
+    static constexpr std::chrono::milliseconds offTime
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Config, offTime, PowerRailDefaults::offTime));
 
-    static constexpr std::chrono::milliseconds SettleTime
+    static constexpr std::chrono::milliseconds settleTime
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Config, settleTime, PowerRailDefaults::settleTime));
 
-    static constexpr std::chrono::milliseconds AbsentBeforeCycle = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds absentBeforeCycle = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config, absentBeforeCycle, PowerRailDefaults::absentBeforeCycle));
 
-    static constexpr std::chrono::milliseconds CycleIntervalMax = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds cycleIntervalMax = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config, cycleIntervalMax, PowerRailDefaults::cycleIntervalMax));
 
-    static_assert(OffTime > std::chrono::milliseconds::zero()
-                    && SettleTime >= std::chrono::milliseconds::zero()
-                    && AbsentBeforeCycle > std::chrono::milliseconds::zero()
-                    && CycleIntervalMax >= AbsentBeforeCycle,
+    static_assert(offTime > std::chrono::milliseconds::zero()
+                    && settleTime >= std::chrono::milliseconds::zero()
+                    && absentBeforeCycle > std::chrono::milliseconds::zero()
+                    && cycleIntervalMax >= absentBeforeCycle,
                   "an off time, a wait before a cycle, and a maximum that wait grows towards");
 
     enum class State : std::uint8_t { off, settling, on };
@@ -145,7 +145,7 @@ struct PowerRail : Kvasir::detail::ForwardClaims<Switch> {
             b.restart();
             { b.absentCount() } -> std::convertible_to<std::size_t>;
             { b.answeringCount() } -> std::convertible_to<std::size_t>;
-            { B::Parts } -> std::convertible_to<std::size_t>;
+            { B::parts } -> std::convertible_to<std::size_t>;
         }
     void turn(B&        bus,
               BusTurn&& busTurn) {
@@ -159,7 +159,7 @@ struct PowerRail : Kvasir::detail::ForwardClaims<Switch> {
         case State::off:
             if(wait_.armed(now)) { break; }
             Switch::on();
-            wait_.restart(SettleTime, now);
+            wait_.restart(settleTime, now);
             state_ = State::settling;
             break;
         case State::settling:
@@ -170,7 +170,7 @@ struct PowerRail : Kvasir::detail::ForwardClaims<Switch> {
             break;
         case State::on:
             busTurn(bus);
-            switch(due_(bus.absentCount(), bus.answeringCount() + offline_(bus) == B::Parts, now)) {
+            switch(due_(bus.absentCount(), bus.answeringCount() + offline_(bus) == B::parts, now)) {
             case Due::no: return;
             case Due::requested:
                 UC_LOG_D("i2c power rail: cycle {} on request", cycles_ + 1);
@@ -197,7 +197,7 @@ private:
     void switchOff_(TimePoint now) {
         Switch::off();
         cycleRequested_ = false;
-        wait_.restart(OffTime, now);
+        wait_.restart(offTime, now);
         state_ = State::off;
     }
 
@@ -219,13 +219,13 @@ private:
         // The wait is the first one again only once every part answers: right after a cycle
         // none is absent yet -- the one that will not come back has not been NAKed often
         // enough to be parked -- and that says nothing about it.
-        if(allAnswering) { interval_ = AbsentBeforeCycle; }
+        if(allAnswering) { interval_ = absentBeforeCycle; }
         if(absent == 0) {
             // A part that is parked, answers one probe and is parked again is what the rail
             // is for as much as one that stays away: the absence is only over once no part
             // has been absent for as long as it takes to be cycled for.
             if(absentSince_) {
-                if(allPresent_.isStopped()) { allPresent_.restart(AbsentBeforeCycle, now); }
+                if(allPresent_.isStopped()) { allPresent_.restart(absentBeforeCycle, now); }
                 if(allPresent_.expired(now)) { absentSince_.reset(); }
             }
             return Due::no;
@@ -237,7 +237,7 @@ private:
         }
         if(now - *absentSince_ < interval_) { return Due::no; }
         // Doubled without overflowing, whatever CycleIntervalMax a Config declares.
-        interval_ = Kvasir::doubledUpTo(interval_, CycleIntervalMax);
+        interval_ = Kvasir::doubledUpTo(interval_, cycleIntervalMax);
         return Due::absent;
     }
 
@@ -245,7 +245,7 @@ private:
     bool                      started_{false};
     bool                      cycleRequested_{false};
     std::uint32_t             cycles_{};
-    std::chrono::milliseconds interval_{AbsentBeforeCycle};
+    std::chrono::milliseconds interval_{absentBeforeCycle};
     Kvasir::Deadline<Clock>   wait_{};          ///< the off time, then the settle time
     std::optional<TimePoint>  absentSince_{};   ///< since when a part has been absent
     /// Armed when no part has been absent any more, after one was: the absence is over when

@@ -54,13 +54,13 @@ namespace MuxTest {
     /// run is rejected after the engine's retries -- and that exit has to let the switch go
     /// like every other, or the channel is held for good.
     struct FlagChip {
-        static constexpr std::string_view Name          = "FLAG";
-        static constexpr Address7         Address       = 0x60;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "FLAG";
+        static constexpr Address7         address       = 0x60;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Data {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
               Kvasir::Engine::Step::check(10ms),
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1})};
@@ -85,13 +85,13 @@ namespace MuxTest {
 
     /// A part that is always due: a one-byte read every millisecond, on channel 0.
     struct BusyChip {
-        static constexpr std::string_view Name          = "BUSY";
-        static constexpr Address7         Address       = 0x61;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "BUSY";
+        static constexpr Address7         address       = 0x61;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Data {
-            static constexpr auto       Period = std::chrono::milliseconds{1};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{1};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -103,13 +103,13 @@ namespace MuxTest {
 
     /// A part on a 10 ms period, on channel 3, handled after the busy one every turn.
     struct TenMsChip {
-        static constexpr std::string_view Name          = "TENMS";
-        static constexpr Address7         Address       = 0x62;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "TENMS";
+        static constexpr Address7         address       = 0x62;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Data {
-            static constexpr auto       Period = std::chrono::milliseconds{10};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{10};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -134,16 +134,16 @@ namespace MuxTest {
 
     // The address check keys on (address, gate), so the same part on two channels is legal --
     // and two on the *same* channel is not.
-    static_assert(detail::addressesDistinct<Left,
+    static_assert(Detail::addressesDistinct<Left,
                                             Right>(),
                   "0x44 twice, but on channels 0 and 3");
-    static_assert(!detail::addressesDistinct<Left,
+    static_assert(!Detail::addressesDistinct<Left,
                                              Left>(),
                   "0x44 twice on channel 0");
-    static_assert(!detail::addressesDistinct<Dev<Chips::Sht3x>,
+    static_assert(!Detail::addressesDistinct<Dev<Chips::Sht3x>,
                                              Dev<Chips::Sht3x>>(),
                   "0x44 twice on the bare bus");
-    static_assert(!detail::addressesDistinct<Dev<Chips::Sht3x>,
+    static_assert(!Detail::addressesDistinct<Dev<Chips::Sht3x>,
                                              Left>(),
                   "0x44 on the bare bus and on channel 0: the one in front is on every "
                   "channel's wire, and answers with the one behind");
@@ -164,11 +164,11 @@ namespace MuxTest {
                   "in front of the switch");
     static_assert(FrontBus::segmentOf<Left>() == 1 && FrontBus::segmentOf<Right>() == 4,
                   "the channels keep their segments");
-    static_assert(FrontBus::Switches == 1,
+    static_assert(FrontBus::switches == 1,
                   "one switch, whoever comes first in the list");
     // And a Bus whose only gated part is the one in front still has its switch and an arbiter.
     using OnlyFrontBus = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, InFront>;
-    static_assert(OnlyFrontBus::Switches == 1 && OnlyFrontBus::segmentOf<InFront>() == 0,
+    static_assert(OnlyFrontBus::switches == 1 && OnlyFrontBus::segmentOf<InFront>() == 0,
                   "the switch is found by the gate, not by a segment behind it");
     static_assert(std::is_same_v<OnlyFrontBus::SwitchDeviceAt<0>,
                                  MuxDev>,
@@ -207,9 +207,9 @@ void muxGate() {
     std::size_t  gatedBad = 0;
     for(auto const& t : FakeBus::log) {
         if(!t.isBus()) { continue; }
-        if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
+        if(t.address == Chips::Tca9548a::address && t.isWrite() && t.sent.size() == 1) {
             selected = t.sent[0];
-        } else if(t.address == Chips::Sht3x::Address) {
+        } else if(t.address == Chips::Sht3x::address) {
             if(selected == 0x01) {
                 ++gatedOk;
             } else {
@@ -231,9 +231,9 @@ void muxGate() {
     std::size_t wrong   = 0;
     for(auto const& t : FakeBus::log) {
         if(!t.isBus()) { continue; }
-        if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
+        if(t.address == Chips::Tca9548a::address && t.isWrite() && t.sent.size() == 1) {
             selected = t.sent[0];
-        } else if(t.address == Chips::Sht3x::Address) {
+        } else if(t.address == Chips::Sht3x::address) {
             if(selected == 0x01) {
                 ++leftOk;
             } else if(selected == 0x08) {
@@ -259,15 +259,15 @@ void muxGate() {
         std::size_t behindBad  = 0;
         for(auto const& t : FakeBus::log) {
             if(!t.isBus()) { continue; }
-            if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
+            if(t.address == Chips::Tca9548a::address && t.isWrite() && t.sent.size() == 1) {
                 selected = t.sent[0];
-            } else if(t.address == TenMsChip::Address) {
+            } else if(t.address == TenMsChip::address) {
                 if(selected == 0x00) {
                     ++frontOk;
                 } else {
                     ++frontHeard;
                 }
-            } else if(t.address == Chips::Sht3x::Address) {
+            } else if(t.address == Chips::Sht3x::address) {
                 if(selected == 0x01 || selected == 0x08) {
                     ++behindOk;
                 } else {
@@ -299,11 +299,11 @@ void muxGate() {
         std::size_t  between      = 0;
         for(auto const& t : FakeBus::log) {
             if(!t.isBus()) { continue; }
-            if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
+            if(t.address == Chips::Tca9548a::address && t.isWrite() && t.sent.size() == 1) {
                 sel = t.sent[0];
                 continue;
             }
-            if(t.address != Chips::Sht3x::Address) { continue; }
+            if(t.address != Chips::Sht3x::address) { continue; }
             if(sel == 0x01) {
                 if(t.isWrite() && t.sent == std::vector<std::uint8_t>{0x24, 0x00}) {
                     leftMeasures = true;
@@ -333,7 +333,7 @@ void muxGate() {
         runFor(orphan, 300ms);
         std::size_t spoke = 0;
         for(auto const& t : FakeBus::log) {
-            if(t.isBus() && t.address == Chips::Sht3x::Address) { ++spoke; }
+            if(t.isBus() && t.address == Chips::Sht3x::address) { ++spoke; }
         }
         checkEq(spoke, std::size_t{0}, "and nothing of its went out");
     }
@@ -366,9 +366,9 @@ void muxGate() {
         for(std::size_t i = 0; i < FakeBus::log.size(); ++i) {
             auto const& t = FakeBus::log[i];
             if(!t.isBus()) { continue; }
-            if(t.address == Chips::Tca9548a::Address && t.isWrite() && t.sent.size() == 1) {
+            if(t.address == Chips::Tca9548a::address && t.isWrite() && t.sent.size() == 1) {
                 selected = t.sent[0];
-            } else if(i >= fromReject && t.address == Chips::Sht3x::Address && selected == 0x08) {
+            } else if(i >= fromReject && t.address == Chips::Sht3x::address && selected == 0x08) {
                 ++rightGot;
             }
         }
@@ -419,7 +419,7 @@ void muxGate() {
                 "a release by a part without the switch frees nothing");
         check(!other.claim(), "so channel 3 still waits");
         holder.release();
-        checkEq(arbiter4.holder, MuxArbiter::NoHolder, "the holder's own release frees it");
+        checkEq(arbiter4.holder, MuxArbiter::noHolder, "the holder's own release frees it");
         check(settle(other, mux4), "and channel 3 gets it");
     }
 
@@ -464,7 +464,7 @@ void muxGate() {
         check(settle(first, mux5), "the first part gets channel 0");
         check(second.claim(), "a second part of channel 0 goes at once");
         first.release();
-        checkEq(arbiter5.holder, MuxArbiter::NoHolder, "the first release frees the switch");
+        checkEq(arbiter5.holder, MuxArbiter::noHolder, "the first release frees the switch");
         check(settle(other, mux5), "channel 3 takes it");
         second.release();
         checkEq(arbiter5.holder,
@@ -495,7 +495,7 @@ void muxGate() {
         first.release();
         second.release();
         checkEq(arbiter6.holder,
-                BasicMuxArbiter<HoldChannel>::NoHolder,
+                BasicMuxArbiter<HoldChannel>::noHolder,
                 "free after the last release");
         check(settle(other, mux6), "and channel 3 gets it");
     }
@@ -552,8 +552,8 @@ void muxGate() {
         static_assert(
           std::is_same_v<Front, Kvasir::I2C::SwitchGate<MuxDev, Kvasir::I2C::FrontPosition>>);
         static_assert(sizeof(Front) == sizeof(Port), "the closed position costs no byte");
-        static_assert(Channel0::Mask == 1U && !Channel0::Front && Front::Mask == 0U
-                      && Front::Front);
+        static_assert(Channel0::mask == 1U && !Channel0::front && Front::mask == 0U
+                      && Front::front);
     }
     SwitchWire wire12{};
     FakeBus::respond = std::ref(wire12);
@@ -565,10 +565,10 @@ void muxGate() {
         channel.bind(mux9, arbiter9);
         front.bind(mux9, arbiter9);
         check(settle(front, mux9), "the part in front gets the switch");
-        checkEq(arbiter9.holder, MuxPort<MuxDev, ShareChannel>::Closed, "and holds it closed");
+        checkEq(arbiter9.holder, MuxPort<MuxDev, ShareChannel>::closed, "and holds it closed");
         check(!channel.claim(), "channel 0 waits while the switch is closed for it");
         front.release();
-        checkEq(arbiter9.holder, MuxArbiter::NoHolder, "the front's release frees it");
+        checkEq(arbiter9.holder, MuxArbiter::noHolder, "the front's release frees it");
         check(settle(channel, mux9), "channel 0 gets it");
         checkEq(arbiter9.holder, std::uint8_t{0}, "on channel 0");
         check(!front.claim(), "now the front waits");
@@ -604,14 +604,14 @@ void muxFaults() {
             [&] { return left.valid(); },
             2s),
           "the part behind channel 0 is up");
-    checkEq(wire.control[MuxDev::Address], 0x01, "with the switch on its channel");
+    checkEq(wire.control[MuxDev::address], 0x01, "with the switch on its channel");
     checkEq(mux.mismatches<Channels>(), 0U, "and every read-back so far matched");
     // The switch loses its register -- a brown-out -- while the engine believes channel 0.
-    wire.control[MuxDev::Address] = 0x00;
+    wire.control[MuxDev::address] = 0x00;
     auto const from               = FakeBus::log.size();
     check(runUntil(
             all(mux, left),
-            [&] { return wire.control[MuxDev::Address] == 0x01; },
+            [&] { return wire.control[MuxDev::address] == 0x01; },
             600ms),
           "written again within the 500 ms verify interval");
     check(mux.mismatches<Channels>() >= 1, "because the read-back caught it");
@@ -624,7 +624,7 @@ void muxFaults() {
     ScopedHook const answeringAgain{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(a == MuxDev::Address && !muxThere) { return FakeBus::Result::nack; }
+          if(a == MuxDev::address && !muxThere) { return FakeBus::Result::nack; }
           return wire2(a, s, r);
       }};
     Kvasir::I2C::MuxArbiter arbiter2{};
@@ -636,13 +636,13 @@ void muxFaults() {
             [&] { return mux2.absent(); },
             3s),
           "the switch is parked after its NAKs");
-    checkEq(transactionsTo(Chips::Sht3x::Address),
+    checkEq(transactionsTo(Chips::Sht3x::address),
             std::size_t{0},
             "the part behind it never got the switch, so it never talked");
     check(left2.link() == Kvasir::Link::starting,
           "and is starting, not absent: nothing was asked of it");
     runFor(all(mux2, left2), 500ms);
-    checkEq(transactionsTo(Chips::Sht3x::Address),
+    checkEq(transactionsTo(Chips::Sht3x::address),
             std::size_t{0},
             "and still nothing while the switch is away");
     muxThere = true;
@@ -657,9 +657,9 @@ void muxFaults() {
         std::size_t  bad      = 0;
         for(auto const& tr : FakeBus::log) {
             if(!tr.isBus()) { continue; }
-            if(tr.address == MuxDev::Address && tr.isWrite() && tr.sent.size() == 1) {
+            if(tr.address == MuxDev::address && tr.isWrite() && tr.sent.size() == 1) {
                 selected = tr.sent[0];
-            } else if(tr.address == Chips::Sht3x::Address && selected != 0x01) {
+            } else if(tr.address == Chips::Sht3x::address && selected != 0x01) {
                 ++bad;
             }
         }
@@ -674,7 +674,7 @@ void muxFaults() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(a == Chips::Sht3x::Address && nakRead && !r.empty()) {
+          if(a == Chips::Sht3x::address && nakRead && !r.empty()) {
               nakRead = false;
               return FakeBus::Result::nack;
           }
@@ -694,7 +694,7 @@ void muxFaults() {
     checkEq(arbiter3.holder, std::uint8_t{0}, "channel 0 held the switch for that read");
     left3.turn();   // takes the NAK
     checkEq(arbiter3.holder,
-            Kvasir::I2C::MuxArbiter::NoHolder,
+            Kvasir::I2C::MuxArbiter::noHolder,
             "the NAK ended the run, and the run let the switch go");
     check(settle(other, mux3), "so the other channel gets it at once");
     other.release();

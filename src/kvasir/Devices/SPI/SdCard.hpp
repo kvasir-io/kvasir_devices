@@ -67,10 +67,10 @@ namespace Kvasir { namespace SPI {
     template<typename Spi, typename Clock, typename Cs, typename Config = SdCardDefaults>
     class SdCard {
     public:
-        static constexpr std::size_t BlockBytes    = 512;
-        using Block                                = std::span<std::byte, BlockBytes>;
-        using ConstBlock                           = std::span<std::byte const, BlockBytes>;
-        static constexpr std::uint8_t RejectedLost = static_cast<std::uint8_t>(
+        static constexpr std::size_t blockBytes    = 512;
+        using Block                                = std::span<std::byte, blockBytes>;
+        using ConstBlock                           = std::span<std::byte const, blockBytes>;
+        static constexpr std::uint8_t rejectedLost = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, rejectedLost, SdCardDefaults::rejectedLost));
 
         SdCard() { Select::release(); }
@@ -171,7 +171,7 @@ namespace Kvasir { namespace SPI {
             gap,
         };
 
-        static constexpr std::size_t ResponseBytes = 16;   // NCR bound, see the file comment
+        static constexpr std::size_t responseBytes = 16;   // NCR bound, see the file comment
 
         static constexpr typename Spi::Setup identificationSetup = Spi::setup(
           Hal::ClockMode::mode0,
@@ -305,7 +305,7 @@ namespace Kvasir { namespace SPI {
     private:
         /// Independent vectors: a wrong CRC16 would pass a model that borrowed this function.
         static constexpr std::uint16_t crc16OfBlockFilledWith_(std::uint8_t v) {
-            std::array<std::byte, BlockBytes> b{};
+            std::array<std::byte, blockBytes> b{};
             for(auto& x : b) { x = std::byte{v}; }
             return crc16(b);
         }
@@ -365,7 +365,7 @@ namespace Kvasir { namespace SPI {
                 }
                 if(r == SdResult::rejected) {
                     if(rejectedInRow_ != 0xFF) { ++rejectedInRow_; }
-                    if(rejectedInRow_ < RejectedLost) { return; }
+                    if(rejectedInRow_ < rejectedLost) { return; }
                     UC_LOG_W("sd card: {} operations rejected in a row -- lost?", rejectedInRow_);
                 }
             }
@@ -413,7 +413,7 @@ namespace Kvasir { namespace SPI {
                 {
                     auto const b = std::to_integer<std::uint8_t>(one_[0]);
                     if((b & 0x80U) != 0) {   // not a response yet: the MSB of R1 is 0 (7.3.2.1)
-                        if(++polls_ >= ResponseBytes) {
+                        if(++polls_ >= responseBytes) {
                             endAndFault_(SdResult::timeout);
                             return;
                         }
@@ -447,7 +447,7 @@ namespace Kvasir { namespace SPI {
                     }
                     step_ = Step::dataIn;
                     if(after_ == After::readToken) {
-                        receive_(std::span{data_, BlockBytes});
+                        receive_(std::span{data_, blockBytes});
                     } else {
                         receive_(std::span{small_}.first(16));
                     }
@@ -501,7 +501,7 @@ namespace Kvasir { namespace SPI {
         void blockIn_(typename Clock::time_point) {
             auto const got = Bytes{crc_}.be16(0);
             if(after_ == After::readToken) {
-                if(crc16(std::span<std::byte const>{data_, BlockBytes}) != got) {
+                if(crc16(std::span<std::byte const>{data_, blockBytes}) != got) {
                     ++crcErrors_;
                     finishOp_(SdResult::crcError);
                 } else {
@@ -605,7 +605,7 @@ namespace Kvasir { namespace SPI {
                 }
                 // start token, block, CRC16: one held request each
                 step_     = Step::dataOut;
-                writeCrc_ = crc16(std::span<std::byte const>{cdata_, BlockBytes});
+                writeCrc_ = crc16(std::span<std::byte const>{cdata_, blockBytes});
                 putBe16(crc_, 0, writeCrc_);
                 sendParts_ = 0;
                 sendNextPart_();
@@ -620,7 +620,7 @@ namespace Kvasir { namespace SPI {
         void sendNextPart_() {
             switch(sendParts_++) {
             case 0:  send_(startToken, true); break;
-            case 1:  send_(std::span<std::byte const>{cdata_, BlockBytes}, true); break;
+            case 1:  send_(std::span<std::byte const>{cdata_, blockBytes}, true); break;
             default: send_(crc_, true); break;
             }
         }

@@ -36,29 +36,29 @@
 
 namespace Kvasir { namespace SPI { namespace Ltc2400 {
 
-    inline constexpr std::string_view Name = "LTC2401";
+    inline constexpr std::string_view name = "LTC2401";
 
     // The wire (LTC2401_LTC2402.md, Timing Characteristics, page 4; external SCK = Note 9)
 
     /// SCK idles LOW and the result is latched on the rising edge, shifted out on the falling one
     /// (md:457, :590): mode 0. SCK must also be LOW at power-up and at every CS falling edge, or
     /// the part enters INTERNAL SCK mode and drives SCK itself (md:542, :640).
-    inline constexpr Hal::ClockMode Mode = Hal::ClockMode::mode0;
+    inline constexpr Hal::ClockMode mode = Hal::ClockMode::mode0;
     /// fESCK at most 2000 kHz (md:188), tLESCK / tHESCK at least 250 ns (md:189-190).
-    inline constexpr Units::Hertz  MaxClock     = Units::hertz(2'000'000);
-    inline constexpr std::uint32_t SckLowMinNs  = 250;
-    inline constexpr std::uint32_t SckHighMinNs = 250;
+    inline constexpr Units::Hertz  maxClock     = Units::hertz(2'000'000);
+    inline constexpr std::uint32_t sckLowMinNs  = 250;
+    inline constexpr std::uint32_t sckHighMinNs = 250;
     /// t1: CS low to SDO driven (EOC readable) at most 150 ns (md:193) - wait that long after CS
     /// falls before reading SDO as the ready bit.
-    inline constexpr std::uint32_t CsToSdoValidMaxNs = 150;
+    inline constexpr std::uint32_t csToSdoValidMaxNs = 150;
     /// t4: CS low to the first SCK rising edge at least 50 ns (md:196).
-    inline constexpr std::uint32_t CsToSckRiseMinNs = 50;
+    inline constexpr std::uint32_t csToSckRiseMinNs = 50;
     /// t5: SCK low at least 50 ns before CS falls (md:199): what selects the external SCK mode.
-    inline constexpr std::uint32_t SckSetupBeforeCsMinNs = 50;
+    inline constexpr std::uint32_t sckSetupBeforeCsMinNs = 50;
     /// tKQMAX: SCK falling to SDO valid at most 200 ns (md:197).
-    inline constexpr std::uint32_t SckToSdoValidMaxNs = 200;
+    inline constexpr std::uint32_t sckToSdoValidMaxNs = 200;
     /// One frame is 32 bits, MSB (EOC) first (md:420, Figure 3).
-    inline constexpr std::size_t FrameBytes = 4;
+    inline constexpr std::size_t frameBytes = 4;
 
     // Conversion (Timing Characteristics tCONV, md:185; FO pin md:329; Table 3 md:554)
 
@@ -82,26 +82,26 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
 
     /// The POR after VCC rises lasts "approximately 0.5ms", then the first conversion starts
     /// (md:395).
-    inline constexpr std::chrono::microseconds PowerOnReset{500};
+    inline constexpr std::chrono::microseconds powerOnReset{500};
 
     // The 32-bit word (Output Data Format, md:418-501; Tables 1 and 2)
 
     /// Bit 31 EOC (1 while converting), bit 30 DMY on the LTC2401 ("always low", md:424) and the
     /// channel on the LTC2402 (0 = CH0), bit 29 SIG, bit 28 EXR, bits 27..4 the 24-bit result MSB
     /// first, bits 3..0 sub-LSBs (md:420-451).
-    inline constexpr std::uint32_t EocBit  = 1U << 31U;
-    inline constexpr std::uint32_t Bit30   = 1U << 30U;
-    inline constexpr std::uint32_t SigBit  = 1U << 29U;
-    inline constexpr std::uint32_t ExrBit  = 1U << 28U;
-    inline constexpr std::uint32_t RawMask = 0x0FFF'FFFFU;   ///< result + sub-LSBs, 28 bits
+    inline constexpr std::uint32_t eocBit  = 1U << 31U;
+    inline constexpr std::uint32_t bit30   = 1U << 30U;
+    inline constexpr std::uint32_t sigBit  = 1U << 29U;
+    inline constexpr std::uint32_t exrBit  = 1U << 28U;
+    inline constexpr std::uint32_t rawMask = 0x0FFF'FFFFU;   ///< result + sub-LSBs, 28 bits
 
     /// Counts are in sub-LSB units: 1/16 of a 24-bit LSB, so VREF (FSSET - ZSSET) is 2^28 counts
     /// (0x0FFFFFFx is VREF - 1 LSB, "VREF + 1LSB" is 2^24 LSBs, Table 2).
-    inline constexpr std::int32_t FullScaleCounts = std::int32_t{1} << 28;
+    inline constexpr std::int32_t fullScaleCounts = std::int32_t{1} << 28;
     /// The extended range clamps at 9/8 VREF and -1/8 VREF (md:459; Table 2's first and last rows:
     /// 24-bit result 0x1FFFFF with SIG/EXR 1/1, 0xE00000 with 0/1).
-    inline constexpr std::uint32_t AboveClamp24 = 0x1F'FFFFU;
-    inline constexpr std::uint32_t BelowClamp24 = 0xE0'0000U;
+    inline constexpr std::uint32_t aboveClamp24 = 0x1F'FFFFU;
+    inline constexpr std::uint32_t belowClamp24 = 0xE0'0000U;
 
     enum class Part : std::uint8_t { ltc2401, ltc2402 };
 
@@ -122,7 +122,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
         [[nodiscard]] constexpr Units::MicroVolt voltage(Units::MicroVolt vref) const {
             auto const uv = vref.numerical_value_in(Units::si::micro<Units::si::volt>);
             return Units::microVolt(
-              static_cast<std::int32_t>(std::int64_t{counts} * uv / FullScaleCounts));
+              static_cast<std::int32_t>(std::int64_t{counts} * uv / fullScaleCounts));
         }
     };
 
@@ -151,27 +151,27 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     /// a non-zero result with SIG/EXR 0/0, bit 30 set on an LTC2401 - is no frame of this part.
     [[nodiscard]] constexpr Decoded decode(std::uint32_t word,
                                            Part          part = Part::ltc2401) {
-        if((word & EocBit) != 0) { return {.kind = Decoded::Kind::notReady}; }
-        bool const bit30 = (word & Bit30) != 0;
-        if(bit30 && part == Part::ltc2401) { return {.kind = Decoded::Kind::invalid}; }
-        bool const sig = (word & SigBit) != 0;
-        bool const exr = (word & ExrBit) != 0;
-        auto const raw = word & RawMask;
+        if((word & eocBit) != 0) { return {.kind = Decoded::Kind::notReady}; }
+        bool const bit30Set = (word & bit30) != 0;
+        if(bit30Set && part == Part::ltc2401) { return {.kind = Decoded::Kind::invalid}; }
+        bool const sig = (word & sigBit) != 0;
+        bool const exr = (word & exrBit) != 0;
+        auto const raw = word & rawMask;
         auto const r24 = raw >> 4U;
-        Sample     s{.channel = static_cast<std::uint8_t>(bit30 ? 1 : 0)};
+        Sample     s{.channel = static_cast<std::uint8_t>(bit30Set ? 1 : 0)};
         if(sig && !exr) {
             s.counts = static_cast<std::int32_t>(raw);
             s.range  = Range::normal;
         } else if(sig && exr) {
-            if(r24 > AboveClamp24) { return {.kind = Decoded::Kind::invalid}; }
-            s.counts  = FullScaleCounts + static_cast<std::int32_t>(raw);
+            if(r24 > aboveClamp24) { return {.kind = Decoded::Kind::invalid}; }
+            s.counts  = fullScaleCounts + static_cast<std::int32_t>(raw);
             s.range   = Range::aboveVref;
-            s.clamped = r24 == AboveClamp24;
+            s.clamped = r24 == aboveClamp24;
         } else if(exr) {
-            if(r24 < BelowClamp24) { return {.kind = Decoded::Kind::invalid}; }
-            s.counts  = static_cast<std::int32_t>(raw) - FullScaleCounts;
+            if(r24 < belowClamp24) { return {.kind = Decoded::Kind::invalid}; }
+            s.counts  = static_cast<std::int32_t>(raw) - fullScaleCounts;
             s.range   = Range::belowZero;
-            s.clamped = r24 == BelowClamp24;
+            s.clamped = r24 == belowClamp24;
         } else {
             if(r24 != 0) { return {.kind = Decoded::Kind::invalid}; }
             s.counts = 0;
@@ -182,7 +182,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
 
     /// The four bytes as they came off the wire, MSB first.
     [[nodiscard]] constexpr std::uint32_t wordOf(std::span<std::byte const,
-                                                           FrameBytes> b) {
+                                                           frameBytes> b) {
         return Bytes{b}.be32(0);
     }
 
@@ -193,7 +193,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     struct Defaults {
         static constexpr Rejection    rejection = Rejection::hz50;
         static constexpr Part         part      = Part::ltc2401;
-        static constexpr Units::Hertz maxClock  = Ltc2400::MaxClock;
+        static constexpr Units::Hertz maxClock  = Ltc2400::maxClock;
         /// After the driver starts: the part's POR and a conversion that may already be running.
         static constexpr auto startupDelay = std::chrono::milliseconds{1};
         /// Failures in a row (a timeout, an impossible frame, SDO low after a frame) before link()
@@ -224,14 +224,14 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
     public:
         using TimePoint = typename Clock::time_point;
 
-        static constexpr Rejection    RejectionSetting    = Config::rejection;
-        static constexpr Part         PartSetting         = Config::part;
-        static constexpr auto         Conversion          = conversionTime(Config::rejection);
-        static constexpr auto         Timeout             = 2 * Conversion.max;
-        static constexpr std::uint8_t AbsentAfterFailures = Config::absentAfterFailures;
-        static constexpr auto         Setup               = Master::setup(Mode, Config::maxClock);
+        static constexpr Rejection    rejectionSetting    = Config::rejection;
+        static constexpr Part         partSetting         = Config::part;
+        static constexpr auto         conversion          = conversionTime(Config::rejection);
+        static constexpr auto         timeout             = 2 * conversion.max;
+        static constexpr std::uint8_t absentAfterFailures = Config::absentAfterFailures;
+        static constexpr auto         setup               = Master::setup(mode, Config::maxClock);
 
-        static_assert(Config::maxClock <= MaxClock,
+        static_assert(Config::maxClock <= maxClock,
                       "fESCK is at most 2 MHz (LTC2401_LTC2402.md:188)");
 
         Reader() : next_{Clock::now() + Config::startupDelay} { ChipSelect<Cs, false>::release(); }
@@ -280,7 +280,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
             case State::released:
                 if(now >= next_) {
                     apply(clear(Cs{}));   // SCK idles low (mode 0): external SCK mode
-                    next_  = now + Timeout;
+                    next_  = now + timeout;
                     state_ = State::waiting;
                 }
                 break;
@@ -290,7 +290,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
                 } else if(now >= next_) {
                     ++timeouts_;
                     if(failuresInRow_.n == 0) {
-                        UC_LOG_W("ltc2401: no result in {} ms", Timeout.count() / 1000);
+                        UC_LOG_W("ltc2401: no result in {} ms", timeout.count() / 1000);
                     }
                     fail_(now);
                 }
@@ -308,7 +308,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
             if(!xfer_.begin()) { return; }
             // No deselect: CS stays low after the frame, SDO then shows EOC. The SDO read comes before
             // complete()'s release store, so turn() sees it with the verdict.
-            typename Master::Request r{.setup = Setup,
+            typename Master::Request r{.setup = setup,
                                        .lines = ChipSelect<Cs, false>::lines,
                                        .rx    = std::span{frame_}};
             r.callback = [this](auto res) {
@@ -322,7 +322,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
 
         void finish_(TimePoint now) {
             auto const got
-              = decode(wordOf(std::span<std::byte const, FrameBytes>{frame_}), PartSetting);
+              = decode(wordOf(std::span<std::byte const, frameBytes>{frame_}), partSetting);
             if(!sdoHighAfter_) {
                 ++stuckLow_;
                 if(failuresInRow_.n == 0) {
@@ -335,7 +335,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
                 ++invalid_;
                 if(failuresInRow_.n == 0) {
                     UC_LOG_W("ltc2401: frame {:#010x} is not one this part sends",
-                             wordOf(std::span<std::byte const, FrameBytes>{frame_}));
+                             wordOf(std::span<std::byte const, frameBytes>{frame_}));
                 }
                 fail_(now);
                 return;
@@ -343,7 +343,7 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
             slot_.publish(got.sample);
             if(failuresInRow_.n != 0) { UC_LOG_I("ltc2401: answering"); }
             failuresInRow_.cleared();
-            next_  = now + Timeout;
+            next_  = now + timeout;
             state_ = State::waiting;
         }
 
@@ -358,11 +358,11 @@ namespace Kvasir { namespace SPI { namespace Ltc2400 {
         }
 
         TimePoint                          next_{};
-        std::array<std::byte, FrameBytes>  frame_{};
+        std::array<std::byte, frameBytes>  frame_{};
         Frame                              xfer_{};
         bool                               sdoHighAfter_{};
         State                              state_{State::startup};
-        FailureStreak<AbsentAfterFailures> failuresInRow_{};
+        FailureStreak<absentAfterFailures> failuresInRow_{};
         SampleSlot<Sample>                 slot_{};
         std::uint32_t                      invalid_{};
         std::uint32_t                      timeouts_{};

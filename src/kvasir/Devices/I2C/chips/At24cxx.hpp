@@ -39,17 +39,17 @@ template<std::size_t PageBytes    = 32,
          std::size_t MemoryBytes  = 4096,
          typename Timing          = Engine::DefaultTiming>
 struct At24cxx {
-    static constexpr std::string_view Name          = "AT24Cxx";
-    static constexpr Address7         Address       = 0x50;
-    static constexpr std::size_t      RegisterBytes = AddressBytes;
+    static constexpr std::string_view name          = "AT24Cxx";
+    static constexpr Address7         address       = 0x50;
+    static constexpr std::size_t      registerBytes = AddressBytes;
 
-    static constexpr std::chrono::milliseconds WriteTime
+    static constexpr std::chrono::milliseconds writeTime
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, writeTime, std::chrono::milliseconds{10}));
 
-    static constexpr std::uint8_t WakeRetries    = 4;
-    static constexpr auto         WakeRetryDelay = std::chrono::milliseconds{5};
+    static constexpr std::uint8_t wakeRetries    = 4;
+    static constexpr auto         wakeRetryDelay = std::chrono::milliseconds{5};
 
-    static constexpr auto Addresses = addressRun<0x50, 8>();
+    static constexpr auto addresses = addressRun<0x50, 8>();
 
     static_assert(AddressBytes == 1 || AddressBytes == 2,
                   "the word address is one or two bytes");
@@ -75,7 +75,7 @@ struct At24cxx {
             }
         }
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::readIndirect({.regOffset = 0, .count = PageBytes, .offset = 2})};
 
         struct Sample {
@@ -101,11 +101,11 @@ struct At24cxx {
     struct WritePage {
         using Value = PageData;
 
-        static constexpr std::size_t Bytes = PageBytes;
+        static constexpr std::size_t bytes = PageBytes;
 
         /// A page write is a one-shot command: replaying it after a reset would burn
         /// another of the part's finite write cycles.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         /// How many of the value's bytes one page write takes: a write may not cross a page
         /// boundary (the part would wrap within the page), nor run past the end of the memory.
@@ -122,7 +122,7 @@ struct At24cxx {
             auto const n = fits(value);
             for(std::size_t i = 0; i < n; ++i) { buffer[i] = std::byte{value.data[i]}; }
             return Engine::Step::writeBuffer(
-              {.reg = value.address, .offset = 0, .count = n, .delay = WriteTime});
+              {.reg = value.address, .offset = 0, .count = n, .delay = writeTime});
         }
     };
 

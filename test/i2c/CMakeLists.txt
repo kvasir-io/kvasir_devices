@@ -72,9 +72,9 @@ kvasir_devices_compile_fail(
     DEFINE_PREFIX
     I2C_QUEUE_GATE
     CASES
-    "COUNTERS|Features\\.counters"
-    "LATENCY|Features\\.latency"
-    "SNAPSHOT|Features\\.timeoutSnapshot")
+    "COUNTERS|features\\.counters"
+    "LATENCY|features\\.latency"
+    "SNAPSHOT|features\\.timeoutSnapshot")
 
 # One switch gate claimed twice (gate_fail.cpp): the same address on one channel, or twice in front of the switch.
 kvasir_devices_compile_fail(

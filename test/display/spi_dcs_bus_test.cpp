@@ -109,12 +109,12 @@ struct NarrowBus {
 /// A 1.14" 240 x 135 ST7789V module in landscape; window offsets 40 / 53 (the module vendor's
 /// driver values).
 struct PackConfig : D::DcsDefaults {
-    static constexpr int          Width        = 240;
-    static constexpr int          Height       = 135;
+    static constexpr int          width        = 240;
+    static constexpr int          height       = 135;
     static constexpr int          columnOffset = 40;
     static constexpr int          rowOffset    = 53;
     static constexpr bool         invert       = true;
-    static constexpr std::uint8_t madctl = D::Dcs::Madctl::ColumnOrder | D::Dcs::Madctl::Exchange;
+    static constexpr std::uint8_t madctl = D::Dcs::Madctl::columnOrder | D::Dcs::Madctl::exchange;
 };
 
 using Lcd   = D::SpiDcsBus<Bus, FakeClock, Spi::Cs, Dc>;
@@ -123,8 +123,8 @@ using Panel = Kvasir::St7789::Panel<FakeClock, Lcd, Kvasir::NoReset, PackConfig>
 using NarrowLcd   = D::SpiDcsBus<NarrowBus, FakeClock, Spi::Cs, Dc>;
 using NarrowPanel = Kvasir::St7789::Panel<FakeClock, NarrowLcd, Kvasir::NoReset, PackConfig>;
 
-static_assert(Lcd::Wide && !NarrowLcd::Wide);
-static_assert(NarrowLcd::MaxChunk == 300);
+static_assert(Lcd::wide && !NarrowLcd::wide);
+static_assert(NarrowLcd::maxChunk == 300);
 
 /// Where a bus's knobs live: the fake's own, or the narrow wrapper's base's.
 template<typename B>
@@ -173,15 +173,15 @@ void bringUp() {
     check(runUntil([] { return Panel::ready(); }, 2s), "ready");
     using C                           = D::Dcs::Cmd;
     auto const                      o = model.order();
-    std::vector<std::uint8_t> const head{C::Swreset,
-                                         C::Colmod,
-                                         C::Madctl,
-                                         C::Invon,
-                                         C::Slpout,
-                                         C::Caset,
-                                         C::Raset,
-                                         C::Ramwr,
-                                         C::Dispon};
+    std::vector<std::uint8_t> const head{C::swreset,
+                                         C::colmod,
+                                         C::madctl,
+                                         C::invon,
+                                         C::slpout,
+                                         C::caset,
+                                         C::raset,
+                                         C::ramwr,
+                                         C::dispon};
     check(o == head, "the bring-up in order");
     checkEq(model.commands[1].params.size(), 1U, "COLMOD one parameter");
     checkEq(model.commands[1].params[0], 0x55, "COLMOD 55h: 16 bits a pixel");
@@ -217,7 +217,7 @@ void blitAndFill() {
     Panel::blit(D::Rect{10, 20, 2, 2}, std::span<D::Rgb565 const>{px});
     runUntil([] { return Panel::ready(); }, 100ms);
     auto const o = model.order();
-    check(o.size() == 3 && o[2] == D::Dcs::Cmd::Ramwr, "CASET, RASET, RAMWR");
+    check(o.size() == 3 && o[2] == D::Dcs::Cmd::ramwr, "CASET, RASET, RAMWR");
     auto const& ram = model.commands[2].params;
     check(ram == std::vector<std::uint8_t>{0xF8, 0x00, 0x07, 0xE0, 0x00, 0x1F, 0xFF, 0xFF},
           "the pixels, high byte first");
@@ -251,7 +251,7 @@ void narrowFill() {
           "the fill completes");
     check(
       model.order()
-        == std::vector<std::uint8_t>{D::Dcs::Cmd::Caset, D::Dcs::Cmd::Raset, D::Dcs::Cmd::Ramwr},
+        == std::vector<std::uint8_t>{D::Dcs::Cmd::caset, D::Dcs::Cmd::raset, D::Dcs::Cmd::ramwr},
       "CASET, RASET, one RAMWR");
     auto const& f = model.commands.back().params;
     checkEq(f.size(), 240U * 135U * 2U, "every pixel");
@@ -334,7 +334,7 @@ void failedStream() {
     Panel::restart();
     check(runUntil([] { return Panel::ready(); }, 2s), "ready");
     // the master stalls once RAMWR has gone out: the pixels behind it never complete
-    model.stallAfter = D::Dcs::Cmd::Ramwr;
+    model.stallAfter = D::Dcs::Cmd::ramwr;
     model.stallFlag  = &Bus::stall;
     static std::array<D::Rgb565, 16> px{};
     Panel::blit(D::Rect{0, 0, 4, 4}, std::span<D::Rgb565 const>{px});
@@ -388,16 +388,16 @@ void commandsQueue() {
     Bus::autoComplete = false;   // nothing completes until the test ticks
     using C           = D::Dcs::Cmd;
     std::array<std::byte, 4> window{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
-    check(Lcd::writeCommand(C::Caset, window), "CASET queued");
+    check(Lcd::writeCommand(C::caset, window), "CASET queued");
     window.fill(std::byte{9});   // the copy went with the command
-    check(Lcd::writeCommand(C::Raset, window), "RASET queued");
+    check(Lcd::writeCommand(C::raset, window), "RASET queued");
     static std::array<std::byte, 8> block{};
     for(std::size_t i = 0; i < block.size(); ++i) { block[i] = std::byte(0x10 + i); }
     check(Lcd::writeCommand(0xB0, block), "a command with eight parameter bytes queued");
     check(!Lcd::idle(), "not idle while commands are queued");
     checkEq(model.commands.size(), 1U, "only the first is on the wire yet");
     int accepted = 3;
-    while(Lcd::writeCommand(C::Nop, {})) { ++accepted; }
+    while(Lcd::writeCommand(C::nop, {})) { ++accepted; }
     checkEq(accepted,
             static_cast<int>(D::SpiDcsBusDefaults::commandSlots),
             "one per slot, then refused");
@@ -406,7 +406,7 @@ void commandsQueue() {
     check(Lcd::idle() && !Lcd::failed(), "idle once every command completed");
     check(turns >= accepted && turns <= 2 * accepted, "a frame or two per command, no more");
     auto const o = model.order();
-    check(o.size() == static_cast<std::size_t>(accepted) && o[0] == C::Caset && o[1] == C::Raset
+    check(o.size() == static_cast<std::size_t>(accepted) && o[0] == C::caset && o[1] == C::raset
             && o[2] == 0xB0,
           "on the wire in the order queued");
     check(model.commands[0].params == std::vector<std::uint8_t>{1, 2, 3, 4},
@@ -415,13 +415,13 @@ void commandsQueue() {
     checkEq(model.commands[2].params.size(), 8U, "the long block whole");
     check(model.commands[2].params.size() == 8U && model.commands[2].params[7] == 0x17,
           "from the caller's memory");
-    check(Lcd::writeCommand(C::Nop, {}), "a slot is free again");
+    check(Lcd::writeCommand(C::nop, {}), "a slot is free again");
     drain<Lcd>(10);
 
     // a command lands inside no pixel stream: refused while one runs
     static std::array<D::Rgb565, 4> px{};
     Lcd::writePixels(std::as_bytes(std::span<D::Rgb565 const>{px}));
-    check(!Lcd::writeCommand(C::Nop, {}), "a command is refused while a pixel stream runs");
+    check(!Lcd::writeCommand(C::nop, {}), "a command is refused while a pixel stream runs");
     check(!Lcd::writeData(std::as_bytes(std::span<D::Rgb565 const>{px})), "and bare data too");
     drain<Lcd>(10);
     check(Lcd::idle() && !Lcd::failed(), "the stream completes");
@@ -434,7 +434,7 @@ void commandTimeout() {
       "failure after clearError() is nobody's");
     fresh();
     Bus::stall = true;   // the frame goes out and does not complete
-    check(TickLcd::writeCommand(D::Dcs::Cmd::Swreset, {}), "queued, not waited for");
+    check(TickLcd::writeCommand(D::Dcs::Cmd::swreset, {}), "queued, not waited for");
     int turns = 0;
     while(!TickLcd::failed() && turns < 200) {
         TickLcd::turn();
@@ -451,10 +451,10 @@ void commandTimeout() {
     TickLcd::turn();
     check(!TickLcd::failed(), "the late failure is not the next command's");
     check(TickLcd::idle(), "and the slot is free");
-    check(TickLcd::writeCommand(D::Dcs::Cmd::Slpout, {}), "the next command goes");
+    check(TickLcd::writeCommand(D::Dcs::Cmd::slpout, {}), "the next command goes");
     Bus::tick();
     TickLcd::turn();
-    check(!model.commands.empty() && model.commands.back().cmd == D::Dcs::Cmd::Slpout,
+    check(!model.commands.empty() && model.commands.back().cmd == D::Dcs::Cmd::slpout,
           "SLPOUT on the wire");
     check(TickLcd::idle() && !TickLcd::failed(), "and completes");
     Bus::reset();

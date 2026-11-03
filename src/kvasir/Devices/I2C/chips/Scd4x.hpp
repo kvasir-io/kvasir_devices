@@ -23,14 +23,14 @@ namespace Kvasir::I2C::Chips {
 /// (3.5.2; the datasheet's example 0x01F4 0x6667 0x5EB9 is 500 ppm, 25 degC, 37 % -- its
 /// printed CRC for the first word, 0x7B, is a typo: the polynomial gives 0x33).
 struct Scd4x {
-    static constexpr std::string_view        Name    = "SCD4x";
-    static constexpr Address7                Address = 0x62;
-    static constexpr std::array<Address7, 1> Addresses{0x62};
-    static constexpr std::size_t             RegisterBytes = 0;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{1000};
+    static constexpr std::string_view        name    = "SCD4x";
+    static constexpr Address7                address = 0x62;
+    static constexpr std::array<Address7, 1> addresses{0x62};
+    static constexpr std::size_t             registerBytes = 0;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{1000};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x3F, 0x86}, .delay = std::chrono::milliseconds{500}}),
       Engine::Step::command({.payload = {0x36, 0x82}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::receive({.count = 9, .offset = 0}),
@@ -51,9 +51,9 @@ struct Scd4x {
     }
 
     struct Measurement {
-        static constexpr auto Period = std::chrono::milliseconds{5000};
+        static constexpr auto period = std::chrono::milliseconds{5000};
         // clang-format off
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0xE4, 0xB8}, .delay = std::chrono::milliseconds{1}}),
           Engine::Step::receive({.count = 3, .offset = 0}),
           Engine::Step::check(std::chrono::milliseconds{1000}),

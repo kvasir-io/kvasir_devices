@@ -58,7 +58,7 @@ struct Step {
                       ///< a register that is not what the data sheet says ends the bring-up
     };
 
-    static constexpr std::size_t InlineBytes = 8;
+    static constexpr std::size_t inlineBytes = 8;
 
     Kind          kind{};
     bool          hasRegister{};     ///< the register prefix is sent (Chip::RegisterBytes wide)
@@ -75,7 +75,7 @@ struct Step {
     /// script in flash and in each device's current step in RAM.
     Millis32 delay{};
 
-    std::array<std::uint8_t, InlineBytes> bytes{};
+    std::array<std::uint8_t, inlineBytes> bytes{};
 
     /// Register write with an inline payload of up to eight bytes (may be empty: the register
     /// address alone, which some chips take as a pointer set).
@@ -103,7 +103,7 @@ struct Step {
                   .reg         = a.reg,
                   .delay       = a.delay};
         for(auto const byte : a.payload) {
-            if(step.count < InlineBytes) { step.bytes[step.count] = byte; }
+            if(step.count < inlineBytes) { step.bytes[step.count] = byte; }
             ++step.count;   // past InlineBytes: wellFormed() rejects the script
         }
         return step;
@@ -354,7 +354,7 @@ enum class ScriptFault : std::uint8_t {
         if(s.hasRegister && !s.regFromBuffer && registerBytes == 1 && s.reg > 0xFF) {
             return ScriptFault::registerTooWide;
         }
-        if(s.kind == Step::Kind::write && !s.fromBuffer && s.count > Step::InlineBytes) {
+        if(s.kind == Step::Kind::write && !s.fromBuffer && s.count > Step::inlineBytes) {
             return ScriptFault::inlinePayloadTooLong;
         }
         if(s.kind == Step::Kind::read && s.count == 0) { return ScriptFault::emptyRead; }

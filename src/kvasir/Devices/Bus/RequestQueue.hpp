@@ -6,7 +6,7 @@
 //
 // Clock is the bus's; Spec, the bus's view of an entry:
 //   using Result;                                    the bus's callback result
-//   static constexpr bool Tracked, Deadlines;        tickets/tombstones, Request::deadline
+//   static constexpr bool tracked, deadlines;        tickets/tombstones, Request::deadline
 //   static auto& request(Entry&);                    the request in an entry (I2C: the entry itself; SPI: .request)
 //
 // Every call runs with the bus interrupt masked (the caller's Bus::MaskDepth). The callbacks go through the caller's
@@ -51,7 +51,7 @@ public:
     /// live queued request has it.
     bool cancelQueued(std::uint16_t id,
                       Invoker&      inv)
-        requires(Spec::Tracked)
+        requires(Spec::tracked)
     {
         bool       removed = false;
         auto const drains  = drains_;
@@ -72,7 +72,7 @@ public:
     /// Every live queued request past its deadline becomes a tombstone, its callback timedOut. Returns how many.
     std::uint32_t expireQueued(tp       now,
                                Invoker& inv)
-        requires(Spec::Deadlines)
+        requires(Spec::deadlines)
     {
         std::uint32_t drained = 0;
         auto const    drains  = drains_;
@@ -97,10 +97,10 @@ public:
                  std::uint32_t& expired) {
         while(true) {
             if(!q_.popInto(out)) { return false; }
-            if constexpr(Spec::Tracked) {
+            if constexpr(Spec::tracked) {
                 if(Spec::request(out).cancelled) { continue; }   // a tombstone: dropped
             }
-            if constexpr(Spec::Deadlines) {
+            if constexpr(Spec::deadlines) {
                 if(Clock::now() > Spec::request(out).deadline) {   // out of time before it started
                     ++expired;
                     inv.invoke(Spec::request(out).callback,
@@ -118,12 +118,12 @@ public:
                         Invoker&    inv) {
         std::uint32_t drained = 0;
         Entry         e{};
-        if constexpr(Spec::Tracked) {
+        if constexpr(Spec::tracked) {
             // before the callbacks: a walk around them stops
             if(n != 0 && !q_.empty()) { ++drains_; }
         }
         while(n-- != 0 && q_.popInto(e)) {
-            if constexpr(Spec::Tracked) {
+            if constexpr(Spec::tracked) {
                 if(Spec::request(e).cancelled) { continue; }
             }
             ++drained;
@@ -139,6 +139,6 @@ private:
     struct NoCount {};
 
     // drains that popped, wrapping (tracked buses: their walks compare it)
-    [[no_unique_address]] std::conditional_t<Spec::Tracked, std::uint8_t, NoCount> drains_{};
+    [[no_unique_address]] std::conditional_t<Spec::tracked, std::uint8_t, NoCount> drains_{};
 };
 }   // namespace Kvasir::Bus

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -67,11 +68,11 @@ enum class FakeBusResult : std::uint8_t { failed, nack, ok };
 /// ahead of sendData in the same write. The transcript and the models see the two joined:
 /// what is on the wire, not how the engine laid it out.
 struct FakeBusRequest {
-    static constexpr std::size_t MaxPrefix = 2;
+    static constexpr std::size_t maxPrefix = 2;
 
     std::uint8_t                       address{};
     std::uint8_t                       prefixBytes{};
-    std::array<std::byte, MaxPrefix>   prefix{};
+    std::array<std::byte, maxPrefix>   prefix{};
     std::span<std::byte const>         sendData;
     std::span<std::byte>               receiveData;
     std::function<void(FakeBusResult)> callback;
@@ -104,11 +105,11 @@ struct FakeBusFor {
     using Result  = FakeBusResult;
     using Request = Req;
     /// Every engine feature on, so the tests of each one run on the fake.
-    static constexpr Kvasir::Engine::EngineFeatures Features = Kvasir::Engine::AllEngineFeatures;
+    static constexpr Kvasir::Engine::EngineFeatures features = Kvasir::Engine::allEngineFeatures;
     using Responder                                          = FakeBusResponder;
 
     /// What a real bus's transfer timeout is, for timeout(): tens of milliseconds.
-    static constexpr auto TransferTimeout = std::chrono::milliseconds{25};
+    static constexpr auto transferTimeout = std::chrono::milliseconds{25};
 
     static inline std::vector<Transaction> log{};
     static inline std::deque<Request>      pending{};
@@ -167,7 +168,7 @@ struct FakeBusFor {
     /// The transfer timed out: the bus's own timeout passes, then the request fails.
     static bool timeout() {
         if(pending.empty()) { return false; }
-        FakeClock::current += TransferTimeout;
+        FakeClock::current += transferTimeout;
         return complete(Result::failed);
     }
 
@@ -279,17 +280,16 @@ struct RegisterModel {
 
     explicit RegisterModel(std::uint8_t addr) : address{addr} {}
 
-    /// Consecutive registers from `reg`, `Width` bytes each, MSB first.
+    /// Consecutive registers from `reg`, `Width` bytes each, MSB first; a trailing partial register is dropped.
     void set(std::uint32_t                       reg,
              std::initializer_list<std::uint8_t> bytes) {
-        Reg         r{};
-        std::size_t i = 0;
-        for(auto const b : bytes) {
-            r[i++] = b;
-            if(i == Width) {
-                mem[reg++] = r;
-                i          = 0;
-            }
+        auto const* at  = bytes.begin();
+        auto const* end = bytes.end();
+        while(static_cast<std::size_t>(end - at) >= Width) {
+            Reg r{};
+            std::copy_n(at, Width, r.begin());
+            mem.insert_or_assign(reg++, r);
+            at += Width;
         }
     }
 

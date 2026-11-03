@@ -69,18 +69,18 @@ namespace Htu21dDetail {
 /// free while it measures: trigger temperature 0xF3 (50 ms max at 14 bit), read 3; trigger
 /// humidity 0xF5 (16 ms max at 12 bit), read 3. Soft reset 0xFE takes under 15 ms.
 struct Htu21d {
-    static constexpr std::string_view        Name    = "HTU21D";
-    static constexpr Address7                Address = 0x40;
-    static constexpr std::array<Address7, 1> Addresses{0x40};
-    static constexpr std::size_t             RegisterBytes = 0;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{15};
+    static constexpr std::string_view        name    = "HTU21D";
+    static constexpr Address7                address = 0x40;
+    static constexpr std::array<Address7, 1> addresses{0x40};
+    static constexpr std::size_t             registerBytes = 0;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{15};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0xFE}, .delay = std::chrono::milliseconds{15}})};
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0xF3}, .delay = std::chrono::milliseconds{50}}),
           Engine::Step::receive({.count = 3, .offset = 0}),
           Engine::Step::command({.payload = {0xF5}, .delay = std::chrono::milliseconds{16}}),
@@ -104,12 +104,12 @@ struct Htu21d {
 /// tCONV(T), 12 ms + 10.8 ms at the default resolution (Table 2 note 1), and in no-hold mode
 /// the part NAKs the read until then. Temperature alone is 10.8 ms.
 struct Si7021 : Htu21d {
-    static constexpr std::string_view Name         = "Si7021";
-    static constexpr auto             StartupDelay = std::chrono::milliseconds{80};
+    static constexpr std::string_view name         = "Si7021";
+    static constexpr auto             startupDelay = std::chrono::milliseconds{80};
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0xF3}, .delay = std::chrono::milliseconds{12}}),
           Engine::Step::receive({.count = 3, .offset = 0}),
           Engine::Step::command({.payload = {0xF5}, .delay = std::chrono::milliseconds{25}}),
@@ -124,7 +124,7 @@ struct Si7021 : Htu21d {
     using Reads = Engine::List<Measurement>;
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0xFE}, .delay = std::chrono::milliseconds{15}}),
       Engine::Step::command({.payload = {0xFC, 0xC9}}),
       Engine::Step::receive({.count = 6, .offset = 0}),

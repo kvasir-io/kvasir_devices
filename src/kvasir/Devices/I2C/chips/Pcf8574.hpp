@@ -17,11 +17,11 @@ namespace Kvasir::I2C::Chips {
 /// read returns the pins. Pins are read every 50 ms; `set<Port>(v)` writes when changed;
 /// all pins start released. 0x20..0x27, the A part 0x38..0x3F.
 struct Pcf8574 {
-    static constexpr std::string_view Name          = "PCF8574";
-    static constexpr Address7         Address       = 0x20;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "PCF8574";
+    static constexpr Address7         address       = 0x20;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr std::array<Address7, 16> Addresses{0x20,
+    static constexpr std::array<Address7, 16> addresses{0x20,
                                                         0x21,
                                                         0x22,
                                                         0x23,
@@ -39,8 +39,8 @@ struct Pcf8574 {
                                                         0x3F};
 
     struct Pins {
-        static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 1})};
+        static constexpr auto       period = std::chrono::milliseconds{50};
+        static constexpr std::array steps{Engine::Step::receive({.count = 1})};
 
         struct Sample {
             std::uint8_t port{};
@@ -55,8 +55,8 @@ struct Pcf8574 {
 
     struct Port {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = 0xFF;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = 0xFF;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -72,15 +72,15 @@ struct Pcf8574 {
 /// PCF8575 16-bit quasi-bidirectional port (SCPS121I, 8.3.2): the PCF8574's protocol
 /// with two bytes, P07..P00 first, then P17..P10. 0x20..0x27.
 struct Pcf8575 {
-    static constexpr std::string_view Name          = "PCF8575";
-    static constexpr Address7         Address       = 0x20;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "PCF8575";
+    static constexpr Address7         address       = 0x20;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr auto Addresses = addressRun<0x20, 8>();
+    static constexpr auto addresses = addressRun<0x20, 8>();
 
     struct Pins {
-        static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 2})};
+        static constexpr auto       period = std::chrono::milliseconds{50};
+        static constexpr std::array steps{Engine::Step::receive({.count = 2})};
 
         struct Sample {
             std::uint16_t port{};   ///< P0x | P1x << 8
@@ -96,8 +96,8 @@ struct Pcf8575 {
 
     struct Port {
         using Value                          = std::uint16_t;
-        static constexpr std::size_t Bytes   = 2;
-        static constexpr Value       Initial = 0xFFFF;
+        static constexpr std::size_t bytes   = 2;
+        static constexpr Value       initial = 0xFFFF;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

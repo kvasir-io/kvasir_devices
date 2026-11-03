@@ -364,10 +364,10 @@ void refusals() {
     Flash          f{};
     BusScope const scope{};
     bringUp(f);
-    std::array<std::byte, Flash::PageSize + 1> big{};
+    std::array<std::byte, Flash::pageSize + 1> big{};
     check(!f.read(0, {}), "an empty read");
     check(!f.read(0, big), "a read of more than a page");
-    check(!f.read(Flash::AddressSpace - 2, std::span{big}.first(4)), "a read past 16 MB");
+    check(!f.read(Flash::addressSpace - 2, std::span{big}.first(4)), "a read past 16 MB");
     check(!f.program(0, {}), "an empty program");
     check(!f.program(0, big), "a program of more than a page");
     check(!f.program(0x00F0, std::span{big}.first(0x20)), "a program across a page boundary");

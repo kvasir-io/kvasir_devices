@@ -219,13 +219,13 @@ void rejectedInARowIsLost() {
     runUntil(c, [&] { return c.up(); });
     model.rejectAllReads = true;
     std::array<std::byte, 512> in{};
-    for(std::uint8_t i = 0; i < Card::RejectedLost; ++i) {
+    for(std::uint8_t i = 0; i < Card::rejectedLost; ++i) {
         checkEq(static_cast<int>(c.read(1, in)), static_cast<int>(SdResult::ok), "read starts");
         std::optional<SdResult> done{};
         runUntil(c, [&] { return (done = c.takeDone()).has_value(); });
         check(done == SdResult::rejected, "rejected");
         checkEq(c.rejectedInRow(), static_cast<std::uint8_t>(i + 1U), "counted");
-        if(i + 1U < Card::RejectedLost) { check(c.up(), "still up: a bad block"); }
+        if(i + 1U < Card::rejectedLost) { check(c.up(), "still up: a bad block"); }
     }
     check(!c.up() && c.link() == Kvasir::Link::absent, "the last one: lost");
     check(Log::warnings >= 1, "logged");

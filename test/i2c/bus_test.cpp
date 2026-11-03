@@ -76,8 +76,8 @@ void scanner() {
     check(Scan::hint(0x48).starts_with("ADS1115") && Scan::hint(0x48).ends_with("TMP1075"),
           "0x48's hint is its own names and nothing of its neighbours'");
     bool packedRight = true;
-    for(std::size_t a = 0; a < Cat::AddressCount; ++a) {
-        auto const& entry = Cat::Table[a];
+    for(std::size_t a = 0; a < Cat::addressCount; ++a) {
+        auto const& entry = Cat::table[a];
         auto const  want  = entry.length == 0 ? std::string_view{"unknown"} : entry.view();
         packedRight       = packedRight && Cat::hint(static_cast<std::uint8_t>(a)) == want;
     }
@@ -122,7 +122,7 @@ void scanner() {
           "0x08 and 0x77 probed, 0x07/0x78/0x7F/0xC8 not");
     check(!sc.found(0x7F) && !sc.found(0xC8) && !sc.faulted(0xC8),
           "nothing past the range is in a set");
-    static_assert(Scan::First == 0x08 && Scan::Last == 0x77, "the one range");
+    static_assert(Scan::first == 0x08 && Scan::last == 0x77, "the one range");
     {
         AddressSet set{};
         set.insert(0x00);
@@ -159,7 +159,7 @@ void scanner() {
     FakeBus::pending.clear();
     sc.turn();
     check(!sc.done(), "waiting on the lost probe");
-    FakeClock::current += Scan::ProbeTimeout + 1ms;
+    FakeClock::current += Scan::probeTimeout + 1ms;
     sc.turn();                            // gives up on 0x23
     sc.turn();                            // and submits 0x24
     lost.callback(FakeBus::Result::ok);   // the late answer for 0x23
@@ -184,7 +184,7 @@ void scanner() {
     sc.turn();
     check(sc.done() && sc.faulted(0x23), "given up on past 10 ms, as a fault");
     // and one from a Config, at compile time
-    static_assert(Scanner<FakeBus, FakeClock, Cat, AddressProbe, QuickScan>::ProbeTimeout == 100ms,
+    static_assert(Scanner<FakeBus, FakeClock, Cat, AddressProbe, QuickScan>::probeTimeout == 100ms,
                   "a Config's ProbeTimeout is the scanner's");
 
     // the register-write probe
@@ -210,14 +210,14 @@ void scanner() {
 // The two panel geometries the Bus cases below put on a Bus (panel_test.cpp has the same).
 namespace Oled {
     struct Wide : Chips::Ssd1306Detail::PanelDefaults {
-        static constexpr int      Width   = 128;
-        static constexpr int      Height  = 32;
+        static constexpr int      width   = 128;
+        static constexpr int      height  = 32;
         static constexpr Address7 address = 0x3C;
     };
 
     struct Small : Chips::Ssd1306Detail::PanelDefaults {
-        static constexpr int          Width        = 64;
-        static constexpr int          Height       = 48;
+        static constexpr int          width        = 64;
+        static constexpr int          height       = 48;
         static constexpr Address7     address      = 0x3D;
         static constexpr int          columnOffset = 32;
         static constexpr std::uint8_t comPins      = 0x12;
@@ -227,8 +227,8 @@ namespace Oled {
 /// What a frame renderer asks of a panel.
 template<typename P>
 concept PanelContract = requires(P& p, std::uint32_t pages) {
-    { P::Width } -> std::convertible_to<int>;
-    { P::Height } -> std::convertible_to<int>;
+    { P::width } -> std::convertible_to<int>;
+    { P::height } -> std::convertible_to<int>;
     { p.ready() } -> std::same_as<bool>;
     { p.failed() } -> std::same_as<bool>;
     { p.turn() };
@@ -242,8 +242,8 @@ namespace BusTest {
 
     /// A bus that says what the real behaviors say, so the queue-depth and load checks are on.
     struct RatedBus : FakeBus {
-        static constexpr std::uint32_t BaudRate   = 400'000;
-        static constexpr std::size_t   QueueDepth = 8;
+        static constexpr std::uint32_t baudRate   = 400'000;
+        static constexpr std::size_t   queueDepth = 8;
     };
 
     template<typename C, typename Cfg = Kvasir::Engine::DefaultConfig>
@@ -259,8 +259,8 @@ namespace BusTest {
     /// The four parts on the wire, each answering what its bring-up asks: the VEML6030's and
     /// the BME280's ids from a register file, Sensirion words with their CRC for the rest.
     struct Wiring {
-        RegisterModel<1, 2> veml{Veml::Address};
-        RegisterModel<1>    bme{Bme::Address};
+        RegisterModel<1, 2> veml{Veml::address};
+        RegisterModel<1>    bme{Bme::address};
 
         Wiring() {
             veml.set(0x07, {0x81, 0xC4});
@@ -270,30 +270,30 @@ namespace BusTest {
         FakeBus::Result operator()(std::uint8_t               addr,
                                    std::span<std::byte const> sent,
                                    std::span<std::byte>       recv) {
-            if(addr == Veml::Address) { return veml(addr, sent, recv); }
-            if(addr == Bme::Address) { return bme(addr, sent, recv); }
+            if(addr == Veml::address) { return veml(addr, sent, recv); }
+            if(addr == Bme::address) { return bme(addr, sent, recv); }
             return crcZeros(addr, sent, recv);
         }
     };
 
     // The address check has to be able to say no; a Bus that collides is a hard error by design.
-    static_assert(detail::addressesDistinct<Bh,
+    static_assert(Detail::addressesDistinct<Bh,
                                             Veml,
                                             Bme,
                                             Sht>(),
                   "four different addresses");
-    static_assert(!detail::addressesDistinct<Bh,
+    static_assert(!Detail::addressesDistinct<Bh,
                                              Veml,
                                              Bh>(),
                   "0x23 twice");
-    static_assert(!detail::addressesDistinct<Sht,
+    static_assert(!Detail::addressesDistinct<Sht,
                                              Sht>(),
                   "the same device twice");
-    static_assert(detail::addressesDistinct<Bh>(),
+    static_assert(Detail::addressesDistinct<Bh>(),
                   "one device cannot collide");
 
-    static_assert(Sensors::Count == 4);
-    static_assert(Sensors::QueueDepth == 4 && Sensors::QueueDepth <= RatedBus::QueueDepth);
+    static_assert(Sensors::count == 4);
+    static_assert(Sensors::queueDepth == 4 && Sensors::queueDepth <= RatedBus::queueDepth);
 
     // What the bus queue has room for beside the Bus's own devices: a scan's probe, a device
     // kept outside the Bus.
@@ -302,15 +302,15 @@ namespace BusTest {
 
     // The completion lambda every device hands the bus is the same size, and the Bus's figure
     // is the largest of them: what a bus behavior's CallbackSize has to hold.
-    static_assert(Sensors::CallbackBytes == Bh::CallbackBytes
-                  && Sensors::CallbackBytes == Sht::CallbackBytes);
-    static_assert(Sensors::CallbackBytes >= sizeof(void*) + sizeof(std::uint32_t),
+    static_assert(Sensors::callbackBytes == Bh::callbackBytes
+                  && Sensors::callbackBytes == Sht::callbackBytes);
+    static_assert(Sensors::callbackBytes >= sizeof(void*) + sizeof(std::uint32_t),
                   "the device and a generation");
 
     // A bus that does not say how deep its queue is: nothing to check against, and so nothing
     // to fail to compile.
     using Unrated = Kvasir::I2C::Bus<FakeBus, FakeClock, Dev<Chips::Bh1750>>;
-    static_assert(Unrated::Count == 1 && Unrated::QueueDepth == 1);
+    static_assert(Unrated::count == 1 && Unrated::queueDepth == 1);
     static_assert(Unrated::queueFits(1000),
                   "nothing to check against");
 
@@ -335,7 +335,7 @@ namespace BusTest {
     static_assert(std::is_same_v<BusPanel::Device,
                                  OledWide>,
                   "the panel found its device");
-    static_assert(BusPanel::Pages == 4,
+    static_assert(BusPanel::pages == 4,
                   "128 x 32 is four pages");
     static_assert(PanelContract<BusPanel>,
                   "and it is still what a frame renderer wants");
@@ -359,7 +359,7 @@ void bus() {
     Wiring wiring{};
     FakeBus::respond = std::ref(wiring);
     runFor(sensors, 400ms);
-    for(auto const addr : {Bh::Address, Veml::Address, Bme::Address, Sht::Address}) {
+    for(auto const addr : {Bh::address, Veml::address, Bme::address, Sht::address}) {
         bool seen = false;
         for(auto const& t : FakeBus::log) {
             if(t.isBus() && t.address == addr) { seen = true; }
@@ -373,9 +373,9 @@ void bus() {
     {
         std::vector<std::uint8_t> seen{};
         sensors.forEach(
-          [&](auto const& d) { seen.push_back(std::remove_cvref_t<decltype(d)>::Address); });
+          [&](auto const& d) { seen.push_back(std::remove_cvref_t<decltype(d)>::address); });
         check(
-          seen == std::vector<std::uint8_t>{Bh::Address, Veml::Address, Bme::Address, Sht::Address},
+          seen == std::vector<std::uint8_t>{Bh::address, Veml::address, Bme::address, Sht::address},
           "the four addresses, in the order the Bus was written");
     }
 
@@ -390,7 +390,7 @@ void bus() {
     FakeBus::respond = [](std::uint8_t, std::span<std::byte const>, std::span<std::byte>) {
         return FakeBus::Result::ok;   // the panel is write-only; it only has to ACK
     };
-    check(BusPanel::Width == 128 && BusPanel::Height == 32, "the geometry comes off the chip");
+    check(BusPanel::width == 128 && BusPanel::height == 32, "the geometry comes off the chip");
     auto busPanel = Kvasir::I2C::monoPanel<OledWide>(panels);
     runFor(panels, 400ms);
     check(busPanel.ready(), "the panel in the bus came up and is idle");
@@ -437,7 +437,7 @@ namespace BusMetaTest {
                        MuxGate<MuxA, 7>>;
     using Two = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxA, Front, A2, MuxB, B5, A7>;
 
-    static_assert(Two::Switches == 2 && Two::Segments == 17,
+    static_assert(Two::switches == 2 && Two::segments == 17,
                   "two switches, sixteen channels and the front");
     static_assert(Two::segmentOf<MuxA>() == 0 && Two::segmentOf<Front>() == 0,
                   "in front of both switches");
@@ -457,14 +457,14 @@ namespace BusMetaTest {
 
     /// A 10 ms read whose bus completions are kept.
     struct Stamped {
-        static constexpr std::string_view Name          = "STAMP";
-        static constexpr Address7         Address       = 0x2C;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "STAMP";
+        static constexpr Address7         address       = 0x2C;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Data {
-            static constexpr auto       Period      = std::chrono::milliseconds{10};
-            static constexpr bool       Timestamped = true;
-            static constexpr std::array Steps{
+            static constexpr auto       period      = std::chrono::milliseconds{10};
+            static constexpr bool       timestamped = true;
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -489,7 +489,7 @@ void busMetadata() {
 
     I2cCase    testcase{"Bus: counts per segment, a device by index, the counters in one snapshot"};
     SwitchWire wiring{
-      .switches = {MuxA::Address, MuxB::Address},
+      .switches = {MuxA::address, MuxB::address},
       .behind   = crcZeros
     };
     FakeBus::respond = std::ref(wiring);
@@ -525,9 +525,9 @@ void busMetadata() {
               "the second switch's arbiter is its own: channel 5, and not the first's channel 2");
     }
     std::string_view name{};
-    bus->visit(1, [&](auto const& dev) { name = std::remove_cvref_t<decltype(dev)>::Chip::Name; });
-    check(name == Chips::Bh1750::Name, "visit(1) is the BH1750");
-    std::array<Two::Counters, Two::Count> counters{};
+    bus->visit(1, [&](auto const& dev) { name = std::remove_cvref_t<decltype(dev)>::Chip::name; });
+    check(name == Chips::Bh1750::name, "visit(1) is the BH1750");
+    std::array<Two::Counters, Two::count> counters{};
     bus->snapshot(counters);
     check(counters[1].samples > 0 && counters[1].samples == bus->get<Front>().samples(),
           "its samples");
@@ -537,7 +537,7 @@ void busMetadata() {
     {
         using Call     = BusTest::RDev<Chips::GeneralCall>;
         using WithCall = Kvasir::I2C::Bus<BusTest::RatedBus, FakeClock, BusTest::Bh, Call>;
-        static_assert(WithCall::Count == 2 && WithCall::Parts == 1,
+        static_assert(WithCall::count == 2 && WithCall::parts == 1,
                       "two devices, one part: the general call is a Broadcast");
         static_assert(WithCall::isPart<BusTest::Bh>() && !WithCall::isPart<Call>());
         fresh();
@@ -636,7 +636,7 @@ namespace TwoBuses {
         FakeBusResult operator()(std::uint8_t               addr,
                                  std::span<std::byte const> sent,
                                  std::span<std::byte>       recv) const {
-            if(addr != Chips::Bh1750::Address) { return crcZeros(addr, sent, recv); }
+            if(addr != Chips::Bh1750::address) { return crcZeros(addr, sent, recv); }
             for(std::size_t i = 0; i < recv.size() && i < reading.size(); ++i) {
                 recv[i] = static_cast<std::byte>(reading[i]);
             }
@@ -719,16 +719,16 @@ void deviceSet() {
     static_assert(Kvasir::Engine::DeviceLike<Sht> && !Kvasir::Engine::BusLike<Sht>
                     && !Kvasir::Engine::WrapsDevice<Sht>,
                   "and a Device by its own");
-    static_assert(Parts::SetOpsT::CoreCount == 3,
+    static_assert(Parts::SetOpsT::coreCount == 3,
                   "one set over the Bus's chips and the lone part's");
     static_assert(
       std::is_same_v<Parts::SetOpsT,
-                     Kvasir::Engine::detail::SetOpsFor<Parts::PortT, FakeClock, Bh, Veml, Sht>>,
+                     Kvasir::Engine::Detail::SetOpsFor<Parts::PortT, FakeClock, Bh, Veml, Sht>>,
       "the same set as the three devices on one Bus: one engine");
-    static_assert(Parts::SetOpsT::Flags
-                    == Kvasir::Engine::detail::SetFlags{.anyGate = false, .anyReset = false},
+    static_assert(Parts::SetOpsT::flags
+                    == Kvasir::Engine::Detail::SetFlags{.anyGate = false, .anyReset = false},
                   "no gate, no reset line: the engine's paths for them are left out");
-    static_assert(BusMetaTest::Two::Flags.anyGate, "a Bus behind a switch has gates");
+    static_assert(BusMetaTest::Two::flags.anyGate, "a Bus behind a switch has gates");
 
     I2cCase const testcase{"DeviceSet: a Bus and a part on its own driven as one device set"};
     Wiring        wiring{};

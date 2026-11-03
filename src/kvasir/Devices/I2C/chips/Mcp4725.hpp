@@ -54,11 +54,11 @@ namespace Mcp4725Detail {
 /// browned out comes back at its EEPROM value without a NAK, and there is no cheap read-back.
 template<MilliVolt Supply = Units::milliVolt(3300), typename Timing = Engine::DefaultTiming>
 struct Mcp4725 {
-    static constexpr std::string_view Name          = "MCP4725";
-    static constexpr Address7         Address       = 0x60;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "MCP4725";
+    static constexpr Address7         address       = 0x60;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr auto Addresses = addressRun<0x60, 8>();
+    static constexpr auto addresses = addressRun<0x60, 8>();
 
     static_assert(Supply > Units::milliVolt(0),
                   "the supply is what a code is a fraction of");
@@ -67,15 +67,15 @@ struct Mcp4725 {
     using Output    = Mcp4725Detail::Output;
 
     /// 4096 codes across VDD.
-    static constexpr std::uint16_t FullScale = 4096;
+    static constexpr std::uint16_t fullScale = 4096;
 
     /// The code at or below a wanted output, for callers that think in volts.
     [[nodiscard]] static constexpr std::uint16_t codeFor(MilliVolt output) {
         auto const mV = Units::value(output);
         if(mV <= 0) { return 0; }
-        auto const c = static_cast<std::uint32_t>(mV) * FullScale
+        auto const c = static_cast<std::uint32_t>(mV) * fullScale
                      / static_cast<std::uint32_t>(Units::value(Supply));
-        return static_cast<std::uint16_t>(c >= FullScale ? FullScale - 1 : c);
+        return static_cast<std::uint16_t>(c >= fullScale ? fullScale - 1 : c);
     }
 
     /// What a code amounts to against a supply.
@@ -83,7 +83,7 @@ struct Mcp4725 {
                                                        MilliVolt     supply) {
         return Units::milliVolt(static_cast<std::int32_t>(
           static_cast<std::uint32_t>(code) * static_cast<std::uint32_t>(Units::value(supply))
-          / FullScale));
+          / fullScale));
     }
 
     template<typename T>
@@ -92,13 +92,13 @@ struct Mcp4725 {
     template<typename T>
         requires requires { T::levelPeriod; }
     struct LevelRewrite<T> {
-        static constexpr std::chrono::milliseconds Period = Kvasir::asDuration(T::levelPeriod);
+        static constexpr std::chrono::milliseconds period = Kvasir::asDuration(T::levelPeriod);
     };
 
     /// The output, 0..4095 of VDD.
     struct Level : LevelRewrite<Timing> {
         using Value                        = Output;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -112,11 +112,11 @@ struct Mcp4725 {
     /// The output and the power-on default together (an EEPROM write: 50 ms).
     struct Persist {
         using Value                        = Output;
-        static constexpr std::size_t Bytes = 3;
+        static constexpr std::size_t bytes = 3;
 
         /// Writing the EEPROM is a one-shot command: replaying it after a reset would burn
         /// another of the part's finite write cycles. Level (volatile) is replayed instead.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -131,7 +131,7 @@ struct Mcp4725 {
 
     /// On demand (request<Status>()): what the part holds.
     struct Status {
-        static constexpr std::array Steps{Engine::Step::receive({.count = 5, .offset = 0})};
+        static constexpr std::array steps{Engine::Step::receive({.count = 5, .offset = 0})};
 
         struct Sample {
             bool          ready{};       ///< RDY/BSY: no EEPROM write in progress

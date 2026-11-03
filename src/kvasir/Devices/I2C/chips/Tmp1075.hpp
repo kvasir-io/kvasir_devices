@@ -51,20 +51,20 @@ namespace Tmp1075Detail {
 /// mode, 8 shutdown. Bring-up reads DIEID and rejects anything else, which leaves the
 /// TMP1075N out: it has no device id register (Table 7-5 note). A2 is tied high or low, A1
 /// and A0 may also go to SDA or SCL, which gives the 32 addresses 0x40..0x5F of Table 7-2.
-/// `Timing::LimitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
+/// `Timing::limitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
 template<typename Timing = Engine::DefaultTiming>
 struct Tmp1075 {
-    static constexpr std::string_view Name = "TMP1075";
+    static constexpr std::string_view name = "TMP1075";
     /// TI TMP1075. TMP1075.md:931: DIEID (0Fh) is 7500h (not on the TMP1075N, :935).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"die-id", 0x0F, 2, true, 0xFFFF, 0x7500},
     };
-    static constexpr Address7    Address       = 0x48;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x48;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x40, 32>();
+    static constexpr auto addresses = addressRun<0x40, 32>();
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{50};
+    static constexpr auto startupDelay = std::chrono::milliseconds{50};
 
     using State = Engine::Groups::DeviceId;
 
@@ -83,8 +83,8 @@ struct Tmp1075 {
     using Power     = Tmp1075Detail::Power;
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
@@ -105,14 +105,14 @@ struct Tmp1075 {
     struct Config {
         using Value = Tmp1075Detail::Config;
 
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
         /// All fields at their reset values, put back after every bring-up. The register resets
         /// to 0x00FF; its low byte is unused and written as 0.
         /// A one-shot mode starts a conversion with every write, so the same value again is a
         /// new command: every set goes out.
-        static constexpr bool  AlwaysWrite = true;
-        static constexpr Value Initial{};
+        static constexpr bool  alwaysWrite = true;
+        static constexpr Value initial{};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -139,8 +139,8 @@ struct Tmp1075 {
     /// TLOW then THIGH: set<Limits>(Tmp1075<>::Low, Units::centiDegC(7500)).
     struct Limits : Engine::Groups::LimitsReadBack<Timing> {
         using Value                        = CentiDegC;
-        static constexpr std::size_t Items = 2;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t items = 2;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
                                                            std::size_t          item,
@@ -160,8 +160,8 @@ struct Tmp1075 {
 
     /// Limits items, in register order. Note this is the opposite of the TMP117's: on the
     /// TMP1075 register 0x02 is the *low* limit and 0x03 the high one.
-    static constexpr std::size_t Low  = 0;
-    static constexpr std::size_t High = 1;
+    static constexpr std::size_t low  = 0;
+    static constexpr std::size_t high = 1;
 
     using Reads  = Engine::List<Temperature>;
     using Writes = Engine::List<Config, Limits>;

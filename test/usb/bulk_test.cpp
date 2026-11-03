@@ -62,7 +62,7 @@ void run(char const* name) {
           = Host::controlIn(Host::makeSetup(vendorFromDevice,
                                             std::uint8_t{0x57},
                                             0,
-                                            Kvasir::USB::WinUsb::MsOs20::DescriptorIndex,
+                                            Kvasir::USB::WinUsb::MsOs20::descriptorIndex,
                                             1024));
         check(msos.ok() && msos.data.size() > 10, "the MS OS 2.0 descriptor set");
     }

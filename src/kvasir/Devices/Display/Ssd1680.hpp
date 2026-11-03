@@ -49,21 +49,21 @@ namespace Kvasir { namespace Display {
 
     /// SSD1680 datasheet, 10: Command Table.
     struct Ssd1680Cmd {
-        static constexpr std::uint8_t DriverOutputControl   = 0x01;
-        static constexpr std::uint8_t DeepSleep             = 0x10;
-        static constexpr std::uint8_t DataEntryMode         = 0x11;
-        static constexpr std::uint8_t SwReset               = 0x12;
-        static constexpr std::uint8_t MasterActivation      = 0x20;
-        static constexpr std::uint8_t DisplayUpdateControl1 = 0x21;
-        static constexpr std::uint8_t DisplayUpdateControl2 = 0x22;
-        static constexpr std::uint8_t WriteRamBw            = 0x24;
-        static constexpr std::uint8_t WriteLut              = 0x32;
-        static constexpr std::uint8_t WriteDisplayOption    = 0x37;
-        static constexpr std::uint8_t BorderWaveform        = 0x3C;
-        static constexpr std::uint8_t RamXRange             = 0x44;
-        static constexpr std::uint8_t RamYRange             = 0x45;
-        static constexpr std::uint8_t RamXCounter           = 0x4E;
-        static constexpr std::uint8_t RamYCounter           = 0x4F;
+        static constexpr std::uint8_t driverOutputControl   = 0x01;
+        static constexpr std::uint8_t deepSleep             = 0x10;
+        static constexpr std::uint8_t dataEntryMode         = 0x11;
+        static constexpr std::uint8_t swReset               = 0x12;
+        static constexpr std::uint8_t masterActivation      = 0x20;
+        static constexpr std::uint8_t displayUpdateControl1 = 0x21;
+        static constexpr std::uint8_t displayUpdateControl2 = 0x22;
+        static constexpr std::uint8_t writeRamBw            = 0x24;
+        static constexpr std::uint8_t writeLut              = 0x32;
+        static constexpr std::uint8_t writeDisplayOption    = 0x37;
+        static constexpr std::uint8_t borderWaveform        = 0x3C;
+        static constexpr std::uint8_t ramXRange             = 0x44;
+        static constexpr std::uint8_t ramYRange             = 0x45;
+        static constexpr std::uint8_t ramXCounter           = 0x4E;
+        static constexpr std::uint8_t ramYCounter           = 0x4F;
     };
 
     /// Defaults for a panel config; a config derives from this and redeclares what it sets.
@@ -94,7 +94,7 @@ namespace Kvasir { namespace Display {
 
     namespace ssd1680_detail {
         /// A canvas byte has its top pixel in bit 0, a source byte its first pixel in bit 7.
-        inline constexpr std::array<std::uint8_t, 256> Reverse = [] {
+        inline constexpr std::array<std::uint8_t, 256> reverse = [] {
             std::array<std::uint8_t, 256> r{};
             for(unsigned v = 0; v < 256U; ++v) {
                 unsigned out = 0;
@@ -107,7 +107,7 @@ namespace Kvasir { namespace Display {
         }();
 
         /// Five LUTs of twelve groups, the group timings, frame rates, XON.
-        inline constexpr std::array<std::uint8_t, 153> PartialLut{
+        inline constexpr std::array<std::uint8_t, 153> partialLut{
           // clang-format off
             // LUT 0..4, VS phase A B C D per group
             0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -172,93 +172,93 @@ namespace Kvasir { namespace Display {
                       "derive the panel config from Kvasir::Display::Ssd1680Defaults");
         using Config = UserConfig;
 
-        static constexpr std::chrono::milliseconds RetryAfter
+        static constexpr std::chrono::milliseconds retryAfter
           = Kvasir::asDuration(Config::retryAfter);
-        static constexpr std::chrono::milliseconds BusyTimeout
+        static constexpr std::chrono::milliseconds busyTimeout
           = Kvasir::asDuration(Config::busyTimeout);
-        static_assert(RetryAfter > std::chrono::milliseconds::zero(),
+        static_assert(retryAfter > std::chrono::milliseconds::zero(),
                       "retryAfter is the pause before a failed panel is brought up again");
-        static_assert(BusyTimeout > std::chrono::milliseconds::zero(),
+        static_assert(busyTimeout > std::chrono::milliseconds::zero(),
                       "busyTimeout is how long BUSY may stay high; a full refresh takes about 3 s");
 
         /// SCL at most 20 MHz writing (SSD1680 12.1 Table 12-1, SSD1680.md l.1744); the driver
         /// never reads. Checked only when the bus says what it runs at (a mock bus does not).
-        static constexpr Units::Hertz MaxWriteClock = Units::hertz(20'000'000);
+        static constexpr Units::Hertz maxWriteClock = Units::hertz(20'000'000);
         static_assert(Units::hertz(static_cast<unsigned long>(KVASIR_CONFIG_OR(Bus,
                                                                                writeHz,
                                                                                0UL)))
-                        <= MaxWriteClock,
+                        <= maxWriteClock,
                       "the bus write clock exceeds the SSD1680's 20 MHz");
 
-        static constexpr std::string_view Name = "SSD1680";
+        static constexpr std::string_view name = "SSD1680";
 
-        static constexpr int Width    = Config::gateLines;
-        static constexpr int Height   = Config::sourceLines;
-        static constexpr int Pages    = (Height + 7) / 8;
-        static constexpr int RowBytes = Config::sourceLines / 8;
+        static constexpr int width    = Config::gateLines;
+        static constexpr int height   = Config::sourceLines;
+        static constexpr int pages    = (height + 7) / 8;
+        static constexpr int rowBytes = Config::sourceLines / 8;
 
         static_assert(Config::sourceLines > 0 && Config::sourceLines <= 176
                         && Config::sourceLines % 8 == 0,
                       "the SSD1680 drives up to 176 source lines, in whole bytes");
         static_assert(Config::gateLines > 0 && Config::gateLines <= 296,
                       "the SSD1680 drives up to 296 gate lines");
-        static_assert(Pages <= 32,
+        static_assert(pages <= 32,
                       "MonoCanvasView tracks dirty pages in 32 bits");
         static_assert(Config::chunkRows > 0,
                       "at least one gate line per transfer");
 
-        using PageBytes = std::array<std::uint8_t, static_cast<std::size_t>(Width)>;
-        using PageRam   = std::span<PageBytes, static_cast<std::size_t>(Pages)>;
+        using PageBytes = std::array<std::uint8_t, static_cast<std::size_t>(width)>;
+        using PageRam   = std::span<PageBytes, static_cast<std::size_t>(pages)>;
 
-        static constexpr std::chrono::milliseconds ResetPulse{10};
-        static constexpr std::chrono::milliseconds ResetToCommand{10};
+        static constexpr std::chrono::milliseconds resetPulse{10};
+        static constexpr std::chrono::milliseconds resetToCommand{10};
 
         /// BUSY is believed only this long after a transfer: a command that has not raised it
         /// yet must not look finished.
-        static constexpr std::chrono::milliseconds BusySettle{2};
+        static constexpr std::chrono::milliseconds busySettle{2};
 
     private:
         using u8 = std::uint8_t;
         using ms = std::chrono::milliseconds;
         using tp = typename Clock::time_point;
 
-        static constexpr int LastGate = Config::gateLines - 1;
+        static constexpr int lastGate = Config::gateLines - 1;
 
         // Dcs::Script steps; the delay byte is unused, BUSY is waited for.
-        static constexpr std::array<u8, 18> CommonBytes{
-          Ssd1680Cmd::SwReset,
+        static constexpr std::array<u8, 18> commonBytes{
+          Ssd1680Cmd::swReset,
           0,
           0,
-          Ssd1680Cmd::DriverOutputControl,
+          Ssd1680Cmd::driverOutputControl,
           3,
-          ssd1680_detail::lo(LastGate),
-          ssd1680_detail::hi(LastGate),
+          ssd1680_detail::lo(lastGate),
+          ssd1680_detail::hi(lastGate),
           0x00,
           0,
-          Ssd1680Cmd::DataEntryMode,
+          Ssd1680Cmd::dataEntryMode,
           1,
           0x03,   // X increment, Y increment, counter moves in X
           0,
-          Ssd1680Cmd::DisplayUpdateControl1,
+          Ssd1680Cmd::displayUpdateControl1,
           2,
           0x00,
           0x80,
           0};
 
-        static constexpr std::array<u8, 8> FullBytes{Ssd1680Cmd::BorderWaveform,
+        static constexpr std::array<u8, 8> fullBytes{Ssd1680Cmd::borderWaveform,
                                                      1,
                                                      0x05,
                                                      0,
-                                                     Ssd1680Cmd::DisplayUpdateControl2,
+                                                     Ssd1680Cmd::displayUpdateControl2,
                                                      1,
                                                      0xF7,
                                                      0};
 
-        static constexpr auto PartialBytes
-          = ssd1680_detail::join(std::array<u8, 2>{Ssd1680Cmd::WriteLut, 153},
-                                 ssd1680_detail::PartialLut,
+        static constexpr auto partialBytes
+          = ssd1680_detail::join(std::array<u8, 2>{Ssd1680Cmd::writeLut, 153},
+                                 ssd1680_detail::partialLut,
                                  std::array<u8, 1>{0},
-                                 std::array<u8, 13>{Ssd1680Cmd::WriteDisplayOption,
+                                 std::array<u8, 13>{Ssd1680Cmd::writeDisplayOption,
                                                     10,
                                                     0x00,
                                                     0x00,
@@ -271,50 +271,50 @@ namespace Kvasir { namespace Display {
                                                     0x00,
                                                     0x00,
                                                     0},
-                                 std::array<u8, 15>{Ssd1680Cmd::BorderWaveform,
+                                 std::array<u8, 15>{Ssd1680Cmd::borderWaveform,
                                                     1,
                                                     0x80,
                                                     0,
-                                                    Ssd1680Cmd::DisplayUpdateControl2,
+                                                    Ssd1680Cmd::displayUpdateControl2,
                                                     1,
                                                     0xC0,
                                                     0,
-                                                    Ssd1680Cmd::MasterActivation,
+                                                    Ssd1680Cmd::masterActivation,
                                                     0,
                                                     0,
-                                                    Ssd1680Cmd::DisplayUpdateControl2,
+                                                    Ssd1680Cmd::displayUpdateControl2,
                                                     1,
                                                     0x0C,
                                                     0});
 
-        static constexpr std::array<u8, 21> WindowBytes{Ssd1680Cmd::RamXRange,
+        static constexpr std::array<u8, 21> windowBytes{Ssd1680Cmd::ramXRange,
                                                         2,
                                                         0x00,
-                                                        static_cast<u8>(RowBytes - 1),
+                                                        static_cast<u8>(rowBytes - 1),
                                                         0,
-                                                        Ssd1680Cmd::RamYRange,
+                                                        Ssd1680Cmd::ramYRange,
                                                         4,
                                                         0x00,
                                                         0x00,
-                                                        ssd1680_detail::lo(LastGate),
-                                                        ssd1680_detail::hi(LastGate),
+                                                        ssd1680_detail::lo(lastGate),
+                                                        ssd1680_detail::hi(lastGate),
                                                         0,
-                                                        Ssd1680Cmd::RamXCounter,
+                                                        Ssd1680Cmd::ramXCounter,
                                                         1,
                                                         0x00,
                                                         0,
-                                                        Ssd1680Cmd::RamYCounter,
+                                                        Ssd1680Cmd::ramYCounter,
                                                         2,
                                                         0x00,
                                                         0x00,
                                                         0};
 
-        static constexpr std::array<u8, 3> ActivateBytes{Ssd1680Cmd::MasterActivation, 0, 0};
+        static constexpr std::array<u8, 3> activateBytes{Ssd1680Cmd::masterActivation, 0, 0};
 
-        static_assert(Dcs::Script::wellFormed(CommonBytes) && Dcs::Script::wellFormed(FullBytes)
-                      && Dcs::Script::wellFormed(PartialBytes)
-                      && Dcs::Script::wellFormed(WindowBytes)
-                      && Dcs::Script::wellFormed(ActivateBytes));
+        static_assert(Dcs::Script::wellFormed(commonBytes) && Dcs::Script::wellFormed(fullBytes)
+                      && Dcs::Script::wellFormed(partialBytes)
+                      && Dcs::Script::wellFormed(windowBytes)
+                      && Dcs::Script::wellFormed(activateBytes));
 
         enum class Kind : u8 {
             script,     ///< send a Dcs::Script, each command after BUSY
@@ -327,23 +327,23 @@ namespace Kvasir { namespace Display {
             Dcs::Script script{};
         };
 
-        static constexpr Item Common{Kind::script, Dcs::Script{CommonBytes}};
-        static constexpr Item Full{Kind::script, Dcs::Script{FullBytes}};
-        static constexpr Item PartialInit{Kind::script, Dcs::Script{PartialBytes}};
-        static constexpr Item Window{Kind::script, Dcs::Script{WindowBytes}};
-        static constexpr Item Ram{Kind::ram, {}};
-        static constexpr Item Activate{Kind::script, Dcs::Script{ActivateBytes}};
-        static constexpr Item WaitIdle{Kind::waitIdle, {}};
+        static constexpr Item common{Kind::script, Dcs::Script{commonBytes}};
+        static constexpr Item full{Kind::script, Dcs::Script{fullBytes}};
+        static constexpr Item partialInit{Kind::script, Dcs::Script{partialBytes}};
+        static constexpr Item window{Kind::script, Dcs::Script{windowBytes}};
+        static constexpr Item ram{Kind::ram, {}};
+        static constexpr Item activate{Kind::script, Dcs::Script{activateBytes}};
+        static constexpr Item waitIdle{Kind::waitIdle, {}};
 
-        static constexpr std::array<Item, 4> Refresh{Window, Ram, Activate, WaitIdle};
+        static constexpr std::array<Item, 4> refresh{window, ram, activate, waitIdle};
 
         /// Also clean(): a full refresh, then with partial the partial waveform.
-        static constexpr std::array<Item, Config::partial ? 12 : 6> BringUp = [] {
+        static constexpr std::array<Item, Config::partial ? 12 : 6> bringUp = [] {
             std::array<Item, Config::partial ? 12 : 6> p{};
             std::size_t                                i = 0;
-            for(auto const& it : {Common, Full, Window, Ram, Activate, WaitIdle}) { p[i++] = it; }
+            for(auto const& it : {common, full, window, ram, activate, waitIdle}) { p[i++] = it; }
             if constexpr(Config::partial) {
-                for(auto const& it : {Common, PartialInit, Window, Ram, Activate, WaitIdle}) {
+                for(auto const& it : {common, partialInit, window, ram, activate, waitIdle}) {
                     p[i++] = it;
                 }
             }
@@ -355,8 +355,8 @@ namespace Kvasir { namespace Display {
         /// What is on the bus: a command (with its parameters) or a RAM chunk.
         enum class Tx : u8 { idle, command, data };
 
-        static constexpr std::size_t ChunkBytes
-          = static_cast<std::size_t>(Config::chunkRows) * static_cast<std::size_t>(RowBytes);
+        static constexpr std::size_t chunkBytes
+          = static_cast<std::size_t>(Config::chunkRows) * static_cast<std::size_t>(rowBytes);
 
         // Zero-initialised (nothing copied from flash); a zero frame is white.
         static inline State                             state_{State::resetAssert};
@@ -370,13 +370,13 @@ namespace Kvasir { namespace Display {
         static inline bool                              drawnWhileBusy_{};
         static inline tp                                settled_{};
         static inline std::uint32_t                     refreshes_{};
-        static inline std::array<std::byte, ChunkBytes> chunk_{};
-        static inline std::array<PageBytes, std::size_t{Pages}>     ram_{};
-        static inline std::array<std::uint32_t, std::size_t{Pages}> hashes_{};
+        static inline std::array<std::byte, chunkBytes> chunk_{};
+        static inline std::array<PageBytes, std::size_t{pages}>     ram_{};
+        static inline std::array<std::uint32_t, std::size_t{pages}> hashes_{};
         static inline Kvasir::Retry<
           Clock,
           ssd1680_detail::Failure,
-          Kvasir::RetryFromMs<static_cast<std::uint64_t>(RetryAfter.count())>>
+          Kvasir::RetryFromMs<static_cast<std::uint64_t>(retryAfter.count())>>
                                     retry_{};
         static inline std::uint32_t failures_{};   ///< since power-up, not since the last success
         static inline bool          up_{};         ///< a program completed since the last (re)start
@@ -391,7 +391,7 @@ namespace Kvasir { namespace Display {
             retry_.failed(why, now);
             UC_LOG_W(
               "{}: the panel or its bus failed ({}, failure {}), bringing it up again in {} ms",
-              Name,
+              name,
               why == ssd1680_detail::Failure::busyTimeout ? std::string_view{"BUSY stuck high"}
                                                           : std::string_view{"a transfer failed"},
               failures_,
@@ -408,15 +408,15 @@ namespace Kvasir { namespace Display {
             return h;
         }
 
-        [[nodiscard]] static bool differs(std::uint32_t pages) {
-            for(std::size_t p = 0; p < std::size_t{Pages}; ++p) {
-                if(((pages >> p) & 1U) != 0 && hash(ram_[p]) != hashes_[p]) { return true; }
+        [[nodiscard]] static bool differs(std::uint32_t pagesArg) {
+            for(std::size_t p = 0; p < std::size_t{pages}; ++p) {
+                if(((pagesArg >> p) & 1U) != 0 && hash(ram_[p]) != hashes_[p]) { return true; }
             }
             return false;
         }
 
         static void start(std::span<Item const> program) {
-            for(std::size_t p = 0; p < std::size_t{Pages}; ++p) { hashes_[p] = hash(ram_[p]); }
+            for(std::size_t p = 0; p < std::size_t{pages}; ++p) { hashes_[p] = hash(ram_[p]); }
             program_    = program;
             item_       = 0;
             pos_        = 0;
@@ -450,7 +450,7 @@ namespace Kvasir { namespace Display {
         [[nodiscard]] static bool controllerIdle(tp now) {
             if(now < settled_) { return false; }
             if(Busy::busy()) {
-                if(now > settled_ + BusyTimeout) {
+                if(now > settled_ + busyTimeout) {
                     fail(ssd1680_detail::Failure::busyTimeout, now);
                 }
                 return false;
@@ -466,14 +466,14 @@ namespace Kvasir { namespace Display {
                 if constexpr(Config::flip) {
                     // Page and bit order both run backwards: each byte stays as it is.
                     auto const x = static_cast<std::size_t>(y);
-                    for(std::size_t k = 0; k < std::size_t{RowBytes}; ++k) {
-                        auto const v = ram_[std::size_t{Pages} - 1 - k][x];
+                    for(std::size_t k = 0; k < std::size_t{rowBytes}; ++k) {
+                        auto const v = ram_[std::size_t{pages} - 1 - k][x];
                         chunk_[i++]  = static_cast<std::byte>(static_cast<u8>(~v));
                     }
                 } else {
-                    auto const x = static_cast<std::size_t>(Width - 1 - y);
-                    for(std::size_t k = 0; k < std::size_t{RowBytes}; ++k) {
-                        auto const v = ssd1680_detail::Reverse[ram_[k][x]];
+                    auto const x = static_cast<std::size_t>(width - 1 - y);
+                    for(std::size_t k = 0; k < std::size_t{rowBytes}; ++k) {
+                        auto const v = ssd1680_detail::reverse[ram_[k][x]];
                         chunk_[i++]  = static_cast<std::byte>(static_cast<u8>(~v));
                     }
                 }
@@ -487,7 +487,7 @@ namespace Kvasir { namespace Display {
             }
             if(tx_ != Tx::idle) {
                 if(!Bus::idle()) { return; }
-                settled_ = now + BusySettle;
+                settled_ = now + busySettle;
                 tx_      = Tx::idle;
             }
 
@@ -511,19 +511,19 @@ namespace Kvasir { namespace Display {
                 if(!ramStarted_) {
                     if(!controllerIdle(now)) { return; }
                     ramStarted_ = true;
-                    command(Ssd1680Cmd::WriteRamBw, {}, now);
+                    command(Ssd1680Cmd::writeRamBw, {}, now);
                     return;
                 }
-                if(pos_ >= std::size_t{Width}) {
+                if(pos_ >= std::size_t{width}) {
                     finishItem();
                     return;
                 }
                 {
-                    auto const rows = std::min(Config::chunkRows, Width - static_cast<int>(pos_));
+                    auto const rows = std::min(Config::chunkRows, width - static_cast<int>(pos_));
                     repack(static_cast<int>(pos_), rows);
                     pos_ += static_cast<std::size_t>(rows);
                     if(!Bus::writeData(std::span<std::byte const>{chunk_}.first(
-                         static_cast<std::size_t>(rows) * std::size_t{RowBytes})))
+                         static_cast<std::size_t>(rows) * std::size_t{rowBytes})))
                     {
                         fail(ssd1680_detail::Failure::transfer, now);
                         return;
@@ -572,10 +572,10 @@ namespace Kvasir { namespace Display {
         [[nodiscard]] static PageRam pageRam() { return PageRam{ram_}; }
 
         /// The pages drawn into: refreshed only if one differs from what was last sent.
-        static void pagesChanged(std::uint32_t pages) {
+        static void pagesChanged(std::uint32_t pagesArg) {
             if(state_ == State::ready) {
-                if(differs(pages)) { start(Refresh); }
-            } else if(pages != 0) {
+                if(differs(pagesArg)) { start(refresh); }
+            } else if(pagesArg != 0) {
                 drawnWhileBusy_ = true;
             }
         }
@@ -589,14 +589,14 @@ namespace Kvasir { namespace Display {
             auto const now = Clock::now();
             switch(state_) {
             case State::resetAssert:
-                reset_.begin(now, ResetPulse, ResetToCommand);
+                reset_.begin(now, resetPulse, resetToCommand);
                 state_ = State::resetRelease;
                 break;
 
             case State::resetRelease:
                 if(reset_.done(now)) {
                     settled_ = now;
-                    start(BringUp);
+                    start(bringUp);
                 }
                 break;
 
@@ -606,10 +606,10 @@ namespace Kvasir { namespace Display {
                 if(cleanRequested_) {
                     cleanRequested_ = false;
                     drawnWhileBusy_ = false;
-                    start(BringUp);
+                    start(bringUp);
                 } else if(drawnWhileBusy_) {
                     drawnWhileBusy_ = false;
-                    if(differs(0xFFFF'FFFFU)) { start(Refresh); }
+                    if(differs(0xFFFF'FFFFU)) { start(refresh); }
                 }
                 break;
 

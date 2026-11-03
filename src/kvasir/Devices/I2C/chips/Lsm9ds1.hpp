@@ -24,8 +24,8 @@ namespace Lsm9ds1Detail {
     /// (Table 46). 0 is power-down. In accelerometer-only mode ODR_XL codes 1 and 2 are 10 and
     /// 50 Hz instead (Table 68).
     enum class Odr : std::uint8_t {
-        hz14_9 = 1,
-        hz59_5 = 2,
+        hz14p9 = 1,
+        hz59p5 = 2,
         hz119  = 3,
         hz238  = 4,
         hz476  = 5,
@@ -35,12 +35,12 @@ namespace Lsm9ds1Detail {
     enum class MagRange : std::uint8_t { gauss4 = 0, gauss8 = 1, gauss12 = 2, gauss16 = 3 };
 
     /// Per LSB, in the datasheet's own order for FS_XL: 0.061, 0.732, 0.122, 0.244 mg.
-    inline constexpr std::array<MicroG, 4> AccelPerCount{Units::microG(61),
+    inline constexpr std::array<MicroG, 4> accelPerCount{Units::microG(61),
                                                          Units::microG(732),
                                                          Units::microG(122),
                                                          Units::microG(244)};
     /// Per LSB for FS_G: 8.75, 17.5 and 70 mdps (2 is not available).
-    inline constexpr std::array<MicroDegPerSec, 4> RatePerCount{Units::microDegPerSec(8750),
+    inline constexpr std::array<MicroDegPerSec, 4> ratePerCount{Units::microDegPerSec(8750),
                                                                 Units::microDegPerSec(17500),
                                                                 Units::microDegPerSec(0),
                                                                 Units::microDegPerSec(70000)};
@@ -48,7 +48,7 @@ namespace Lsm9ds1Detail {
     /// ugauss (1 gauss is 100000 nT). The datasheet's table rounds these to 0.14, 0.29, 0.43
     /// and 0.58 mgauss -- 4 % low at +-4 gauss; the magnetometer die's sensitivities are 6842,
     /// 3421, 2281 and 1711 LSB/gauss, which is what Linux st_magn_core.c uses.
-    inline constexpr std::array<std::uint16_t, 4> FieldPerCountDeciNt{146, 292, 438, 584};
+    inline constexpr std::array<std::uint16_t, 4> fieldPerCountDeciNt{146, 292, 438, 584};
 
     /// FS_G 10 is not available; a CTRL_REG1_G value carrying it is written with 11 (2000 dps)
     /// instead, so the range decode() scales by is always one the part has.
@@ -58,7 +58,7 @@ namespace Lsm9ds1Detail {
 
     /// The sampling period each ODR asks for, rounded up to whole milliseconds so the part is
     /// never read faster than it converts: power-down, then 14.9, 59.5, 119, 238, 476, 952 Hz.
-    inline constexpr std::array<std::chrono::milliseconds, 8> OdrPeriod{
+    inline constexpr std::array<std::chrono::milliseconds, 8> odrPeriod{
       std::chrono::milliseconds{0},
       std::chrono::milliseconds{68},
       std::chrono::milliseconds{17},
@@ -110,31 +110,31 @@ template<Lsm9ds1Detail::AccelRange AccelFs = Lsm9ds1Detail::AccelRange::g2,
          Lsm9ds1Detail::GyroRange  GyroFs  = Lsm9ds1Detail::GyroRange::dps245,
          Lsm9ds1Detail::Odr        Odr     = Lsm9ds1Detail::Odr::hz119>
 struct Lsm9ds1Ag {
-    static constexpr std::string_view Name = "LSM9DS1-AG";
+    static constexpr std::string_view name = "LSM9DS1-AG";
     /// ST LSM9DS1. LSM9DS1.md:1534 (WHO_AM_I 0Fh of the accelerometer and gyroscope: 68h) and :1236
     /// (WHO_AM_I_M 0Fh of the magnetometer: 3Dh).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x68},
     };
-    static constexpr Address7    Address       = 0x6B;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x6B;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr std::array<Address7, 2> Addresses{0x6A, 0x6B};
+    static constexpr std::array<Address7, 2> addresses{0x6A, 0x6B};
 
-    static constexpr std::array<MicroG, 4>         AccelPerCount = Lsm9ds1Detail::AccelPerCount;
-    static constexpr std::array<MicroDegPerSec, 4> RatePerCount  = Lsm9ds1Detail::RatePerCount;
+    static constexpr std::array<MicroG, 4>         accelPerCount = Lsm9ds1Detail::accelPerCount;
+    static constexpr std::array<MicroDegPerSec, 4> ratePerCount  = Lsm9ds1Detail::ratePerCount;
 
-    static constexpr std::uint8_t Ctrl1G = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t ctrl1G = static_cast<std::uint8_t>(
       (static_cast<unsigned>(Odr) << 5) | (static_cast<unsigned>(GyroFs) << 3));
-    static constexpr std::uint8_t Ctrl6Xl = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t ctrl6Xl = static_cast<std::uint8_t>(
       (static_cast<unsigned>(Odr) << 5) | (static_cast<unsigned>(AccelFs) << 3));
 
-    static constexpr std::chrono::milliseconds OutputPeriod
-      = Lsm9ds1Detail::OdrPeriod[static_cast<std::size_t>(Odr)];
+    static constexpr std::chrono::milliseconds outputPeriod
+      = Lsm9ds1Detail::odrPeriod[static_cast<std::size_t>(Odr)];
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{20};
+    static constexpr auto startupDelay = std::chrono::milliseconds{20};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg     = 0x22,
                            .payload = {0x05},
                            .delay   = std::chrono::milliseconds{50}}),   // CTRL_REG8: SW_RESET
@@ -142,10 +142,10 @@ struct Lsm9ds1Ag {
         {.reg = 0x22, .payload = {0x84}, .delay = std::chrono::milliseconds{50}}),   // BOOT
       Engine::Step::write({.reg = 0x22, .payload = {0x44}}),   // BDU, IF_ADD_INC
       Engine::Step::write(
-        {.reg = 0x10, .payload = {Ctrl1G}}),   // gyroscope on, which also runs the accelerometer
+        {.reg = 0x10, .payload = {ctrl1G}}),   // gyroscope on, which also runs the accelerometer
       Engine::Step::write(
         {.reg     = 0x20,
-         .payload = {Ctrl6Xl},
+         .payload = {ctrl6Xl},
          .delay   = std::chrono::milliseconds{30}}),   // accelerometer ODR and full scale
     };
 
@@ -162,21 +162,21 @@ struct Lsm9ds1Ag {
     }
 
     struct Motion {
-        static constexpr auto Period = OutputPeriod;
+        static constexpr auto period = outputPeriod;
         /// So the frames that said nothing new are counted (unchanged<Motion>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// The rate CTRL_REG1_G holds now, which a GyroConfig write changes.
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
-            auto const p = Lsm9ds1Detail::OdrPeriod[state.odr & 0x07U];
-            return p != std::chrono::milliseconds::zero() ? p : OutputPeriod;
+            auto const p = Lsm9ds1Detail::odrPeriod[state.odr & 0x07U];
+            return p != std::chrono::milliseconds::zero() ? p : outputPeriod;
         }
 
         /// Temperature, status, then the gyroscope and accelerometer bursts; IF_ADD_INC is set
         /// out of reset, so each burst auto-increments. STATUS_REG is its own read: the
         /// datasheet's multiple-read sequence (3.3, Figure 7) goes from OUT_TEMP straight to
         /// OUT_X_G and does not say a burst passes through 0x17.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x15, .count = 2, .offset = 0}),   // OUT_TEMP_L/H
           Engine::Step::read({.reg = 0x17, .count = 1, .offset = 2}),   // STATUS_REG
           Engine::Step::read({.reg = 0x18, .count = 6, .offset = 3}),
@@ -192,13 +192,13 @@ struct Lsm9ds1Ag {
         [[nodiscard]] static constexpr MicroG toAccel(std::int16_t raw,
                                                       unsigned     fs) {
             return Units::microG(static_cast<std::int64_t>(raw)
-                                 * Units::value(AccelPerCount[fs & 0x03U]));
+                                 * Units::value(accelPerCount[fs & 0x03U]));
         }
 
         [[nodiscard]] static constexpr MilliDegPerSec toRate(std::int16_t raw,
                                                              unsigned     fs) {
             return Units::milliDegPerSec(static_cast<std::int64_t>(raw)
-                                         * Units::value(RatePerCount[fs & 0x03U]) / 1000);
+                                         * Units::value(ratePerCount[fs & 0x03U]) / 1000);
         }
 
         /// 12-bit, 16 LSB per degree, zero at 25 degC; at the full scales the part holds now.
@@ -223,8 +223,8 @@ struct Lsm9ds1Ag {
     /// scale (4:3), changeable at run time.
     struct GyroConfig {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Ctrl1G;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = ctrl1G;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -243,8 +243,8 @@ struct Lsm9ds1Ag {
     /// CTRL_REG6_XL: the accelerometer's ODR (7:5) and full scale (4:3).
     struct AccelConfig {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Ctrl6Xl;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = ctrl6Xl;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -272,28 +272,28 @@ struct Lsm9ds1Ag {
 /// group, so it can be changed at run time and decode() follows.
 template<Lsm9ds1Detail::MagRange MagFs = Lsm9ds1Detail::MagRange::gauss4>
 struct Lsm9ds1Mag {
-    static constexpr std::string_view Name = "LSM9DS1-M";
+    static constexpr std::string_view name = "LSM9DS1-M";
     /// ST LSM9DS1. LSM9DS1.md:1534 (WHO_AM_I 0Fh of the accelerometer and gyroscope: 68h) and :1236
     /// (WHO_AM_I_M 0Fh of the magnetometer: 3Dh).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x3D},
     };
-    static constexpr Address7    Address       = 0x1E;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x1E;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr std::array<Address7, 2> Addresses{0x1C, 0x1E};
+    static constexpr std::array<Address7, 2> addresses{0x1C, 0x1E};
 
-    static constexpr std::array<std::uint16_t, 4> FieldPerCountDeciNt
-      = Lsm9ds1Detail::FieldPerCountDeciNt;
+    static constexpr std::array<std::uint16_t, 4> fieldPerCountDeciNt
+      = Lsm9ds1Detail::fieldPerCountDeciNt;
 
-    static constexpr std::uint8_t Ctrl2M
+    static constexpr std::uint8_t ctrl2M
       = static_cast<std::uint8_t>(static_cast<unsigned>(MagFs) << 5);
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{20};
+    static constexpr auto startupDelay = std::chrono::milliseconds{20};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x20, .payload = {0xFC}}),   // temp comp, ultra-high perf, 80 Hz
-      Engine::Step::write({.reg = 0x21, .payload = {Ctrl2M}}),   // full scale
+      Engine::Step::write({.reg = 0x21, .payload = {ctrl2M}}),   // full scale
       Engine::Step::write({.reg = 0x23, .payload = {0x0C}}),     // Z axis ultra-high performance
       Engine::Step::write({.reg = 0x24, .payload = {0x40}}),     // CTRL_REG5_M: BDU
       Engine::Step::write({.reg     = 0x22,
@@ -312,13 +312,13 @@ struct Lsm9ds1Mag {
     }
 
     struct Field {
-        static constexpr auto Period = std::chrono::milliseconds{50};
+        static constexpr auto period = std::chrono::milliseconds{50};
         /// So the frames that said nothing new are counted (unchanged<Field>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// 0x80 sets the sub-address auto-increment for this half of the part: STATUS_REG_M,
         /// then the six output bytes.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0xA7, .count = 7, .offset = 0})};
 
         struct Sample {
@@ -329,7 +329,7 @@ struct Lsm9ds1Mag {
 
         [[nodiscard]] static constexpr NanoTesla field(std::int16_t raw,
                                                        unsigned     fs) {
-            return Units::nanoTesla(static_cast<std::int64_t>(raw) * FieldPerCountDeciNt[fs & 0x03U]
+            return Units::nanoTesla(static_cast<std::int64_t>(raw) * fieldPerCountDeciNt[fs & 0x03U]
                                     / 10);
         }
 
@@ -347,8 +347,8 @@ struct Lsm9ds1Mag {
     /// CTRL_REG2_M: FS in bits 6:5, changeable at run time.
     struct Range {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Ctrl2M;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = ctrl2M;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

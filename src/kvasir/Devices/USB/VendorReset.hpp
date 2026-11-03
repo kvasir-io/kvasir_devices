@@ -37,10 +37,10 @@ private:
     friend Derived;
     friend struct Kvasir::USB::MixinTraits;   // Grants access to helper functions
 
-    static constexpr std::size_t InterfaceCount = 1;
-    static constexpr std::size_t EndpointCount  = 0;
+    static constexpr std::size_t interfaceCount = 1;
+    static constexpr std::size_t endpointCount  = 0;
 
-    static constexpr auto InterfaceDescriptor
+    static constexpr auto interfaceDescriptor
       = Kvasir::USB::Descriptors::Interface{.bInterfaceNumber   = FirstInterfaceNumber,
                                             .bAlternateSetting  = 0,
                                             .bNumEndpoints      = 0,

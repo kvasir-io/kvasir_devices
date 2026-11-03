@@ -26,10 +26,10 @@ namespace {
 /// no write in front of it.
 template<typename Chip>
 constexpr bool decidesBeforeWriting() {
-    if constexpr(Device<FakeBus, FakeClock, Chip>::HasIdentity) {
+    if constexpr(Device<FakeBus, FakeClock, Chip>::hasIdentity) {
         return true;
-    } else if constexpr(requires { std::span<Kvasir::Engine::Step const>{Chip::Init}; }) {
-        for(auto const& step : Chip::Init) {
+    } else if constexpr(requires { std::span<Kvasir::Engine::Step const>{Chip::init}; }) {
+        for(auto const& step : Chip::init) {
             if(step.kind == Kvasir::Engine::Step::Kind::identify) { return true; }
             if(step.kind == Kvasir::Engine::Step::Kind::write) { return false; }
         }
@@ -43,19 +43,19 @@ constexpr bool decidesBeforeWriting() {
 /// RV-8803 has no identity register, and what its setup() looks at -- flag and control bits that
 /// must be clear -- is clear in zeros too.
 template<typename Chip>
-constexpr bool ZerosLookLikeIt = false;
+constexpr bool zerosLookLikeIt = false;
 template<>
-constexpr bool ZerosLookLikeIt<Chips::Rv8803<>> = true;
+constexpr bool zerosLookLikeIt<Chips::Rv8803<>> = true;
 /// Nor can the TC74's: all it guarantees is CONFIG D5..D0 reading zero (TC74.md Table 4-2).
 template<>
-constexpr bool ZerosLookLikeIt<Chips::Tc74<>> = true;
+constexpr bool zerosLookLikeIt<Chips::Tc74<>> = true;
 
 std::size_t held = 0;
 
 /// A part that acknowledges everything and reads as zeros is nobody's identity.
 template<typename Chip>
 void foreignPartIsNotWrittenTo() {
-    if constexpr(decidesBeforeWriting<Chip>() && !ZerosLookLikeIt<Chip>) {
+    if constexpr(decidesBeforeWriting<Chip>() && !zerosLookLikeIt<Chip>) {
         ++held;
         fresh();
         FakeBus::respond = zeros;
@@ -63,8 +63,8 @@ void foreignPartIsNotWrittenTo() {
         runFor(d, 3s);
         std::size_t writes = 0;
         for(auto const& t : FakeBus::log) { writes += t.isWrite() ? 1U : 0U; }
-        check(!d.identified() && !d.answering() && d.unidentified() >= 1, Chip::Name);
-        checkEq(writes, std::size_t{0}, Chip::Name);
+        check(!d.identified() && !d.answering() && d.unidentified() >= 1, Chip::name);
+        checkEq(writes, std::size_t{0}, Chip::name);
     }
 }
 

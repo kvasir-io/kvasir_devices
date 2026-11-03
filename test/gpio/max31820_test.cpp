@@ -18,7 +18,7 @@ using Clock = Kvasir::Test::FakeClockT<std::chrono::milliseconds>;
 
 /// Every transaction completes at once, failed while `fail` is set; a read returns `scratchpad`.
 struct FakeBus {
-    static constexpr std::size_t BufferSize = 9;
+    static constexpr std::size_t bufferSize = 9;
     enum class OperationState : std::uint8_t { succeeded, failed, ongoing };
 
     static inline bool                     fail = false;
@@ -96,7 +96,7 @@ int main() {
     auto const errors = s.errors();
     while(s.errors() < errors + 2) { turns(s, 1); }
     check(s.link() == Link::starting, "two failed transactions: starting, not absent yet");
-    while(s.errors() < errors + Sensor::AbsentAfter) { turns(s, 1); }
+    while(s.errors() < errors + Sensor::absentAfter) { turns(s, 1); }
     check(s.link() == Link::absent, "absent from the third failure in a row");
     FakeBus::fail = false;
     turns(s, 1200);   // the retry after retryDelay, Convert T, the read

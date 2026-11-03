@@ -47,9 +47,9 @@ struct MonoPanelRef {
     using Chip   = typename Device::Chip;
     using Page   = typename Chip::Page;
 
-    static constexpr int Width  = Chip::Width;
-    static constexpr int Height = Chip::Height;
-    static constexpr int Pages  = Chip::Pages;
+    static constexpr int width  = Chip::width;
+    static constexpr int height = Chip::height;
+    static constexpr int pages  = Chip::pages;
 
     constexpr explicit MonoPanelRef(Device& device) : device_{&device} {}
 
@@ -66,8 +66,8 @@ struct MonoPanelRef {
 
     /// The frame, page 0 first, in the controller's own layout.
     [[nodiscard]] std::span<std::array<std::uint8_t,
-                                       std::size_t{Width}>,
-                            std::size_t{Pages}> pageRam() {
+                                       std::size_t{width}>,
+                            std::size_t{pages}> pageRam() {
         return device_->template items<Page>();
     }
 
@@ -82,10 +82,10 @@ struct MonoPanelRef {
     /// exists not to keep. A write that fails is re-sent by the engine, and a
     /// device reset re-sends everything the application wrote, so a page skipped here as
     /// unchanged is on the glass.
-    void pagesChanged(std::uint32_t pages) {
+    void pagesChanged(std::uint32_t pagesArg) {
         auto const ram = pageRam();
-        for(std::size_t p = 0; p < std::size_t{Pages}; ++p) {
-            if(((pages >> p) & 1U) == 0) { continue; }
+        for(std::size_t p = 0; p < std::size_t{pages}; ++p) {
+            if(((pagesArg >> p) & 1U) == 0) { continue; }
             auto const hash = hash_(ram[p]);
             if(((sent_ >> p) & 1U) != 0 && hashes_[p] == hash) { continue; }
             hashes_[p] = hash;
@@ -108,7 +108,7 @@ private:
     }
 
     Device*                                       device_;
-    std::array<std::uint32_t, std::size_t{Pages}> hashes_{};   ///< of each page as last sent
+    std::array<std::uint32_t, std::size_t{pages}> hashes_{};   ///< of each page as last sent
     std::uint32_t                                 sent_{};     ///< pages that have a hash
 };
 

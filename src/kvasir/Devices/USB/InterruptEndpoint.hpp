@@ -10,7 +10,7 @@
 #include <span>
 #include <utility>
 
-namespace Kvasir::USB::detail {
+namespace Kvasir::USB::Detail {
 
 /// An interrupt IN endpoint: one packet at a time, handed over when the host next polls. What a
 /// HID report or a CDC notification goes out on.
@@ -23,16 +23,16 @@ namespace Kvasir::USB::detail {
 /// It has the members handleEndpointRequest() asks of an endpoint (Address, halted, halt(),
 /// clearHalt()), and the owner forwards its callbacks: setup(), bufferDone(), abortDone(),
 /// busReset(), configured().
-template<typename Derived, std::size_t EndpointNumber, std::size_t MaxSize = MaxPacketSize>
+template<typename Derived, std::size_t EndpointNumber, std::size_t MaxSize = maxPacketSize>
 struct InterruptInEndpoint {
-    static_assert(MaxSize <= MaxPacketSize,
+    static_assert(MaxSize <= maxPacketSize,
                   "one packet per report");
 
     using EP
-      = EndpointOf<Derived, EndpointNumber, EndpointDirection::In, EndpointTransferType::Interrupt>;
+      = EndpointOf<Derived, EndpointNumber, EndpointDirection::in, EndpointTransferType::interrupt>;
 
-    static constexpr std::uint8_t Address
-      = makeEndpointAddress(EndpointDirection::In, static_cast<std::uint8_t>(EndpointNumber));
+    static constexpr std::uint8_t address
+      = makeEndpointAddress(EndpointDirection::in, static_cast<std::uint8_t>(EndpointNumber));
 
     static inline std::array<std::byte, MaxSize> packet{};
     static inline bool                           halted{false};
@@ -105,4 +105,4 @@ struct InterruptInEndpoint {
         restart();
     }
 };
-}   // namespace Kvasir::USB::detail
+}   // namespace Kvasir::USB::Detail

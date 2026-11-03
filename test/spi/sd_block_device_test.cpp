@@ -132,13 +132,13 @@ void fat32() {
     for(std::size_t i = 0; i < big.size(); ++i) {
         big[i] = std::byte{static_cast<std::uint8_t>(i * 13U + i / 511U)};
     }
-    auto f = v.open("/a directory/a long file name.bin", fs::fat::Open::Write);
+    auto f = v.open("/a directory/a long file name.bin", fs::fat::Open::write);
     check(f && v.write(*f, big).has_value() && v.close(*f).has_value(), "write 70 KB");
     check(v.unmount().has_value(), "unmount");
     fs::fat::Volume<Dev> w{d};
     check(w.mount().has_value(), "mount again");
     std::vector<std::byte> back(big.size());
-    auto                   r = w.open("/A DIRECTORY/A LONG FILE NAME.BIN", fs::fat::Open::Read);
+    auto                   r = w.open("/A DIRECTORY/A LONG FILE NAME.BIN", fs::fat::Open::read);
     auto const             n
       = r ? w.read(*r, back) : fs::Result<std::size_t>{std::unexpected(fs::Error::notFound)};
     check(n && *n == big.size() && back == big, "read back, case-insensitive, byte for byte");

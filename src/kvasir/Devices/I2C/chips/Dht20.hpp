@@ -28,21 +28,21 @@ namespace Kvasir::I2C::Chips {
 /// RegisterBytes is 1 only so the write-back can take its two bytes from the buffer behind a
 /// register byte (0xBB, 0xBC, 0xBE); every other step is a plain command or read.
 struct Dht20 {
-    static constexpr std::string_view        Name    = "DHT20";
-    static constexpr Address7                Address = 0x38;
-    static constexpr std::array<Address7, 1> Addresses{0x38};
-    static constexpr std::size_t             RegisterBytes = 1;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{100};
+    static constexpr std::string_view        name    = "DHT20";
+    static constexpr Address7                address = 0x38;
+    static constexpr std::array<Address7, 1> addresses{0x38};
+    static constexpr std::size_t             registerBytes = 1;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{100};
 
-    static constexpr std::uint8_t CalibratedBits = 0x18;
+    static constexpr std::uint8_t calibratedBits = 0x18;
 
-    static constexpr std::array Init{Engine::Step::receive({.count = 1, .offset = 0})};
+    static constexpr std::array init{Engine::Step::receive({.count = 1, .offset = 0})};
 
     struct State {
         std::uint8_t status{};
 
         [[nodiscard]] constexpr bool calibrated() const {
-            return (status & CalibratedBits) == CalibratedBits;
+            return (status & calibratedBits) == calibratedBits;
         }
     };
 
@@ -58,12 +58,12 @@ struct Dht20 {
     /// between measurements so the sensor does not heat itself (Linux aht10.c enforces the
     /// same minimum).
     struct Measurement : Aht20::Measurement {
-        static constexpr auto Period = std::chrono::milliseconds{2000};
+        static constexpr auto period = std::chrono::milliseconds{2000};
     };
 
     struct Restore {
         // clang-format off
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command(
             {.payload = {0x1B, 0x00, 0x00}, .delay = std::chrono::milliseconds{5}}),
           Engine::Step::receive({.count = 3, .offset = 0, .delay = std::chrono::milliseconds{10}}),
@@ -87,7 +87,7 @@ struct Dht20 {
             std::uint8_t status{};   ///< read after the restore
 
             [[nodiscard]] constexpr bool calibrated() const {
-                return (status & CalibratedBits) == CalibratedBits;
+                return (status & calibratedBits) == calibratedBits;
             }
         };
 

@@ -22,9 +22,9 @@
 // bump bcdDevice or delete HKLM\SYSTEM\CurrentControlSet\Control\usbflags\<VIDPIDREV>.
 namespace Kvasir::USB::WinUsb {
 namespace MsOs20 {
-    static constexpr std::uint16_t BcdUSB          = 0x0201;
-    static constexpr std::uint32_t WindowsVersion  = 0x06030000;   // Windows 8.1
-    static constexpr std::uint16_t DescriptorIndex = 7;            // MS_OS_20_DESCRIPTOR_INDEX
+    static constexpr std::uint16_t bcdUSB          = 0x0201;
+    static constexpr std::uint32_t windowsVersion  = 0x06030000;   // Windows 8.1
+    static constexpr std::uint16_t descriptorIndex = 7;            // MS_OS_20_DESCRIPTOR_INDEX
 
     enum class DescriptorType : std::uint16_t {
         setHeader                 = 0,
@@ -39,7 +39,7 @@ namespace MsOs20 {
     struct [[gnu::packed]] SetHeader {
         std::uint16_t  wLength{sizeof(SetHeader)};
         DescriptorType wDescriptorType{DescriptorType::setHeader};
-        std::uint32_t  dwWindowsVersion{WindowsVersion};
+        std::uint32_t  dwWindowsVersion{windowsVersion};
         std::uint16_t  wTotalLength{};
     };
 
@@ -68,7 +68,7 @@ namespace MsOs20 {
 
     // DeviceInterfaceGUIDs as REG_MULTI_SZ holding one GUID
     struct [[gnu::packed]] DeviceInterfaceGuids {
-        static constexpr std::size_t GuidLength = 38;   // {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+        static constexpr std::size_t guidLength = 38;   // {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
 
         std::uint16_t  wLength{sizeof(DeviceInterfaceGuids)};
         DescriptorType wDescriptorType{DescriptorType::featureRegProperty};
@@ -76,7 +76,7 @@ namespace MsOs20 {
         std::uint16_t  wPropertyNameLength{sizeof(propertyName)};
         char16_t       propertyName[21]{u"DeviceInterfaceGUIDs"};
         std::uint16_t  wPropertyDataLength{sizeof(propertyData)};
-        char16_t       propertyData[GuidLength + 2]{};   // GUID, NUL, list-terminating NUL
+        char16_t       propertyData[guidLength + 2]{};   // GUID, NUL, list-terminating NUL
     };
 
     struct [[gnu::packed]] Features {
@@ -90,7 +90,7 @@ namespace MsOs20 {
     };
 
     struct [[gnu::packed]] PlatformCapability
-      : USB::detail::DescriptorBase<PlatformCapability, USB::DescriptorType::deviceCapability> {
+      : USB::Detail::DescriptorBase<PlatformCapability, USB::DescriptorType::deviceCapability> {
         std::uint8_t  bDevCapabilityType{0x05};   // PLATFORM
         std::uint8_t  bReserved{};
         std::uint8_t  platformCapabilityUuid[16]{// {D8DD60DF-4589-4CC7-9CD2-659D9E648A9F}
@@ -110,7 +110,7 @@ namespace MsOs20 {
                                                  0x64,
                                                  0x8A,
                                                  0x9F};
-        std::uint32_t dwWindowsVersion{WindowsVersion};
+        std::uint32_t dwWindowsVersion{windowsVersion};
         std::uint16_t wMSOSDescriptorSetTotalLength;
         std::uint8_t  bMsVendorCode;
         std::uint8_t  bAltEnumCode{};
@@ -124,7 +124,7 @@ namespace MsOs20 {
     static_assert(sizeof(PlatformCapability) == 28);
 
     constexpr bool isGuid(std::string_view guid) {
-        if(guid.size() != DeviceInterfaceGuids::GuidLength || guid.front() != '{'
+        if(guid.size() != DeviceInterfaceGuids::guidLength || guid.front() != '{'
            || guid.back() != '}')
         {
             return false;
@@ -156,7 +156,7 @@ namespace MsOs20 {
     // Interfaces no Windows inbox driver claims: class 255, alternate setting 0.
     constexpr VendorInterfaces findVendorInterfaces(std::span<std::byte const> config) {
         VendorInterfaces found{};
-        USB::Descriptors::detail::forEachDescriptor(config, [&](std::span<std::byte const> bytes) {
+        USB::Descriptors::Detail::forEachDescriptor(config, [&](std::span<std::byte const> bytes) {
             if(bytes.size() != sizeof(USB::Descriptors::Interface)
                || bytes[1] != std::byte{std::to_underlying(USB::DescriptorType::interface)})
             {
@@ -231,51 +231,51 @@ private:
     friend Derived;
     friend struct Kvasir::USB::MixinTraits;
 
-    static constexpr std::size_t   InterfaceCount = 0;
-    static constexpr std::size_t   EndpointCount  = 0;
-    static constexpr std::uint16_t BcdUSB         = MsOs20::BcdUSB;
+    static constexpr std::size_t   interfaceCount = 0;
+    static constexpr std::size_t   endpointCount  = 0;
+    static constexpr std::uint16_t bcdUSB         = MsOs20::bcdUSB;
 
-    static constexpr std::array<std::byte, 0> InterfaceDescriptor{};
+    static constexpr std::array<std::byte, 0> interfaceDescriptor{};
 
-    static constexpr std::string_view DeviceInterfaceGuid = std::string_view{
+    static constexpr std::string_view deviceInterfaceGuid = std::string_view{
       KVASIR_CONFIG_OR(Config,
                        winUsbDeviceInterfaceGuid,
                        std::string_view{"{2B8E7A3C-5B0D-4E61-9C7A-6E3F1D2A4B58}"})};
 
-    static constexpr std::uint8_t VendorCode
+    static constexpr std::uint8_t vendorCode
       = static_cast<std::uint8_t>(KVASIR_CONFIG_OR(Config, msOs20VendorCode, std::uint8_t{0x57}));
 
     static_assert(
-      MsOs20::isGuid(DeviceInterfaceGuid),
+      MsOs20::isGuid(deviceInterfaceGuid),
       "winUsbDeviceInterfaceGuid must look like {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}");
 
     // Needs the whole configuration descriptor, so only instantiated from a callback body.
     struct Tables {
-        static constexpr std::span<std::byte const> ConfigDescriptor
+        static constexpr std::span<std::byte const> configDescriptor
           = Derived::configDescriptorBytes();
 
-        static constexpr auto Found = MsOs20::findVendorInterfaces(ConfigDescriptor);
-        static_assert(Found.count > 0,
+        static constexpr auto found = MsOs20::findVendorInterfaces(configDescriptor);
+        static_assert(found.count > 0,
                       "WinUsb::Mixin on a device without a vendor interface");
 
-        static constexpr auto Interfaces = [] {
-            std::array<std::uint8_t, Found.count> interfaces{};
-            std::ranges::copy(std::span{Found.numbers}.first(Found.count), interfaces.begin());
-            return interfaces;
+        static constexpr auto interfaces = [] {
+            std::array<std::uint8_t, found.count> interfacesHere{};
+            std::ranges::copy(std::span{found.numbers}.first(found.count), interfacesHere.begin());
+            return interfacesHere;
         }();
 
-        static constexpr bool Composite = [] {
+        static constexpr bool composite = [] {
             std::array<std::byte, sizeof(USB::Descriptors::Configuration)> raw{};
-            std::ranges::copy(ConfigDescriptor.first(raw.size()), raw.begin());
+            std::ranges::copy(configDescriptor.first(raw.size()), raw.begin());
             return std::bit_cast<USB::Descriptors::Configuration>(raw).bNumInterfaces > 1;
         }();
 
-        static constexpr auto DescriptorSet
-          = MsOs20::makeDescriptorSetArray<Composite>(Interfaces, DeviceInterfaceGuid);
+        static constexpr auto descriptorSet
+          = MsOs20::makeDescriptorSetArray<composite>(interfaces, deviceInterfaceGuid);
 
-        static constexpr auto Bos
-          = MsOs20::makeBosDescriptorArray(static_cast<std::uint16_t>(DescriptorSet.size()),
-                                           VendorCode);
+        static constexpr auto bos
+          = MsOs20::makeBosDescriptorArray(static_cast<std::uint16_t>(descriptorSet.size()),
+                                           vendorCode);
     };
 
     static bool setupPacketRequestCallback(SetupPacket const& pkt) {
@@ -288,12 +288,12 @@ private:
            && pkt.bRequest == SetupPacket::Request::getDescriptor
            && pkt.descriptorType() == DescriptorType::bos)
         {
-            return Derived::ep0INDataPhase(Tables::Bos, pkt.wLength);
+            return Derived::ep0INDataPhase(Tables::bos, pkt.wLength);
         }
-        if(pkt.type() == SetupPacket::Type::vendor && std::to_underlying(pkt.bRequest) == VendorCode
-           && pkt.wValue == 0 && pkt.wIndex == MsOs20::DescriptorIndex)
+        if(pkt.type() == SetupPacket::Type::vendor && std::to_underlying(pkt.bRequest) == vendorCode
+           && pkt.wValue == 0 && pkt.wIndex == MsOs20::descriptorIndex)
         {
-            return Derived::ep0INDataPhase(Tables::DescriptorSet, pkt.wLength);
+            return Derived::ep0INDataPhase(Tables::descriptorSet, pkt.wLength);
         }
         return false;
     }

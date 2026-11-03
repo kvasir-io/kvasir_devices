@@ -21,7 +21,7 @@ namespace Kvasir { namespace SPI { namespace Chips {
         enum class GyroRange : std::uint8_t { dps250 = 0, dps500 = 1, dps1000 = 2, dps2000 = 3 };
 
         /// 1 / 131, 1 / 65.5, 1 / 32.8, 1 / 16.4 deg/s a count, to the micro-degree a second.
-        inline constexpr std::array<Units::MicroDegPerSec, 4> RatePerCount{
+        inline constexpr std::array<Units::MicroDegPerSec, 4> ratePerCount{
           Units::microDegPerSec(7634),
           Units::microDegPerSec(15267),
           Units::microDegPerSec(30488),
@@ -40,23 +40,23 @@ namespace Kvasir { namespace SPI { namespace Chips {
     template<Mpu9250Detail::AccelRange Accel = Mpu9250Detail::AccelRange::g2,
              Mpu9250Detail::GyroRange  Gyro  = Mpu9250Detail::GyroRange::dps250>
     struct Mpu9250x {
-        static constexpr std::string_view Name = "MPU9250";
+        static constexpr std::string_view name = "MPU9250";
         /// 0x71 (RegMap:1665). 0x73 = MPU-9255, not checked against a data sheet.
-        static constexpr std::array Identity{
+        static constexpr std::array identity{
           Engine::RegisterCheck{"who-am-i", 0x75, 1, true, 0xFF, 0x71, 0x73},
         };
         /// 1 MHz for every register (MPU9250.md:124). Modes 0 and 3 both fit (7.5,
         /// MPU9250.md:1217-1219); 0 shares a bus with mode-0 parts without a polarity change.
-        static constexpr Hal::ClockMode Mode          = Hal::ClockMode::mode0;
-        static constexpr Units::Hertz   MaxClock      = Units::hertz(1'000'000);
-        static constexpr std::size_t    RegisterBytes = 1;
+        static constexpr Hal::ClockMode mode          = Hal::ClockMode::mode0;
+        static constexpr Units::Hertz   maxClock      = Units::hertz(1'000'000);
+        static constexpr std::size_t    registerBytes = 1;
 
-        static constexpr std::uint8_t GyroConfigByte
+        static constexpr std::uint8_t gyroConfigByte
           = static_cast<std::uint8_t>(static_cast<unsigned>(Gyro) << 3U);
-        static constexpr std::uint8_t AccelConfigByte
+        static constexpr std::uint8_t accelConfigByte
           = static_cast<std::uint8_t>(static_cast<unsigned>(Accel) << 3U);
 
-        static constexpr std::array Init{
+        static constexpr std::array init{
           Engine::Step::write(
             {.reg = 0x6B, .payload = {0x80}, .delay = std::chrono::milliseconds{100}}),
           Engine::Step::write(
@@ -78,8 +78,8 @@ namespace Kvasir { namespace SPI { namespace Chips {
         }
 
         struct Motion {
-            static constexpr auto       Period = std::chrono::milliseconds{20};
-            static constexpr std::array Steps{Engine::Step::read({.reg = 0x3B, .count = 14})};
+            static constexpr auto       period = std::chrono::milliseconds{20};
+            static constexpr std::array steps{Engine::Step::read({.reg = 0x3B, .count = 14})};
 
             struct Sample {
                 std::array<Units::MicroG, 3>         accel{};
@@ -94,7 +94,7 @@ namespace Kvasir { namespace SPI { namespace Chips {
                 if(allOnes) { return Engine::Outcome<Sample>::reject(); }
                 Sample     sample{};
                 auto const perRate
-                  = Units::value(Mpu9250Detail::RatePerCount[state.gyroRange & 0x03U]);
+                  = Units::value(Mpu9250Detail::ratePerCount[state.gyroRange & 0x03U]);
                 for(std::size_t i = 0; i < 3; ++i) {
                     auto const accel = static_cast<std::int64_t>(data.s16be(2 * i)) * 15625
                                      * (std::int64_t{1} << (state.accelRange & 0x03U)) / 256;
@@ -113,8 +113,8 @@ namespace Kvasir { namespace SPI { namespace Chips {
         /// ACCEL_CONFIG (1Ch)
         struct AccelConfig {
             using Value                          = std::uint8_t;
-            static constexpr std::size_t Bytes   = 1;
-            static constexpr Value       Initial = AccelConfigByte;
+            static constexpr std::size_t bytes   = 1;
+            static constexpr Value       initial = accelConfigByte;
 
             [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                                std::span<std::byte> buffer) {
@@ -131,8 +131,8 @@ namespace Kvasir { namespace SPI { namespace Chips {
         /// GYRO_CONFIG (1Bh)
         struct GyroConfig {
             using Value                          = std::uint8_t;
-            static constexpr std::size_t Bytes   = 1;
-            static constexpr Value       Initial = GyroConfigByte;
+            static constexpr std::size_t bytes   = 1;
+            static constexpr Value       initial = gyroConfigByte;
 
             [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                                std::span<std::byte> buffer) {

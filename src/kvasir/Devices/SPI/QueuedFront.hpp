@@ -38,28 +38,28 @@ namespace Kvasir { namespace SPI {
 
         /// Receive overruns the hardware reported (the transfer failed).
         static std::uint32_t overruns()
-            requires(Core::Features.counters)
+            requires(Core::features.counters)
         {
             return Core::overruns();
         }
 
         /// Holds no request continued within holdTimeout: released by turn().
         static std::uint32_t holdTimeouts()
-            requires(Core::Features.counters)
+            requires(Core::features.counters)
         {
             return Core::holdTimeouts();
         }
 
         /// Completions of a transfer the core had already ended (a timeout or a reset raced the interrupt).
         static std::uint32_t staleCompletions()
-            requires(Core::Features.counters)
+            requires(Core::features.counters)
         {
             return Core::staleCompletions();
         }
 
         /// Requests submit() refused as malformed (QueueCore::wellFormed).
         static std::uint32_t refused()
-            requires(Core::Features.counters)
+            requires(Core::features.counters)
         {
             return Core::refused();
         }

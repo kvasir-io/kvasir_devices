@@ -43,34 +43,34 @@ template<Address7             Addr,
          std::uint8_t         ChannelMask = 0xFF,
          Ad7291Detail::Tsense TempSense   = Ad7291Detail::Tsense::on>
 struct Ad7291 {
-    static constexpr std::string_view Name          = "AD7291";
-    static constexpr Address7         Address       = Addr;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "AD7291";
+    static constexpr Address7         address       = Addr;
+    static constexpr std::size_t      registerBytes = 1;
 
     /// Table 31, AS1/AS0: HH, HNC, HL, NCH, NCNC, NCL, LH, LNC, LL.
     static constexpr std::array<Address7, 9>
-      Addresses{0x20, 0x22, 0x23, 0x28, 0x2A, 0x2B, 0x2C, 0x2E, 0x2F};
+      addresses{0x20, 0x22, 0x23, 0x28, 0x2A, 0x2B, 0x2C, 0x2E, 0x2F};
 
-    static_assert(std::ranges::find(Addresses,
+    static_assert(std::ranges::find(addresses,
                                     Addr)
-                    != Addresses.end(),
+                    != addresses.end(),
                   "an AD7291 answers only at the nine AS1/AS0 strappings of Table 31");
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{50};
+    static constexpr auto startupDelay = std::chrono::milliseconds{50};
 
-    static constexpr std::size_t Channels = 8;
+    static constexpr std::size_t channels = 8;
 
     /// 1 LSB is VREF/4096 with the internal 2.5 V reference.
-    static constexpr MicroVolt Vref = Units::microVolt(2'500'000);
+    static constexpr MicroVolt vref = Units::microVolt(2'500'000);
 
     /// The command register wants the channel mask MIRRORED: D15 enables channel 0 and D8
     /// enables channel 7 (Rev. C Table 12), the opposite of the natural bit-N-is-channel-N
     /// order. The two agree only for symmetric masks such as the default 0xFF.
     [[nodiscard]] static constexpr std::uint8_t mirrored(std::uint8_t mask) {
         std::uint8_t out = 0;
-        for(std::uint8_t i = 0; i < Channels; ++i) {
+        for(std::uint8_t i = 0; i < channels; ++i) {
             if((mask & static_cast<std::uint8_t>(1U << i)) != 0) {
-                out = static_cast<std::uint8_t>(out | (1U << (Channels - 1U - i)));
+                out = static_cast<std::uint8_t>(out | (1U << (channels - 1U - i)));
             }
         }
         return out;
@@ -80,10 +80,10 @@ struct Ad7291 {
     /// five seconds instead, which is what Period on a write group does.
     struct Command {
         using Value                         = std::uint16_t;
-        static constexpr std::size_t Bytes  = 2;
-        static constexpr auto        Period = std::chrono::seconds{5};
+        static constexpr std::size_t bytes  = 2;
+        static constexpr auto        period = std::chrono::seconds{5};
 
-        static constexpr Value Initial = static_cast<std::uint16_t>(
+        static constexpr Value initial = static_cast<std::uint16_t>(
           (static_cast<unsigned>(mirrored(ChannelMask)) << 8)
           | (TempSense == Ad7291Detail::Tsense::on ? 0x80U : 0x00U) | 0x20U);
 
@@ -95,13 +95,13 @@ struct Ad7291 {
     };
 
     struct Voltages {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{
-          Engine::Step::read({.reg = 0x01, .count = Channels * 2, .offset = 0})};
+        static constexpr auto       period = std::chrono::milliseconds{20};
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = 0x01, .count = channels * 2, .offset = 0})};
 
         struct Sample {
             /// Per channel: the 12-bit code, and whether this burst carried it.
-            std::array<std::uint16_t, Channels> code{};
+            std::array<std::uint16_t, channels> code{};
             std::uint8_t                        seen{};   ///< bit N: channel N was in the burst
 
             [[nodiscard]] constexpr bool valid(std::size_t channel) const {
@@ -110,7 +110,7 @@ struct Ad7291 {
 
             [[nodiscard]] constexpr MicroVolt voltage(std::size_t channel) const {
                 return Units::microVolt(static_cast<std::int32_t>(
-                  static_cast<std::int64_t>(code[channel]) * Units::value(Vref) / 4096));
+                  static_cast<std::int64_t>(code[channel]) * Units::value(vref) / 4096));
             }
         };
 
@@ -118,10 +118,10 @@ struct Ad7291 {
         /// slipped reports nothing for a channel instead of its neighbour's voltage.
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
             Sample sample{};
-            for(std::size_t i = 0; i < Channels; ++i) {
+            for(std::size_t i = 0; i < channels; ++i) {
                 auto const w       = data.be16(2 * i);
                 auto const channel = static_cast<std::size_t>((w >> 12) & 0x0FU);
-                if(channel < Channels) {
+                if(channel < channels) {
                     sample.code[channel] = static_cast<std::uint16_t>(w & 0x0FFFU);
                     sample.seen          = static_cast<std::uint8_t>(sample.seen | (1U << channel));
                 }
@@ -133,8 +133,8 @@ struct Ad7291 {
     /// Hardware-averaged and slow moving, so it is not worth the bus time the voltages get.
     /// Only meaningful with `TempSense` on; without it the part never converts the channel.
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x02, .count = 2, .offset = 0})};
 
         struct Sample {

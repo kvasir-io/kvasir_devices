@@ -34,12 +34,12 @@
 
 namespace Kvasir { namespace Display {
 
-    namespace detail {
+    namespace Detail {
         /// Named so that a failed check shows both numbers: the commands the bus queues at once
         /// (`Slots`) against what the SPI master's queue holds (`QueueDepth`).
         template<std::size_t Slots, std::size_t QueueDepth>
         inline constexpr bool masterQueueHoldsCommandSlots = Slots <= QueueDepth;
-    }   // namespace detail
+    }   // namespace Detail
 
     struct SpiDcsBusDefaults {
         static constexpr Hal::ClockMode            mode       = Hal::ClockMode::mode0;
@@ -61,30 +61,30 @@ namespace Kvasir { namespace Display {
              typename Dc,
              typename Config = SpiDcsBusDefaults>
     struct SpiDcsBus {
-        static constexpr auto WriteSetup = Master::setup(Config::mode, Config::writeClock);
-        static constexpr auto ReadSetup  = Master::setup(Config::mode, Config::readClock);
+        static constexpr auto writeSetup = Master::setup(Config::mode, Config::writeClock);
+        static constexpr auto readSetup  = Master::setup(Config::mode, Config::readClock);
         /// Checked by the panel drivers against the chip's ceilings.
-        static constexpr unsigned long writeHz = WriteSetup.hz;
-        static constexpr unsigned long readHz  = ReadSetup.hz;
+        static constexpr unsigned long writeHz = writeSetup.hz;
+        static constexpr unsigned long readHz  = readSetup.hz;
 
         /// What the master's queue core (SPI/QueueCore.hpp) carries: every queued master has one.
-        static constexpr bool Wide = Master::Core::SupportsWide;
+        static constexpr bool wide = Master::Core::supportsWide;
         /// The SAM DMAC counts 16 bits.
-        static constexpr std::size_t MaxChunk
-          = std::min<std::size_t>(Master::Core::MaxFrames, std::size_t{1} << 24U);
+        static constexpr std::size_t maxChunk
+          = std::min<std::size_t>(Master::Core::maxFrames, std::size_t{1} << 24U);
 
-        static constexpr std::size_t CommandSlots
+        static constexpr std::size_t commandSlots
           = KVASIR_CONFIG_OR(Config, commandSlots, SpiDcsBusDefaults::commandSlots);
-        static constexpr std::size_t CopiedParams
+        static constexpr std::size_t copiedParams
           = KVASIR_CONFIG_OR(Config, copiedParams, SpiDcsBusDefaults::copiedParams);
-        static constexpr std::chrono::milliseconds CommandTimeout = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds commandTimeout = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config, commandTimeout, SpiDcsBusDefaults::commandTimeout));
 
         static_assert(
-          CommandSlots > 0 && CommandSlots < 128,
+          commandSlots > 0 && commandSlots < 128,
           "commandSlots: at least one command in the queue, and a count of them in a byte");
-        static_assert(detail::masterQueueHoldsCommandSlots<CommandSlots,
-                                                           Master::Core::QueueDepth>,
+        static_assert(Detail::masterQueueHoldsCommandSlots<commandSlots,
+                                                           Master::Core::queueDepth>,
                       "commandSlots is more than the SPI master's queue holds (its QueueDepth): a "
                       "command past it would be refused - lower commandSlots or deepen the master");
 
@@ -92,16 +92,16 @@ namespace Kvasir { namespace Display {
         /// the master's queue is full).
         static bool writeCommand(std::uint8_t               cmd,
                                  std::span<std::byte const> params) {
-            if(busy_ || outstanding_() >= CommandSlots) { return false; }
+            if(busy_ || outstanding_() >= commandSlots) { return false; }
             auto& slot = slots_[head_];
             slot[0]    = std::byte{cmd};
             auto tx    = params;
-            if(params.size() <= CopiedParams) {
+            if(params.size() <= copiedParams) {
                 std::copy(params.begin(), params.end(), slot.begin() + 1);
                 tx = std::span<std::byte const>{slot}.subspan(1, params.size());
             }
             return queue_(
-              typename Master::Request{.setup   = WriteSetup,
+              typename Master::Request{.setup   = writeSetup,
                                        .lines   = commandLines,
                                        .command = std::span<std::byte const>{slot}.first(1),
                                        .tx      = tx});
@@ -109,12 +109,12 @@ namespace Kvasir { namespace Display {
 
         /// D/C high under its own chip select, from `bytes`, which stays alive until idle().
         static bool writeData(std::span<std::byte const> bytes) {
-            if(busy_ || bytes.empty() || bytes.size() > MaxChunk || outstanding_() >= CommandSlots)
+            if(busy_ || bytes.empty() || bytes.size() > maxChunk || outstanding_() >= commandSlots)
             {
                 return false;
             }
             return queue_(
-              typename Master::Request{.setup = WriteSetup, .lines = dataLines, .tx = bytes});
+              typename Master::Request{.setup = writeSetup, .lines = dataLines, .tx = bytes});
         }
 
         static void writePixels(std::span<std::byte const> bytes) {
@@ -139,7 +139,7 @@ namespace Kvasir { namespace Display {
                 return;
             }
             pattern_ = static_cast<std::uint16_t>((hi << 8U) | lo);
-            for(std::size_t i = 0; i < FillBuffer; ++i) {
+            for(std::size_t i = 0; i < fillBuffer; ++i) {
                 fillBuf_[2 * i]     = std::byte{hi};
                 fillBuf_[2 * i + 1] = std::byte{lo};
             }
@@ -158,7 +158,7 @@ namespace Kvasir { namespace Display {
                                  std::span<std::byte> out) {
             if(busy_ || dummy + out.size() > readBuf_.size()) { return false; }
             readCommand_[0] = std::byte{cmd};
-            typename Master::Request r{.setup   = ReadSetup,
+            typename Master::Request r{.setup   = readSetup,
                                        .lines   = commandLines,
                                        .command = std::span<std::byte const>{readCommand_},
                                        .rx      = std::span{readBuf_}.first(dummy + out.size())};
@@ -196,7 +196,7 @@ namespace Kvasir { namespace Display {
                 if(done != seen_) {
                     seen_     = done;
                     progress_ = now;
-                } else if(now - progress_ > CommandTimeout) {
+                } else if(now - progress_ > commandTimeout) {
                     failed_ = true;
                 }
             }
@@ -204,7 +204,7 @@ namespace Kvasir { namespace Display {
 
     private:
         /// For a master without 16-bit repeat frames.
-        static constexpr std::size_t FillBuffer = 128;
+        static constexpr std::size_t fillBuffer = 128;
 
         using Select = SPI::ChipSelect<Cs>;
 
@@ -219,13 +219,13 @@ namespace Kvasir { namespace Display {
                                                  &data_};
         static constexpr SPI::Lines dataLines{Select::select, Select::deselect, &data_, nullptr};
 
-        using Slot = std::array<std::byte, 1 + CopiedParams>;
+        using Slot = std::array<std::byte, 1 + copiedParams>;
 
-        inline static std::array<Slot, CommandSlots>        slots_{};
+        inline static std::array<Slot, commandSlots>        slots_{};
         inline static std::array<std::byte, 1>              command_{};   ///< a stream's RAMWR
         inline static std::array<std::byte, 1>              readCommand_{};
         inline static std::array<std::byte, 16>             readBuf_{};
-        inline static std::array<std::byte, 2 * FillBuffer> fillBuf_{};
+        inline static std::array<std::byte, 2 * fillBuffer> fillBuf_{};
         inline static std::uint16_t                         pattern_{};
         // Written by whichever context runs next_() (loop or completion callback, never both),
         // read by the loop only after done_.
@@ -267,7 +267,7 @@ namespace Kvasir { namespace Display {
                 issued_ = static_cast<std::uint8_t>(issued_ - 1U);
                 return false;
             }
-            head_ = static_cast<std::uint8_t>((head_ + 1U) % CommandSlots);
+            head_ = static_cast<std::uint8_t>((head_ + 1U) % commandSlots);
             return true;
         }
 
@@ -285,7 +285,7 @@ namespace Kvasir { namespace Display {
         /// so a late completion can never pass for the next read's.
         static bool read_(typename Master::Request r) {
             if(!readFrame_.start(r)) { return false; }
-            auto const deadline = Clock::now() + CommandTimeout;
+            auto const deadline = Clock::now() + commandTimeout;
             auto       poll     = readFrame_.take();
             while(poll == ReadFrame::Poll::running) {
                 Master::turn();
@@ -316,29 +316,29 @@ namespace Kvasir { namespace Display {
         }
 
         static void next_() {
-            typename Master::Request r{.setup = WriteSetup};
+            typename Master::Request r{.setup = writeSetup};
             r.callback = [](auto res) { onChunk_(res == decltype(res)::ok); };
             if(!started_) {
-                command_[0] = std::byte{Dcs::Cmd::Ramwr};
+                command_[0] = std::byte{Dcs::Cmd::ramwr};
                 r.lines     = commandLines;
                 r.command   = std::span<std::byte const>{command_};
             } else {
                 r.lines = dataLines;
             }
             if(!pixels_.empty()) {
-                auto const n = std::min(pixels_.size(), MaxChunk);
+                auto const n = std::min(pixels_.size(), maxChunk);
                 r.tx         = pixels_.first(n);
                 pixels_      = pixels_.subspan(n);
                 r.hold       = !pixels_.empty();
             } else if(fill_ != 0) {
-                if constexpr(Wide) {
-                    auto const n = std::min(fill_, MaxChunk);
+                if constexpr(wide) {
+                    auto const n = std::min(fill_, maxChunk);
                     r.tx         = std::as_bytes(std::span{&pattern_, 1});
                     r.wide       = true;
                     r.repeat     = static_cast<std::uint32_t>(n);
                     fill_ -= n;
                 } else {
-                    auto const n = std::min(fill_, FillBuffer);
+                    auto const n = std::min(fill_, fillBuffer);
                     r.tx         = std::span<std::byte const>{fillBuf_}.first(2 * n);
                     fill_ -= n;
                 }

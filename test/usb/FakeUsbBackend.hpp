@@ -41,8 +41,8 @@ namespace Kvasir::Test {
 
 template<std::size_t Depth, bool Async, std::size_t Transfer = 64, typename Tag = void>
 struct FakeUsb {
-    static constexpr std::size_t MaxPacket = Kvasir::USB::MaxPacketSize;
-    static constexpr std::size_t Endpoints = 8;
+    static constexpr std::size_t maxPacket      = Kvasir::USB::maxPacketSize;
+    static constexpr std::size_t endpointsValue = 8;
 
     /// What the host got for an IN token, or gave with an OUT token.
     enum class Handshake : std::uint8_t { ack, nak, stall };
@@ -75,7 +75,7 @@ struct FakeUsb {
         std::uint16_t            frame{};
     };
 
-    static constexpr bool InPlace = Transfer > MaxPacket;
+    static constexpr bool inPlace = Transfer > maxPacket;
 
     // One arm of an IN endpoint: a packet, or a run of them that goes out 64 bytes at a time.
     struct ArmedIn {
@@ -106,15 +106,15 @@ struct FakeUsb {
     };
 
     // [endpoint number][0 = OUT, 1 = IN]
-    static inline std::array<std::array<EndpointState, 2>, Endpoints> endpoints{};
-    static inline std::deque<Event>                                   events{};
-    static inline std::uint8_t                                        address{};
-    static inline bool                                                prepared{false};
-    static inline bool                                                connected{false};
-    static inline int                                                 maskDepth{};
-    static inline int                                                 violations{};
-    static inline int                                                 controlTransfersBegun{};
-    static inline std::vector<std::uint8_t>                           addressHistory{};
+    static inline std::array<std::array<EndpointState, 2>, endpointsValue> endpoints{};
+    static inline std::deque<Event>                                        events{};
+    static inline std::uint8_t                                             address{};
+    static inline bool                                                     prepared{false};
+    static inline bool                                                     connected{false};
+    static inline int                                                      maskDepth{};
+    static inline int                                                      violations{};
+    static inline int                                                      controlTransfersBegun{};
+    static inline std::vector<std::uint8_t>                                addressHistory{};
 
     /// The interrupt as hardware raises it: not when the test next pumps, but the moment it can
     /// run - right before the application masks it and right after it unmasks it again, which
@@ -162,7 +162,7 @@ struct FakeUsb {
         if(e.stalled) { return {.handshake = Handshake::stall}; }
         if(e.armedIn.empty() || e.cancelPending) { return {.handshake = Handshake::nak}; }
         auto&             t = e.armedIn.front();
-        std::size_t const n = std::min(MaxPacket, t.size - t.sent);
+        std::size_t const n = std::min(maxPacket, t.size - t.sent);
         InResult          r{
           .handshake = Handshake::ack,
           .packet = Packet{.data = {t.data() + t.sent, t.data() + t.sent + n}, .data1 = e.data1}
@@ -201,14 +201,14 @@ struct FakeUsb {
             // behind a short one its two CRC bytes, where they still fit the packet's 64 bytes.
             std::byte* const at = e.outInPlace + e.received.size();
             std::ranges::copy(data, at);
-            for(std::size_t i = data.size(); i < std::min(data.size() + 2, MaxPacket); ++i) {
+            for(std::size_t i = data.size(); i < std::min(data.size() + 2, maxPacket); ++i) {
                 at[i] = std::byte{0xC5};
             }
         }
         e.received.insert(e.received.end(), data.begin(), data.end());
         e.data1 = !e.data1;
         // Over with a short packet, or when what was asked for has come.
-        if(data.size() < MaxPacket || e.received.size() >= *e.armedOut) {
+        if(data.size() < maxPacket || e.received.size() >= *e.armedOut) {
             e.hasReceived = true;
             e.armedOut.reset();
             events.push_back(Event{.kind = Event::Kind::transferComplete, .ep = ep, .in = false});
@@ -238,8 +238,8 @@ struct FakeUsb {
 
     template<typename Clock, typename ConfigT>
     struct Backend {
-        static constexpr std::size_t maxPacketSize = MaxPacket;
-        static constexpr std::size_t endpointCount = Endpoints;
+        static constexpr std::size_t maxPacketSize = maxPacket;
+        static constexpr std::size_t endpointCount = endpointsValue;
         static constexpr bool        asyncCancel   = Async;
 
         /// No vector table on a host: the test calls Device::runInterrupt().
@@ -304,7 +304,7 @@ struct FakeUsb {
                 case Event::Kind::suspend: Sink::suspend(); break;
                 case Event::Kind::resume:  Sink::resume(); break;
                 case Event::Kind::sof:
-                    if constexpr(Kvasir::USB::ConfigTraits<ConfigT>::UseSof) {
+                    if constexpr(Kvasir::USB::ConfigTraits<ConfigT>::useSof) {
                         Sink::startOfFrame(ev.frame);
                     }
                     break;
@@ -316,19 +316,19 @@ struct FakeUsb {
                  Kvasir::USB::EndpointDirection    Dir,
                  Kvasir::USB::EndpointTransferType Type>
         struct Endpoint {
-            static constexpr bool IsIn = Dir == Kvasir::USB::EndpointDirection::In;
+            static constexpr bool isIn = Dir == Kvasir::USB::EndpointDirection::in;
 
-            static constexpr std::size_t queueDepth  = IsIn && N != 0 ? Depth : 1;
+            static constexpr std::size_t queueDepth  = isIn && N != 0 ? Depth : 1;
             static constexpr bool        asyncCancel = Async;
             // Endpoint 0 stays at a packet, as on a real controller of this kind.
-            static constexpr std::size_t maxTransfer = N != 0 ? Transfer : MaxPacket;
+            static constexpr std::size_t maxTransfer = N != 0 ? Transfer : maxPacket;
 
             using FreeBuffers = std::array<bool, queueDepth>;
 
-            static EndpointState& self() { return state(N, IsIn); }
+            static EndpointState& self() { return state(N, isIn); }
 
             static std::size_t armedBuffers() {
-                return IsIn ? self().armedIn.size() : (self().armedOut ? 1U : 0U);
+                return isIn ? self().armedIn.size() : (self().armedOut ? 1U : 0U);
             }
 
             static FreeBuffers freeBuffers() {
@@ -352,9 +352,9 @@ struct FakeUsb {
             template<bool Last>
             static bool tryTransfer(std::span<std::byte const> data,
                                     FreeBuffers const&) {
-                static_assert(IsIn);
+                static_assert(isIn);
                 auto& e = self();
-                if(!e.set || data.size() > MaxPacket) { ++violations; }
+                if(!e.set || data.size() > maxPacket) { ++violations; }
                 if(e.armedIn.size() >= queueDepth || e.cancelPending) { return false; }
                 e.armedIn.push_back(ArmedIn{
                   .copy = {data.begin(), data.end()},
@@ -367,9 +367,9 @@ struct FakeUsb {
             template<bool Last>
             static bool tryTransferInPlace(std::span<std::byte const> data,
                                            FreeBuffers const&)
-                requires(InPlace && N != 0)
+                requires(inPlace && N != 0)
             {
-                static_assert(IsIn);
+                static_assert(isIn);
                 auto& e = self();
                 if(!e.set || data.size() > maxTransfer) { ++violations; }
                 if(e.armedIn.size() >= queueDepth || e.cancelPending) { return false; }
@@ -378,16 +378,16 @@ struct FakeUsb {
             }
 
             static std::size_t sentOfCancelled()
-                requires(InPlace && N != 0)
+                requires(inPlace && N != 0)
             {
                 return self().sentOfCancelled;
             }
 
             template<bool Last = false>
             static bool armReceive(std::size_t maxSize) {
-                static_assert(!IsIn);
+                static_assert(!isIn);
                 auto& e = self();
-                if(!e.set || maxSize > MaxPacket) { ++violations; }
+                if(!e.set || maxSize > maxPacket) { ++violations; }
                 if(e.armedOut || e.cancelPending) { return false; }
                 e.armedOut    = maxSize;
                 e.outInPlace  = nullptr;
@@ -401,12 +401,12 @@ struct FakeUsb {
             static constexpr std::size_t maxReceive = Transfer;
 
             static bool armReceiveInto(std::span<std::byte> dest)
-                requires(InPlace && !Async && N != 0)
+                requires(inPlace && !Async && N != 0)
             {
-                static_assert(!IsIn);
+                static_assert(!isIn);
                 auto& e = self();
                 if(!e.set || dest.empty() || dest.size() > maxReceive
-                   || dest.size() % MaxPacket != 0
+                   || dest.size() % maxPacket != 0
                    || reinterpret_cast<std::uintptr_t>(dest.data()) % 4 != 0)
                 {
                     ++violations;
@@ -425,20 +425,20 @@ struct FakeUsb {
             }
 
             static std::size_t received()
-                requires(InPlace && !Async && N != 0)
+                requires(inPlace && !Async && N != 0)
             {
                 if(!self().hasReceived) { ++violations; }
                 return self().received.size();
             }
 
             static std::size_t receivedSoFar()
-                requires(InPlace && !Async && N != 0)
+                requires(inPlace && !Async && N != 0)
             {
                 return self().armedOut ? self().received.size() : 0;
             }
 
             static std::optional<std::size_t> takeBackReceive()
-                requires(InPlace && !Async && N != 0)
+                requires(inPlace && !Async && N != 0)
             {
                 auto& e = self();
                 if(!e.armedOut) { return std::nullopt; }   // completed: its event is on its way
@@ -448,7 +448,7 @@ struct FakeUsb {
             }
 
             static std::size_t readCurrentBuffer(std::span<std::byte> dest) {
-                static_assert(!IsIn);
+                static_assert(!isIn);
                 auto& e = self();
                 if(!e.hasReceived) { return 0; }
                 std::size_t const n = std::min(dest.size(), e.received.size());
@@ -478,7 +478,7 @@ struct FakeUsb {
                     if(!self().cancelPending) {
                         self().cancelPending = true;
                         events.push_back(
-                          Event{.kind = Event::Kind::cancelComplete, .ep = N, .in = IsIn});
+                          Event{.kind = Event::Kind::cancelComplete, .ep = N, .in = isIn});
                     }
                 } else {
                     return takeBack();

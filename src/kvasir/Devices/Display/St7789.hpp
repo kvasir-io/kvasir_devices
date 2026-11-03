@@ -21,35 +21,35 @@ namespace Kvasir { namespace St7789 {
     namespace Dcs = Display::Dcs;
 
     struct Chip {
-        static constexpr std::string_view Name = "ST7789V";
+        static constexpr std::string_view name = "ST7789V";
 
         /// Unused on a 4-wire bus.
-        static constexpr std::uint8_t ReadInstruction = 0x00;
-        static constexpr std::size_t  ReadDummyBytes  = 0;
-        static constexpr int          WindowAlign     = 1;
-        static constexpr int          MaxAddress      = 320;
+        static constexpr std::uint8_t readInstruction = 0x00;
+        static constexpr std::size_t  readDummyBytes  = 0;
+        static constexpr int          windowAlign     = 1;
+        static constexpr int          maxAddress      = 320;
 
-        static constexpr Units::Hertz MaxWriteClock = Units::hertz(15'000'000);   // 1 / 66 ns
-        static constexpr Units::Hertz MaxReadClock  = Units::hertz(6'600'000);    // 1 / 150 ns
+        static constexpr Units::Hertz maxWriteClock = Units::hertz(15'000'000);   // 1 / 66 ns
+        static constexpr Units::Hertz maxReadClock  = Units::hertz(6'600'000);    // 1 / 150 ns
 
-        static constexpr std::uint8_t Colmod565 = 0x55;
+        static constexpr std::uint8_t colmod565 = 0x55;
 
         /// TRW 10 us, TRT 5 ms (ST7789V.md:1763-1764), for a module with its own RESX.
-        static constexpr std::chrono::milliseconds ResetPulse{1};         // tRW >= 10 us
-        static constexpr std::chrono::milliseconds ResetToCommand{120};   // after RESX in sleep out
-        static constexpr std::chrono::milliseconds SleepOut{120};
+        static constexpr std::chrono::milliseconds resetPulse{1};         // tRW >= 10 us
+        static constexpr std::chrono::milliseconds resetToCommand{120};   // after RESX in sleep out
+        static constexpr std::chrono::milliseconds sleepOut{120};
 
         /// WRDISBV drives the CABC pin, not the module's backlight.
-        static constexpr bool         Brightness  = false;
-        static constexpr std::uint8_t CtrlDisplay = 0x00;
+        static constexpr bool         brightness  = false;
+        static constexpr std::uint8_t ctrlDisplay = 0x00;
 
-        static constexpr std::uint8_t ExpectedId1 = 0x85;
+        static constexpr std::uint8_t expectedId1 = 0x85;
 
         /// SWRESET first: with RESX on RUN the panel keeps its state across an MCU-only reset.
         /// 150 ms covers the 120 ms from sleep in.
-        static constexpr std::array<std::uint8_t, 3> InitBytes{Dcs::Cmd::Swreset, 0, 150};
-        static_assert(Dcs::Script::wellFormed(InitBytes));
-        static constexpr Dcs::Script Init{InitBytes};
+        static constexpr std::array<std::uint8_t, 3> initBytes{Dcs::Cmd::swreset, 0, 150};
+        static_assert(Dcs::Script::wellFormed(initBytes));
+        static constexpr Dcs::Script init{initBytes};
     };
 
     static_assert(Display::Chip<Chip>);

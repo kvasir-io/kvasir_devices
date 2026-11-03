@@ -69,15 +69,15 @@ namespace Kvasir::I2C::Chips {
 /// back to its power-down default is measuring again within half a second. A bus stuck
 /// mid-transfer is the bus driver's to recover.
 struct Tlv493d {
-    static constexpr std::string_view        Name    = "TLV493D";
-    static constexpr Address7                Address = 0x5E;
-    static constexpr std::array<Address7, 2> Addresses{0x5E, 0x1F};
-    static constexpr std::size_t             RegisterBytes = 0;
+    static constexpr std::string_view        name    = "TLV493D";
+    static constexpr Address7                address = 0x5E;
+    static constexpr std::array<Address7, 2> addresses{0x5E, 0x1F};
+    static constexpr std::size_t             registerBytes = 0;
     /// TLV493D_STARTUPDELAY in Infineon's library.
-    static constexpr auto StartupDelay = std::chrono::milliseconds{40};
+    static constexpr auto startupDelay = std::chrono::milliseconds{40};
 
     /// 0.098 mT per count.
-    static constexpr NanoTesla FieldPerCount = Units::nanoTesla(98'000);
+    static constexpr NanoTesla fieldPerCount = Units::nanoTesla(98'000);
 
     /// How long the part is left alone after each transaction. In master-controlled mode a readout,
     /// and a write of the mode, starts a conversion of about 270 us (data sheet Table 7,
@@ -92,13 +92,13 @@ struct Tlv493d {
     /// The A1B6's ADC can also hang (user manual 5.6: in master-controlled or fast mode "the
     /// ADC conversion may hang up", the frame counter stops, and only a general reset brings
     /// it back). Infineon gives no cause, so recovery is left to the caller (StallWatch).
-    static constexpr std::chrono::milliseconds ConversionGap{1};
+    static constexpr std::chrono::milliseconds conversionGap{1};
 
     /// MOD1 without P and the factory bits: IICAddr 00, INT off, FAST and LOW (master
     /// controlled). MOD2 without the factory bits: temperature on, LP set (Infineon's value
     /// for this mode; LP only paces low-power mode), parity test on.
-    static constexpr std::uint8_t Mod1 = 0x03;
-    static constexpr std::uint8_t Mod2 = 0x60;
+    static constexpr std::uint8_t mod1 = 0x03;
+    static constexpr std::uint8_t mod2 = 0x60;
 
     /// 0x10..0x13 over the factory bytes read at 0x07..0x09, P set so the 32 bits are odd.
     [[nodiscard]] static constexpr std::array<std::uint8_t,
@@ -107,9 +107,9 @@ struct Tlv493d {
                   std::uint8_t factory2,
                   std::uint8_t factory3) {
         std::array<std::uint8_t, 4> c{0x00,
-                                      static_cast<std::uint8_t>(Mod1 | (factory1 & 0x18U)),
+                                      static_cast<std::uint8_t>(mod1 | (factory1 & 0x18U)),
                                       factory2,
-                                      static_cast<std::uint8_t>(Mod2 | (factory3 & 0x1FU))};
+                                      static_cast<std::uint8_t>(mod2 | (factory3 & 0x1FU))};
         int                         ones = 0;
         for(auto const b : c) { ones += std::popcount(b); }
         if((ones & 1) == 0) { c[1] = static_cast<std::uint8_t>(c[1] | 0x80U); }
@@ -117,7 +117,7 @@ struct Tlv493d {
     }
 
     /// Ten bytes: the presence probe, and the flags that say the part came up.
-    static constexpr std::array Init{Engine::Step::receive({.count = 10, .offset = 0})};
+    static constexpr std::array init{Engine::Step::receive({.count = 10, .offset = 0})};
 
     struct State {
         bool testMode{};     ///< T, 0x05 bit 6
@@ -154,9 +154,9 @@ struct Tlv493d {
     /// so the readout can return a stale frame, and it adds transactions the bus does not
     /// need.
     struct Configure {
-        static constexpr auto Period = std::chrono::milliseconds{500};
+        static constexpr auto period = std::chrono::milliseconds{500};
 
-        static constexpr std::uint8_t ConfigOffset = 10;
+        static constexpr std::uint8_t configOffset = 10;
 
         struct Request {};
 
@@ -166,20 +166,20 @@ struct Tlv493d {
                                          static_cast<std::uint8_t>(buffer[8]),
                                          static_cast<std::uint8_t>(buffer[9]));
             for(std::size_t i = 0; i < c.size(); ++i) {
-                buffer[ConfigOffset + i] = static_cast<std::byte>(c[i]);
+                buffer[configOffset + i] = static_cast<std::byte>(c[i]);
             }
         }
 
-        static constexpr std::array Steps{
-          Engine::Step::receive({.count = 10, .offset = 0, .delay = ConversionGap}),
+        static constexpr std::array steps{
+          Engine::Step::receive({.count = 10, .offset = 0, .delay = conversionGap}),
           Engine::Step::check(std::chrono::milliseconds{1}),
-          Engine::Step::commandBuffer({.offset = ConfigOffset, .count = 4, .delay = ConversionGap}),
+          Engine::Step::commandBuffer({.offset = configOffset, .count = 4, .delay = conversionGap}),
         };
 
         [[nodiscard]] static constexpr bool ready(Bytes data) {
             auto const c = configuration(data.u8(7), data.u8(8), data.u8(9));
             for(std::size_t i = 0; i < c.size(); ++i) {
-                if(data.u8(ConfigOffset + i) != c[i]) { return false; }
+                if(data.u8(configOffset + i) != c[i]) { return false; }
             }
             return true;
         }
@@ -190,10 +190,10 @@ struct Tlv493d {
     /// before it asked for -- one period old, and fresh. The frame's CH says if it was not
     /// done. The gap after it keeps the Configure run off the conversion it started.
     struct Field {
-        static constexpr auto Period = std::chrono::milliseconds{50};
+        static constexpr auto period = std::chrono::milliseconds{50};
 
-        static constexpr std::array Steps{
-          Engine::Step::receive({.count = 7, .offset = 0, .delay = ConversionGap})};
+        static constexpr std::array steps{
+          Engine::Step::receive({.count = 7, .offset = 0, .delay = conversionGap})};
 
         struct Sample {
             NanoTesla    x{};   ///< positive: a south pole facing the Hall element (Figure 4)
@@ -211,7 +211,7 @@ struct Tlv493d {
                                                        std::uint8_t low) {
             auto const counts
               = Bytes::signExtend((static_cast<std::uint32_t>(high) << 4U) | (low & 0x0FU), 12);
-            return Units::nanoTesla(counts * Units::value(FieldPerCount));
+            return Units::nanoTesla(counts * Units::value(fieldPerCount));
         }
 
         /// A mid-conversion frame -- CH not 00 -- is read again after a millisecond. A part still

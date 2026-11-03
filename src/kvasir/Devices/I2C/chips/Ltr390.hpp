@@ -28,10 +28,10 @@ namespace Ltr390Detail {
         bit13 = 5
     };
 
-    inline constexpr std::array<std::uint16_t, 5> GainValue{1, 3, 6, 9, 18};
-    inline constexpr std::array<std::uint8_t, 6>  ResolutionBits{20, 19, 18, 17, 16, 13};
+    inline constexpr std::array<std::uint16_t, 5> gainValue{1, 3, 6, 9, 18};
+    inline constexpr std::array<std::uint8_t, 6>  resolutionBits{20, 19, 18, 17, 16, 13};
     /// The conversion takes about this long at each resolution, rounded up.
-    inline constexpr std::array<std::chrono::milliseconds, 6> ConversionTimes{
+    inline constexpr std::array<std::chrono::milliseconds, 6> conversionTimes{
       std::chrono::milliseconds{400},
       std::chrono::milliseconds{200},
       std::chrono::milliseconds{100},
@@ -40,16 +40,16 @@ namespace Ltr390Detail {
       std::chrono::milliseconds{13}};
 
     [[nodiscard]] constexpr std::uint16_t gainValueOf(std::uint8_t gain) {
-        return gain < GainValue.size() ? GainValue[gain] : GainValue[0];
+        return gain < gainValue.size() ? gainValue[gain] : gainValue[0];
     }
 
     [[nodiscard]] constexpr std::uint8_t resolutionBitsOf(std::uint8_t resolution) {
-        return resolution < ResolutionBits.size() ? ResolutionBits[resolution] : ResolutionBits[0];
+        return resolution < resolutionBits.size() ? resolutionBits[resolution] : resolutionBits[0];
     }
 
     [[nodiscard]] constexpr std::chrono::milliseconds conversionTime(std::uint8_t resolution) {
-        return resolution < ConversionTimes.size() ? ConversionTimes[resolution]
-                                                   : ConversionTimes[0];
+        return resolution < conversionTimes.size() ? conversionTimes[resolution]
+                                                   : conversionTimes[0];
     }
 }   // namespace Ltr390Detail
 
@@ -87,56 +87,56 @@ template<Ltr390Detail::Gain       Gain       = Ltr390Detail::Gain::x3,
          Ltr390Detail::Resolution Resolution = Ltr390Detail::Resolution::bit18,
          Percent                  Window     = Units::percent(100)>
 struct Ltr390 {
-    static constexpr std::string_view Name = "LTR390";
+    static constexpr std::string_view name = "LTR390";
     /// Lite-On LTR-390UV. LTR390.md:448..461, PART_ID 0x06: part number 1011b in 7:4 (default 0xB2).
     /// Configuration: MAIN_CTRL (0x00) ALS_UVS_EN, bit 1, set and the software reset, bit 4, over
     /// (LTR390.md:359..373).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"part-id", 0x06, 1, true, 0xF0, 0xB0},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"enabled", 0x00, 1, true, 0x12, 0x02},
     };
-    static constexpr Address7                Address = 0x53;
-    static constexpr std::array<Address7, 1> Addresses{0x53};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x53;
+    static constexpr std::array<Address7, 1> addresses{0x53};
+    static constexpr std::size_t             registerBytes = 1;
 
     static_assert(Window >= Units::percent(1),
                   "a window transmission of zero would divide by zero");
 
-    static constexpr std::uint8_t  GainCode       = static_cast<std::uint8_t>(Gain);
-    static constexpr std::uint8_t  ResolutionCode = static_cast<std::uint8_t>(Resolution);
-    static constexpr std::uint64_t WindowValue    = Units::value(Window);
-    static constexpr std::chrono::milliseconds ConversionTime
-      = Ltr390Detail::conversionTime(ResolutionCode);
+    static constexpr std::uint8_t  gainCode       = static_cast<std::uint8_t>(Gain);
+    static constexpr std::uint8_t  resolutionCode = static_cast<std::uint8_t>(Resolution);
+    static constexpr std::uint64_t windowValue    = Units::value(Window);
+    static constexpr std::chrono::milliseconds conversionTime
+      = Ltr390Detail::conversionTime(resolutionCode);
 
     /// Resolution, and the measurement rate at 100 ms (2).
-    static constexpr std::uint8_t MeasRate
-      = static_cast<std::uint8_t>((ResolutionCode << 4) | 0x02U);
-    static constexpr std::uint8_t Enabled = 0x02;   // bit 1
-    static constexpr std::uint8_t AlsMode = 0x02;   // enable, mode 0
-    static constexpr std::uint8_t UvsMode = 0x0A;   // enable, mode 1
+    static constexpr std::uint8_t measRate
+      = static_cast<std::uint8_t>((resolutionCode << 4) | 0x02U);
+    static constexpr std::uint8_t enabled = 0x02;   // bit 1
+    static constexpr std::uint8_t alsMode = 0x02;   // enable, mode 0
+    static constexpr std::uint8_t uvsMode = 0x0A;   // enable, mode 1
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{20};
+    static constexpr auto startupDelay = std::chrono::milliseconds{20};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       // Software reset: the part resets before it acknowledges the byte, so the write NAKs
       // (Linux ltr390.c: "chip fails to respond to this, so ignore any errors"; Adafruit's
       // reset() says the same).
       Engine::Step::write(
         {.reg = 0x00, .payload = {0x10}, .delay = std::chrono::milliseconds{20}, .mayNak = true}),
-      Engine::Step::write({.reg = 0x04, .payload = {MeasRate}}),
-      Engine::Step::write({.reg = 0x05, .payload = {GainCode}}),
+      Engine::Step::write({.reg = 0x04, .payload = {measRate}}),
+      Engine::Step::write({.reg = 0x05, .payload = {gainCode}}),
       Engine::Step::write({.reg     = 0x00,
-                           .payload = {Enabled},
-                           .delay   = ConversionTime + std::chrono::milliseconds{10}}),
+                           .payload = {enabled},
+                           .delay   = conversionTime + std::chrono::milliseconds{10}}),
     };
 
     struct State {
         std::uint8_t partId{};
-        std::uint8_t gain{GainCode};
-        std::uint8_t resolution{ResolutionCode};
+        std::uint8_t gain{gainCode};
+        std::uint8_t resolution{resolutionCode};
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs: the
@@ -144,26 +144,26 @@ struct Ltr390 {
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
         state.partId     = static_cast<std::uint8_t>(ids[0]);
-        state.gain       = GainCode;
-        state.resolution = ResolutionCode;
+        state.gain       = gainCode;
+        state.resolution = resolutionCode;
     }
 
     struct Light {
-        static constexpr auto Period = 2 * ConversionTime + std::chrono::milliseconds{100};
+        static constexpr auto period = 2 * conversionTime + std::chrono::milliseconds{100};
         /// So the runs that found nothing new are counted (unchanged<Light>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// Ambient light, then the same ADC switched to the UV photodiode; MAIN_STATUS before
         /// each result.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::write({.reg     = 0x00,
-                               .payload = {AlsMode},
-                               .delay   = ConversionTime + std::chrono::milliseconds{10}}),
+                               .payload = {alsMode},
+                               .delay   = conversionTime + std::chrono::milliseconds{10}}),
           Engine::Step::read({.reg = 0x07, .count = 1, .offset = 0}),   // MAIN_STATUS
           Engine::Step::read({.reg = 0x0D, .count = 3, .offset = 1}),   // ALSDATA
           Engine::Step::write({.reg     = 0x00,
-                               .payload = {UvsMode},
-                               .delay   = ConversionTime + std::chrono::milliseconds{10}}),
+                               .payload = {uvsMode},
+                               .delay   = conversionTime + std::chrono::milliseconds{10}}),
           Engine::Step::read({.reg = 0x07, .count = 1, .offset = 4}),   // MAIN_STATUS
           Engine::Step::read({.reg = 0x10, .count = 3, .offset = 5}),   // UVSDATA
         };
@@ -181,7 +181,7 @@ struct Ltr390 {
                 auto const num
                   = static_cast<std::uint64_t>(als) * 600ULL * (1ULL << (20U - bits)) * 100ULL;
                 auto const den = static_cast<std::uint64_t>(Ltr390Detail::gainValueOf(gain)) * 4ULL
-                               * WindowValue;
+                               * windowValue;
                 return Units::milliLux(num / den);
             }
 
@@ -190,7 +190,7 @@ struct Ltr390 {
             [[nodiscard]] constexpr MilliUvi uvi() const {
                 // counts per UVI = 2300 * (gain/18) * 2^bits / 2^20 * window
                 auto const shift = 20U - Ltr390Detail::resolutionBitsOf(resolution);
-                auto const den   = 2300ULL * Ltr390Detail::gainValueOf(gain) * WindowValue;
+                auto const den   = 2300ULL * Ltr390Detail::gainValueOf(gain) * windowValue;
                 auto const num
                   = static_cast<std::uint64_t>(uvs) * 1000ULL * 18ULL * (1ULL << shift) * 100ULL;
                 return Units::milliUvi(num / den);
@@ -211,8 +211,8 @@ struct Ltr390 {
     /// carries the new gain.
     struct GainSetting {
         using Value                          = Ltr390Detail::Gain;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Gain;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Gain;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -229,8 +229,8 @@ struct Ltr390 {
     /// MEAS_RATE's resolution (6:4); the measurement rate stays at 100 ms.
     struct ResolutionSetting {
         using Value                          = Ltr390Detail::Resolution;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Resolution;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Resolution;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

@@ -48,21 +48,21 @@ namespace Kvasir { namespace I2C {
         // was free the moment SDA was pushed high for 20 us with SCL high (ForceStop below):
         // the pad against one open-drain pull-down, for the length of eight bits at 400 kHz.
         enum class Phase : std::uint8_t {
-            Idle,
-            Aborting,       // softAbortRequest issued; waiting 100 µs for STOP to propagate
-            PinTakeover,    // SCL/SDA over to GPIO, both released (instantaneous)
-            PulseLow,       // SCL low; waiting 20 µs
-            PulseHigh,      // SCL released; waiting 20 µs; pulseCount_ decrements back to PulseLow
-            StopSdaLow,     // SDA low; waiting 20 µs
-            StopSdaHigh,    // SDA released; waiting 20 µs; then -> ForceStop
-            ForceStop,      // SDA high by itself: -> Reinit. Still held: pushed high for 20 µs
-            ForceRelease,   // SDA released again; waiting 20 µs; then -> Reinit
-            Reinit,         // restore pin functions; caller must reset the peripheral
+            idle,
+            aborting,       // softAbortRequest issued; waiting 100 µs for STOP to propagate
+            pinTakeover,    // SCL/SDA over to GPIO, both released (instantaneous)
+            pulseLow,       // SCL low; waiting 20 µs
+            pulseHigh,      // SCL released; waiting 20 µs; pulseCount_ decrements back to PulseLow
+            stopSdaLow,     // SDA low; waiting 20 µs
+            stopSdaHigh,    // SDA released; waiting 20 µs; then -> ForceStop
+            forceStop,      // SDA high by itself: -> Reinit. Still held: pushed high for 20 µs
+            forceRelease,   // SDA released again; waiting 20 µs; then -> Reinit
+            reinit,         // restore pin functions; caller must reset the peripheral
         };
 
         enum class TickResult { busy, idle, needsReinit };
 
-        inline static Phase                   phase_{Phase::Idle};
+        inline static Phase                   phase_{Phase::idle};
         inline static int                     pulseCount_{0};
         inline static Kvasir::Deadline<Clock> phaseWait_{};   // the current phase's wait
         inline static tp                      sickUntil_{};   // post-abort settle gate
@@ -107,7 +107,7 @@ namespace Kvasir { namespace I2C {
         inline static Kvasir::Deadline<Clock>   retryHoldOff_{};
         inline static std::chrono::milliseconds backoff_{kBackoffMin};
 
-        static bool isActive() { return phase_ != Phase::Idle; }
+        static bool isActive() { return phase_ != Phase::idle; }
 
         /// Open-drain by hand: an output that is low, or an input that leaves the line to
         /// the pull-ups. The pad is never pushed high.
@@ -204,7 +204,7 @@ namespace Kvasir { namespace I2C {
         static void begin() {
             ++recoveryCount;
             apply(base::softAbortRequest);
-            phase_ = Phase::Aborting;
+            phase_ = Phase::aborting;
             phaseWait_.restart(std::chrono::microseconds{100}, Clock::now());
         }
 
@@ -214,12 +214,12 @@ namespace Kvasir { namespace I2C {
         //   busy        — recovery in progress, caller should return early
         //   needsReinit — recovery finished, caller must reset() the peripheral
         static TickResult tick(tp now) {
-            if(phase_ == Phase::Idle) { return TickResult::idle; }
+            if(phase_ == Phase::idle) { return TickResult::idle; }
             if(phaseWait_.armed(now)) { return TickResult::busy; }
 
             switch(phase_) {
-            case Phase::Aborting: phase_ = Phase::PinTakeover; [[fallthrough]];
-            case Phase::PinTakeover:
+            case Phase::aborting: phase_ = Phase::pinTakeover; [[fallthrough]];
+            case Phase::pinTakeover:
                 // Both released: the slave must be able to drive SDA while it shifts out,
                 // and sdaIsHigh() must read the bus, not our own output. The OUT latches are
                 // cleared first: on the RP chips makeOutput() sets OE before it clears OUT, so
@@ -229,53 +229,53 @@ namespace Kvasir { namespace I2C {
                 release_(base::I2CConfig::sdaPinLocation);
                 release_(base::I2CConfig::sclPinLocation);
                 pulseCount_ = 9;
-                phase_      = Phase::PulseLow;
+                phase_      = Phase::pulseLow;
                 break;
-            case Phase::PulseLow:
+            case Phase::pulseLow:
                 driveLow_(base::I2CConfig::sclPinLocation);
                 phaseWait_.restart(std::chrono::microseconds{20}, now);
-                phase_ = Phase::PulseHigh;
+                phase_ = Phase::pulseHigh;
                 break;
-            case Phase::PulseHigh:
+            case Phase::pulseHigh:
                 release_(base::I2CConfig::sclPinLocation);
                 phaseWait_.restart(std::chrono::microseconds{20}, now);
                 // Stop as soon as the slave has let SDA go; pulseCount_ keeps the rest.
-                phase_ = (--pulseCount_ > 0 && !sdaIsHigh()) ? Phase::PulseLow : Phase::StopSdaLow;
+                phase_ = (--pulseCount_ > 0 && !sdaIsHigh()) ? Phase::pulseLow : Phase::stopSdaLow;
                 break;
-            case Phase::StopSdaLow:
+            case Phase::stopSdaLow:
                 // SDA is taken back for the STOP: low while SCL is high, then released.
                 driveLow_(base::I2CConfig::sdaPinLocation);
                 phaseWait_.restart(std::chrono::microseconds{20}, now);
-                phase_ = Phase::StopSdaHigh;
+                phase_ = Phase::stopSdaHigh;
                 break;
-            case Phase::StopSdaHigh:
+            case Phase::stopSdaHigh:
                 release_(base::I2CConfig::sdaPinLocation);
                 phaseWait_.restart(std::chrono::microseconds{20}, now);
-                phase_ = Phase::ForceStop;
+                phase_ = Phase::forceStop;
                 break;
-            case Phase::ForceStop:
+            case Phase::forceStop:
                 // 20 us after the STOP's release: a line that is high has had its STOP. One that
                 // is still low -- the clocks never freed it, or the slave took it again before
                 // the STOP -- gets the forced one, unless SCL is held too, which nothing here cures.
                 if(sdaIsHigh() || !sclIsHigh()) {
-                    phase_ = Phase::Reinit;
+                    phase_ = Phase::reinit;
                     break;
                 }
                 ++forcedStops_;
                 apply(makeOutputInitHigh(base::I2CConfig::sdaPinLocation));
                 phaseWait_.restart(std::chrono::microseconds{20}, now);
-                phase_ = Phase::ForceRelease;
+                phase_ = Phase::forceRelease;
                 break;
-            case Phase::ForceRelease:
+            case Phase::forceRelease:
                 apply(clear(base::I2CConfig::
                               sdaPinLocation));   // the latch low again, as PinTakeover left it
                 release_(base::I2CConfig::sdaPinLocation);
                 phaseWait_.restart(std::chrono::microseconds{20}, now);
-                phase_ = Phase::Reinit;
+                phase_ = Phase::reinit;
                 break;
-            case Phase::Reinit:
+            case Phase::reinit:
                 apply(base::initStepPinConfig);
-                phase_ = Phase::Idle;
+                phase_ = Phase::idle;
                 return TickResult::needsReinit;
             default: break;
             }
@@ -283,7 +283,7 @@ namespace Kvasir { namespace I2C {
         }
 
         static void resetState() {
-            phase_      = Phase::Idle;
+            phase_      = Phase::idle;
             stuckSince_ = tp{};
             busFree_.store(false, std::memory_order_relaxed);
         }

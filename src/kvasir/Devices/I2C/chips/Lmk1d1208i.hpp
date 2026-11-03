@@ -33,20 +33,20 @@ namespace Kvasir::I2C::Chips {
 /// transaction: the datasheet gives no figure and 500 ms is a conservative default.
 template<typename Timing = Engine::DefaultTiming>
 struct Lmk1d1208i {
-    static constexpr std::string_view Name          = "LMK1D1208I";
-    static constexpr Address7         Address       = 0x68;   // IDX1 = IDX0 = low
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "LMK1D1208I";
+    static constexpr Address7         address       = 0x68;   // IDX1 = IDX0 = low
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x68, 4>();
+    static constexpr auto addresses = addressRun<0x68, 4>();
 
-    static constexpr std::chrono::milliseconds StartupDelay
+    static constexpr std::chrono::milliseconds startupDelay
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
     /// R5 DEV_ID (bits 3:0): 0 on this part (Table 9-15).
-    static constexpr std::uint8_t DeviceId = 0x0;
+    static constexpr std::uint8_t deviceId = 0x0;
 
     /// The identification read is the presence probe.
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x85, .count = 1, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0x85, .count = 1, .offset = 0})};
 
     struct State {
         std::uint8_t deviceId{};   ///< R5 bits 3:0
@@ -57,13 +57,13 @@ struct Lmk1d1208i {
                                               State& state) {
         state.deviceId = static_cast<std::uint8_t>(data.u8(0) & 0x0FU);
         state.revision = static_cast<std::uint8_t>(data.u8(0) >> 4);
-        return state.deviceId == DeviceId;
+        return state.deviceId == deviceId;
     }
 
     /// R5, so the id is also visible after bring-up and the part is polled at all.
     struct Identity {
-        static constexpr auto       Period = std::chrono::milliseconds{5000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{5000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x85, .count = 1, .offset = 0})};
 
         struct Sample {
@@ -79,8 +79,8 @@ struct Lmk1d1208i {
 
     /// Read back 100 ms after a write, then every second.
     struct ByteTiming {
-        static constexpr std::chrono::milliseconds VerifyDelay{100};
-        static constexpr std::chrono::milliseconds VerifyInterval{1000};
+        static constexpr std::chrono::milliseconds verifyDelay{100};
+        static constexpr std::chrono::milliseconds verifyInterval{1000};
     };
 
     /// One configuration register, written back and checked.
@@ -94,24 +94,24 @@ struct Lmk1d1208i {
     /// affect device functionality"), so they are forced on the way out and masked on the
     /// way back: a value with them clear is written and verified as if they were set.
     struct BankControl : Byte<0x82, 0xF1> {
-        static constexpr std::uint8_t ReservedBits = 0xC0;
+        static constexpr std::uint8_t reservedBits = 0xC0;
 
         [[nodiscard]] static constexpr Engine::Step encode(std::uint8_t const&  value,
                                                            std::span<std::byte> buffer) {
-            buffer[0] = static_cast<std::byte>(value | ReservedBits);
+            buffer[0] = static_cast<std::byte>(value | reservedBits);
             return Engine::Step::writeBuffer({.reg = 0x82, .offset = 0, .count = 1});
         }
 
         [[nodiscard]] static constexpr bool verify(Kvasir::Bytes written,
                                                    Kvasir::Bytes readBack) {
-            return (written.u8(0) & ~ReservedBits) == (readBack.u8(0) & ~ReservedBits);
+            return (written.u8(0) & ~reservedBits) == (readBack.u8(0) & ~reservedBits);
         }
     };
 
     /// BankControl bit positions.
-    static constexpr std::uint8_t InputEnableShift = 0;   ///< IN0, IN1
-    static constexpr std::uint8_t BankMuteShift    = 2;   ///< bank 0, bank 1
-    static constexpr std::uint8_t BankInSelShift   = 4;   ///< set = IN0, clear = IN1
+    static constexpr std::uint8_t inputEnableShift = 0;   ///< IN0, IN1
+    static constexpr std::uint8_t bankMuteShift    = 2;   ///< bank 0, bank 1
+    static constexpr std::uint8_t bankInSelShift   = 4;   ///< set = IN0, clear = IN1
 
     using Reads  = Engine::List<Identity>;
     using Writes = Engine::List<OutputEnable, Amplitude, BankControl>;

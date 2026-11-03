@@ -49,29 +49,29 @@ namespace Kvasir { namespace I2C {
     template<typename Cfg, typename Clock, std::size_t CallbackSize, ClockTimingPolicy Timing>
     struct QueuedShape {
         /// Re-exported from the config so a bus can size its traffic against the bandwidth.
-        static constexpr auto BaudRate = Cfg::baudRate;
+        static constexpr auto baudRate = Cfg::baudRate;
 
         /// The bus's optional parts, the same struct as the SPI master's (BusTypes.hpp); latency and the
         /// timeout snapshot on by default. Not `Features`: on a bus that name is the engine's (a port's EngineFeatures).
-        static constexpr ::Kvasir::Bus::QueueFeatures BusFeatures = ::Kvasir::Bus::QueueFeatures{
+        static constexpr ::Kvasir::Bus::QueueFeatures busFeatures = ::Kvasir::Bus::QueueFeatures{
           KVASIR_CONFIG_OR(Cfg, queueFeatures, ::Kvasir::Bus::QueueFeatures{})};
 
         /// Tickets / cancel() and per-request deadlines (queueFeatures.cancel, .deadlines).
-        static constexpr bool Cancellable = BusFeatures.cancel;
-        static constexpr bool Deadlines   = BusFeatures.deadlines;
-        static constexpr bool Tracked     = Cancellable || Deadlines;
+        static constexpr bool cancellable = busFeatures.cancel;
+        static constexpr bool deadlines   = busFeatures.deadlines;
+        static constexpr bool tracked     = cancellable || deadlines;
 
         /// Each device at its own clock (I2CConfig::perDeviceClock). Off, a request has no timing member and a start
         /// never looks at the block's clock registers: nothing of this is in the image.
-        static constexpr bool PerDeviceClock = Cfg::perDeviceClock;
+        static constexpr bool perDeviceClock = Cfg::perDeviceClock;
 
         using ClockTiming = typename Timing::ClockTiming;
 
         /// The timing of baudRate itself, what a request without one of its own carries.
-        static constexpr ClockTiming DefaultTiming = [] {
-            if constexpr(PerDeviceClock) {
+        static constexpr ClockTiming defaultTiming = [] {
+            if constexpr(perDeviceClock) {
                 return Timing::clockTiming(Cfg::clockSpeed,
-                                           static_cast<std::uint32_t>(BaudRate),
+                                           static_cast<std::uint32_t>(baudRate),
                                            Cfg::maxBaudRateError);
             } else {
                 return ClockTiming{};
@@ -80,22 +80,22 @@ namespace Kvasir { namespace I2C {
 
         using Request = Queue::QueuedRequestFor<CallbackSize,
                                                 typename Clock::time_point,
-                                                Tracked,
-                                                Deadlines,
-                                                PerDeviceClock,
+                                                tracked,
+                                                deadlines,
+                                                perDeviceClock,
                                                 ClockTiming,
-                                                DefaultTiming>;
+                                                defaultTiming>;
 
         /// What a request carries for a device clocked at most at `hz` (kvasir_devices' Device fills it in from
         /// Config::busClock / Chip::I2cMaxClock): the timing for min(hz, baudRate). On a bus without perDeviceClock a
         /// device slower than the bus is a compile error, and the answer is nothing.
         static consteval auto timing(std::uint32_t hz) {
-            if constexpr(PerDeviceClock) {
-                auto const f = std::min(hz, static_cast<std::uint32_t>(BaudRate));
+            if constexpr(perDeviceClock) {
+                auto const f = std::min(hz, static_cast<std::uint32_t>(baudRate));
                 if(f < Cfg::minBaudRate) { Detail::i2cDeviceClockBelowMinBaudRateOfTheBus(); }
                 return Timing::clockTiming(Cfg::clockSpeed, f, Cfg::maxBaudRateError);
             } else {
-                if(hz < BaudRate) {
+                if(hz < baudRate) {
                     Detail::i2cDeviceClockBelowTheBusClockSetPerDeviceClockOnTheBus();
                 }
                 return std::false_type{};
@@ -145,7 +145,7 @@ namespace Kvasir { namespace I2C {
 
         /// Failures after which SDA read low the moment the master went idle (Core::sdaLowAfterAbort).
         static std::uint32_t sdaLowAfterAbort()
-            requires(Core::Features.counters)
+            requires(Core::features.counters)
         {
             return Core::sdaLowAfterAbort();
         }

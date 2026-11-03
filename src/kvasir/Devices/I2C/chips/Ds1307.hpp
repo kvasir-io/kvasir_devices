@@ -75,8 +75,8 @@ namespace Ds1307Detail {
     }
 
     struct Clock {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{Engine::Step::read({.reg = 0x00, .count = 7})};
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{Engine::Step::read({.reg = 0x00, .count = 7})};
         using Sample = Time;
 
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
@@ -88,11 +88,11 @@ namespace Ds1307Detail {
 
     struct SetTime {
         using Value                        = Time;
-        static constexpr std::size_t Bytes = 7;
+        static constexpr std::size_t bytes = 7;
 
         /// Setting the clock is a one-shot command: replaying it after a reset would put
         /// the stale time back on a chip that has been keeping its own since.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         time,
                                                            std::span<std::byte> buffer) {
@@ -111,14 +111,14 @@ namespace Ds1307Detail {
 /// counts those reads until a time is set. The DS3231 has no CH bit and shares the rest.
 /// Standard mode only: 100 kHz at most on the bus it sits on.
 struct Ds1307 {
-    static constexpr std::string_view Name    = "DS1307";
-    static constexpr Address7         Address = 0x68;
+    static constexpr std::string_view name    = "DS1307";
+    static constexpr Address7         address = 0x68;
     /// f_SCL 0..100 kHz (DS1307 datasheet, AC Electrical Characteristics); "operates in the
     /// standard mode (100kHz) only" (I2C Data Bus). A bus faster than that fails the build,
     /// unless it runs each device at its own clock (I2CConfig::perDeviceClock).
-    static constexpr Units::Hertz            I2cMaxClock = Units::hertz(100'000);
-    static constexpr std::array<Address7, 1> Addresses{0x68};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Units::Hertz            i2cMaxClock = Units::hertz(100'000);
+    static constexpr std::array<Address7, 1> addresses{0x68};
+    static constexpr std::size_t             registerBytes = 1;
 
     using Time    = Ds1307Detail::Time;
     using SetTime = Ds1307Detail::SetTime;
@@ -142,18 +142,18 @@ struct Ds1307 {
 /// 0x12 (bits 7..6: quarters). Temperature is read every 10 s along with the status byte.
 /// Fixed address 0x68.
 struct Ds3231 {
-    static constexpr std::string_view        Name    = "DS3231";
-    static constexpr Address7                Address = 0x68;
-    static constexpr std::array<Address7, 1> Addresses{0x68};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "DS3231";
+    static constexpr Address7                address = 0x68;
+    static constexpr std::array<Address7, 1> addresses{0x68};
+    static constexpr std::size_t             registerBytes = 1;
 
     using Time    = Ds1307Detail::Time;
     using Clock   = Ds1307Detail::Clock;
     using SetTime = Ds1307Detail::SetTime;
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{10000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{10000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x0F, .count = 1, .offset = 0}),
           Engine::Step::read({.reg = 0x11, .count = 2, .offset = 1})};
 

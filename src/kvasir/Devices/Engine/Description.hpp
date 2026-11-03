@@ -60,30 +60,30 @@ struct DefaultTiming {};
 // -- what a chip may declare ------------------------------------------------------------
 
 template<typename G>
-concept ReadGroup = requires { std::span<Step const>{G::Steps}; };
+concept ReadGroup = requires { std::span<Step const>{G::steps}; };
 
 template<typename G>
 concept WriteGroup = requires {
     typename G::Value;
-    { G::Bytes } -> std::convertible_to<std::size_t>;
+    { G::bytes } -> std::convertible_to<std::size_t>;
 };
 
-namespace detail {
+namespace Detail {
     template<typename C>
-    concept HasInit = requires { std::span<Step const>{C::Init}; };
+    concept HasInit = requires { std::span<Step const>{C::init}; };
 
     /// The description says what its data sheet says tells the part from any other: a non-empty
     /// `static constexpr std::array Identity{RegisterCheck{...}, ...}` (RegisterCheck.hpp).
     template<typename C>
     concept HasIdentity = requires {
-        { C::Identity.size() } -> std::convertible_to<std::size_t>;
-        { C::Identity[0] } -> std::convertible_to<RegisterCheck const&>;
-    } && (C::Identity.size() != 0);
+        { C::identity.size() } -> std::convertible_to<std::size_t>;
+        { C::identity[0] } -> std::convertible_to<RegisterCheck const&>;
+    } && (C::identity.size() != 0);
 
     template<typename C>
     constexpr std::span<Step const> writtenInit() {
         if constexpr(HasInit<C>) {
-            return std::span<Step const>{C::Init};
+            return std::span<Step const>{C::init};
         } else {
             return std::span<Step const>{};
         }
@@ -97,11 +97,11 @@ namespace detail {
     template<HasIdentity C>
     constexpr auto initWithIdentity() {
         constexpr auto                           written = writtenInit<C>();
-        constexpr auto                           n       = C::Identity.size();
+        constexpr auto                           n       = C::identity.size();
         std::array<Step, n + 1 + written.size()> steps{};
         auto                                     offset = bufferBytes(written);
         for(std::size_t i = 0; i < n; ++i) {
-            auto const& check = C::Identity[i];
+            auto const& check = C::identity[i];
             steps[i]          = Step::read({.reg    = check.reg,
                                             .count  = check.width,
                                             .offset = static_cast<std::uint8_t>(offset)});
@@ -114,12 +114,12 @@ namespace detail {
 
     template<typename C>
     struct EffectiveInit {
-        static constexpr std::array<Step, 0> Steps{};
+        static constexpr std::array<Step, 0> steps{};
     };
 
     template<HasIdentity C>
     struct EffectiveInit<C> {
-        static constexpr auto Steps = initWithIdentity<C>();
+        static constexpr auto steps = initWithIdentity<C>();
     };
 
     template<typename C>
@@ -130,7 +130,7 @@ namespace detail {
     concept HasState = requires { typename C::State; };
     template<typename G>
     concept HasPeriod = requires {
-        { G::Period } -> std::convertible_to<std::chrono::milliseconds>;
+        { G::period } -> std::convertible_to<std::chrono::milliseconds>;
     };
     template<typename G>
     concept HasSample = requires { typename G::Sample; };
@@ -144,7 +144,7 @@ namespace detail {
       = requires(Bytes data, typename G::Sample const& prev) { G::decode(data, prev); };
 
     template<typename G>
-    concept HasTimestamp = requires { G::Timestamped; };
+    concept HasTimestamp = requires { G::timestamped; };
 
     template<typename G>
     concept KeepsHistory = HasSample<G> && (HasPrevDecode<G> || HasTimestamp<G>);
@@ -169,26 +169,26 @@ namespace detail {
         };
     template<typename G>
     concept HasItems = requires {
-        { G::Items } -> std::convertible_to<std::size_t>;
+        { G::items } -> std::convertible_to<std::size_t>;
     };
     template<typename G>
-    concept HasInitial = requires { G::Initial; };
+    concept HasInitial = requires { G::initial; };
     /// A write group that is a one-shot command rather than a state the chip must hold: it
     /// is not replayed after a reset (an EEPROM page write, setting a clock).
     template<typename G>
     concept HasTransient = requires {
-        { G::Transient } -> std::convertible_to<bool>;
-    } && G::Transient;
+        { G::transient } -> std::convertible_to<bool>;
+    } && G::transient;
 
     /// Read a written register back and compare: VerifyDelay is how long after the write to
     /// look, VerifyInterval how often to look again. Either may stand alone.
     template<typename G>
     concept HasVerifyDelay = requires {
-        { G::VerifyDelay } -> std::convertible_to<std::chrono::milliseconds>;
+        { G::verifyDelay } -> std::convertible_to<std::chrono::milliseconds>;
     };
     template<typename G>
     concept HasVerifyInterval = requires {
-        { G::VerifyInterval } -> std::convertible_to<std::chrono::milliseconds>;
+        { G::verifyInterval } -> std::convertible_to<std::chrono::milliseconds>;
     };
     template<typename G>
     concept Verifies = HasVerifyDelay<G> || HasVerifyInterval<G>;
@@ -203,7 +203,7 @@ namespace detail {
     template<typename G>
     constexpr std::chrono::milliseconds verifyDelayOf() {
         if constexpr(HasVerifyDelay<G>) {
-            return Kvasir::asDuration(G::VerifyDelay);
+            return Kvasir::asDuration(G::verifyDelay);
         } else {
             return std::chrono::milliseconds{0};
         }
@@ -212,7 +212,7 @@ namespace detail {
     template<typename G>
     constexpr std::chrono::milliseconds verifyIntervalOf() {
         if constexpr(HasVerifyInterval<G>) {
-            return Kvasir::asDuration(G::VerifyInterval);
+            return Kvasir::asDuration(G::verifyInterval);
         } else {
             return std::chrono::milliseconds{0};
         }
@@ -284,8 +284,8 @@ namespace detail {
     /// (a PMTK sentence). A Transient group behaves the same way.
     template<typename G>
     concept AlwaysWrites = requires {
-        { G::AlwaysWrite } -> std::convertible_to<bool>;
-    } && G::AlwaysWrite;
+        { G::alwaysWrite } -> std::convertible_to<bool>;
+    } && G::alwaysWrite;
 
     template<typename C>
     struct ReadsOf {
@@ -340,7 +340,7 @@ namespace detail {
     template<typename G>
     constexpr std::size_t itemsOf() {
         if constexpr(HasItems<G>) {
-            return static_cast<std::size_t>(G::Items);
+            return static_cast<std::size_t>(G::items);
         } else {
             return 1;
         }
@@ -381,19 +381,19 @@ namespace detail {
         }
     }
 
-}   // namespace detail
+}   // namespace Detail
 
 /// A read group's period (`static constexpr auto Period`), 0 ms for a group that has none (read on demand).
 template<typename G>
 constexpr std::chrono::milliseconds periodOf() {
-    if constexpr(detail::HasPeriod<G>) {
-        return Kvasir::asDuration(G::Period);
+    if constexpr(Detail::HasPeriod<G>) {
+        return Kvasir::asDuration(G::period);
     } else {
         return std::chrono::milliseconds{0};
     }
 }
 
-namespace detail {
+namespace Detail {
 
     template<typename T, typename L>
     struct IndexOf;
@@ -493,8 +493,8 @@ namespace detail {
     template<typename G,
              typename Config>
     constexpr std::uint8_t confirmChangeOf() {
-        if constexpr(HasSample<G> && requires { G::ConfirmChange; }) {
-            return static_cast<std::uint8_t>(G::ConfirmChange);
+        if constexpr(HasSample<G> && requires { G::confirmChange; }) {
+            return static_cast<std::uint8_t>(G::confirmChange);
         } else if constexpr(HasSample<G> && requires { Config::confirmChange; }) {
             return confirmListed<G, Config>() ? static_cast<std::uint8_t>(Config::confirmChange)
                                               : std::uint8_t{0};
@@ -533,7 +533,7 @@ namespace detail {
             forEach<Reads>([&](auto i) {
                 using G = typename Nth<Reads>::template type<decltype(i)::value>;
                 if constexpr(confirmChangeOf<G, Config>() != 0) {
-                    counted = counted || hasCounted(std::span<Step const>{G::Steps});
+                    counted = counted || hasCounted(std::span<Step const>{G::steps});
                 }
             });
             return counted ? ConfirmConfig::counted : ConfirmConfig::ok;
@@ -571,7 +571,7 @@ namespace detail {
         forEach<L>([&](auto i) {
             using G = typename Nth<L>::template type<decltype(i)::value>;
             if constexpr(Verifies<G>) {
-                n = static_cast<std::size_t>(G::Bytes) > n ? static_cast<std::size_t>(G::Bytes) : n;
+                n = static_cast<std::size_t>(G::bytes) > n ? static_cast<std::size_t>(G::bytes) : n;
             }
         });
         return n;
@@ -595,6 +595,6 @@ namespace detail {
         return any;
     }
 
-}   // namespace detail
+}   // namespace Detail
 
 }   // namespace Kvasir::Engine

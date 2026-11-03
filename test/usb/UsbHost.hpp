@@ -22,7 +22,7 @@ struct UsbHost {
     using Setup     = Kvasir::USB::SetupPacket;
     using Handshake = typename Fake::Handshake;
 
-    static constexpr std::size_t MaxPacket = Fake::MaxPacket;
+    static constexpr std::size_t maxPacket = Fake::maxPacket;
 
     /// The interrupt, until the controller has nothing more to say (a bus reset is an interrupt of
     /// its own, and a cancel the device asks for in one is answered in the next).
@@ -91,7 +91,7 @@ struct UsbHost {
             r.data.insert(r.data.end(), in.packet.data.begin(), in.packet.data.end());
             r.data1.push_back(in.packet.data1);
             pump();
-            if(n < MaxPacket) { break; }
+            if(n < maxPacket) { break; }
         }
         auto const status = Fake::hostOut(0, {});
         if(status == Handshake::stall) { r.stalled = true; }
@@ -107,7 +107,7 @@ struct UsbHost {
         Fake::hostSetup(setup);
         pump();
         while(!data.empty()) {
-            auto const chunk = data.first(std::min(data.size(), MaxPacket));
+            auto const chunk = data.first(std::min(data.size(), maxPacket));
             auto const hs    = Fake::hostOut(0, chunk);
             if(hs == Handshake::stall) {
                 r.stalled = true;
@@ -190,7 +190,7 @@ struct UsbHost {
             r.data.insert(r.data.end(), in.packet.data.begin(), in.packet.data.end());
             r.data1.push_back(in.packet.data1);
             pump();
-            if(n < MaxPacket) {
+            if(n < maxPacket) {
                 r.endedShort = true;
                 return r;
             }
@@ -203,7 +203,7 @@ struct UsbHost {
                                std::span<std::byte const> data) {
         std::size_t sent{};
         while(sent < data.size()) {
-            auto const chunk = data.subspan(sent, std::min(data.size() - sent, MaxPacket));
+            auto const chunk = data.subspan(sent, std::min(data.size() - sent, maxPacket));
             if(Fake::hostOut(ep, chunk) != Handshake::ack) { return sent; }
             sent += chunk.size();
             pump();

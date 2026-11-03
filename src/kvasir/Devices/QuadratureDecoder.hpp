@@ -33,7 +33,7 @@ class QuadratureDecoder {
     /// The step of one change from state `from` to `to`, indexed (from << 2) | to: +1 forward,
     /// -1 back, 0 for no change and for a change of both lines at once (an edge was missed: the
     /// direction is unknown).
-    static constexpr std::array<std::int8_t, 16> Steps{
+    static constexpr std::array<std::int8_t, 16> steps{
       // to:  00  01  10  11
       0,
       -1,
@@ -81,7 +81,7 @@ public:
                          bool b) {
         auto const next = stateOf(a, b);
         if(next == state_) { return 0; }
-        auto const step = Steps[(state_ << 2U) | next];
+        auto const step = steps[(state_ << 2U) | next];
         if(step == 0) { ++skipped_; }
         state_ = next;
         steps_ += step;

@@ -17,13 +17,13 @@ namespace Kvasir::I2C::Chips {
 /// 0x6666, each framed with its CRC), 30 ms max, one word: the raw SRAW_VOC ticks.
 /// Sensirion's VOC index algorithm is not part of this.
 struct Sgp40 {
-    static constexpr std::string_view        Name    = "SGP40";
-    static constexpr Address7                Address = 0x59;
-    static constexpr std::array<Address7, 1> Addresses{0x59};
-    static constexpr std::size_t             RegisterBytes = 0;
+    static constexpr std::string_view        name    = "SGP40";
+    static constexpr Address7                address = 0x59;
+    static constexpr std::array<Address7, 1> addresses{0x59};
+    static constexpr std::size_t             registerBytes = 0;
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x36, 0x82}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::receive({.count = 9, .offset = 0}),
     };
@@ -43,21 +43,21 @@ struct Sgp40 {
 
     /// The default compensation: 50 %RH and 25 degC as the datasheet's ticks, with the CRC
     /// after each word (Sensirion::framed).
-    static constexpr std::array<std::uint8_t, 3> DefaultHumidity    = Sensirion::framed(0x8000);
-    static constexpr std::array<std::uint8_t, 3> DefaultTemperature = Sensirion::framed(0x6666);
+    static constexpr std::array<std::uint8_t, 3> defaultHumidity    = Sensirion::framed(0x8000);
+    static constexpr std::array<std::uint8_t, 3> defaultTemperature = Sensirion::framed(0x6666);
 
     struct Raw {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
         // clang-format off
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0x26,
                                              0x0F,
-                                             DefaultHumidity[0],
-                                             DefaultHumidity[1],
-                                             DefaultHumidity[2],
-                                             DefaultTemperature[0],
-                                             DefaultTemperature[1],
-                                             DefaultTemperature[2]},
+                                             defaultHumidity[0],
+                                             defaultHumidity[1],
+                                             defaultHumidity[2],
+                                             defaultTemperature[0],
+                                             defaultTemperature[1],
+                                             defaultTemperature[2]},
                                  .delay   = std::chrono::milliseconds{30}}),
           Engine::Step::receive({.count = 3, .offset = 0}),
         };

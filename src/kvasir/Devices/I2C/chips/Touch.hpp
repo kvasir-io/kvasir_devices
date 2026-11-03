@@ -61,20 +61,20 @@ namespace TouchDetail {
     /// What differs between controllers.
     template<typename C>
     concept Controller = requires(Bytes data) {
-        { C::Name } -> std::convertible_to<std::string_view>;
-        { C::Address } -> std::same_as<Address7 const&>;
-        { std::span<Address7 const>{C::Addresses} };                // every one it can have
-        { C::RegisterBytes } -> std::convertible_to<std::size_t>;   // 1 or 2, big-endian
-        { C::ResetLow } -> std::convertible_to<std::chrono::milliseconds>;
-        { C::ResetSettle } -> std::convertible_to<std::chrono::milliseconds>;
-        { std::span<Engine::Step const>{C::Init} };
+        { C::name } -> std::convertible_to<std::string_view>;
+        { C::address } -> std::same_as<Address7 const&>;
+        { std::span<Address7 const>{C::addresses} };                // every one it can have
+        { C::registerBytes } -> std::convertible_to<std::size_t>;   // 1 or 2, big-endian
+        { C::resetLow } -> std::convertible_to<std::chrono::milliseconds>;
+        { C::resetSettle } -> std::convertible_to<std::chrono::milliseconds>;
+        { std::span<Engine::Step const>{C::init} };
         { C::identify(data) } -> std::same_as<ChipInfo>;
-        { C::DataRegister } -> std::convertible_to<std::uint16_t>;
-        { C::DataLength } -> std::convertible_to<std::size_t>;
+        { C::dataRegister } -> std::convertible_to<std::uint16_t>;
+        { C::dataLength } -> std::convertible_to<std::size_t>;
         { C::decode(data) } -> std::same_as<Raw>;
-        { C::AckRegister } -> std::convertible_to<std::uint16_t>;   // 0: no write after a read
-        { C::AckValue } -> std::convertible_to<std::uint8_t>;
-        { C::Int } -> std::convertible_to<IntEdge>;
+        { C::ackRegister } -> std::convertible_to<std::uint16_t>;   // 0: no write after a read
+        { C::ackValue } -> std::convertible_to<std::uint8_t>;
+        { C::intPin } -> std::convertible_to<IntEdge>;
     };
 
     /// Hynitron CST816S / CST816T / CST816D, the single-touch controller on the round 1.28"
@@ -97,14 +97,14 @@ namespace TouchDetail {
     ///   not read; the event layer classifies gestures itself.
     /// - INT: a low pulse per report with FA = 60.
     struct Cst816s {
-        static constexpr std::string_view        Name    = "CST816S";
-        static constexpr Address7                Address = 0x15;
-        static constexpr std::array<Address7, 1> Addresses{0x15};
-        static constexpr std::size_t             RegisterBytes = 1;
-        static constexpr auto                    ResetLow      = std::chrono::milliseconds{10};
-        static constexpr auto                    ResetSettle   = std::chrono::milliseconds{200};
+        static constexpr std::string_view        name    = "CST816S";
+        static constexpr Address7                address = 0x15;
+        static constexpr std::array<Address7, 1> addresses{0x15};
+        static constexpr std::size_t             registerBytes = 1;
+        static constexpr auto                    resetLow      = std::chrono::milliseconds{10};
+        static constexpr auto                    resetSettle   = std::chrono::milliseconds{200};
 
-        static constexpr std::array<Engine::Step, 4> Init{
+        static constexpr std::array<Engine::Step, 4> init{
           Engine::Step::write({.reg = 0xFE, .payload = {0x01}}),   // DisAutoSleep
           Engine::Step::write({.reg = 0xFA, .payload = {0x60}}),   // IrqCtl: EnTouch | EnChange
           Engine::Step::read({.reg = 0xA7, .count = 1, .offset = 0}),   // chip id
@@ -119,8 +119,8 @@ namespace TouchDetail {
             return r;
         }
 
-        static constexpr std::uint16_t DataRegister = 0x02;
-        static constexpr std::size_t   DataLength   = 5;
+        static constexpr std::uint16_t dataRegister = 0x02;
+        static constexpr std::size_t   dataLength   = 5;
 
         [[nodiscard]] static constexpr Raw decode(Bytes data) {
             auto const count = data.u8(0) & 0x0FU;
@@ -135,9 +135,9 @@ namespace TouchDetail {
               static_cast<std::uint16_t>(((unsigned{data.u8(3)} & 0x0FU) << 8U) | data.u8(4))};
         }
 
-        static constexpr std::uint16_t AckRegister = 0;
-        static constexpr std::uint8_t  AckValue    = 0;
-        static constexpr IntEdge       Int         = IntEdge::falling;
+        static constexpr std::uint16_t ackRegister = 0;
+        static constexpr std::uint8_t  ackValue    = 0;
+        static constexpr IntEdge       intPin      = IntEdge::falling;
     };
 
     /// Hynitron CST9217 at 0x5A, with its own INT and RESET pins. There is no datasheet; the
@@ -172,19 +172,19 @@ namespace TouchDetail {
     ///
     /// Only finger 0 is decoded; a second finger contributes to the count and nothing else.
     struct Cst9217 {
-        static constexpr std::string_view        Name    = "CST9217";
-        static constexpr Address7                Address = 0x5A;
-        static constexpr std::array<Address7, 1> Addresses{0x5A};
-        static constexpr std::size_t             RegisterBytes = 2;
-        static constexpr auto                    ResetLow      = std::chrono::milliseconds{10};
-        static constexpr auto                    ResetSettle   = std::chrono::milliseconds{80};
+        static constexpr std::string_view        name    = "CST9217";
+        static constexpr Address7                address = 0x5A;
+        static constexpr std::array<Address7, 1> addresses{0x5A};
+        static constexpr std::size_t             registerBytes = 2;
+        static constexpr auto                    resetLow      = std::chrono::milliseconds{10};
+        static constexpr auto                    resetSettle   = std::chrono::milliseconds{80};
 
-        static constexpr std::uint16_t ChipType  = 0x9217;
-        static constexpr std::uint8_t  Ack       = 0xAB;
-        static constexpr std::uint8_t  Touching  = 0x06;
-        static constexpr std::size_t   MaxPoints = 2;
+        static constexpr std::uint16_t chipType  = 0x9217;
+        static constexpr std::uint8_t  ack       = 0xAB;
+        static constexpr std::uint8_t  touching  = 0x06;
+        static constexpr std::size_t   maxPoints = 2;
 
-        static constexpr std::array<Engine::Step, 4> Init{
+        static constexpr std::array<Engine::Step, 4> init{
           Engine::Step::write(
             {.reg = 0xD101, .payload = {}, .delay = std::chrono::milliseconds{10}}),
           Engine::Step::read({.reg = 0xD1FC, .count = 4, .offset = 0}),
@@ -199,31 +199,31 @@ namespace TouchDetail {
             r.height   = data.le16(6);
             r.firmware = data.le16(8);   // project id
             r.chip     = data.le16(10);
-            r.ok       = r.chip == ChipType;
+            r.ok       = r.chip == chipType;
             return r;
         }
 
-        static constexpr std::uint16_t DataRegister = 0xD000;
-        static constexpr std::size_t   DataLength   = MaxPoints * 5 + 5;
+        static constexpr std::uint16_t dataRegister = 0xD000;
+        static constexpr std::size_t   dataLength   = maxPoints * 5 + 5;
 
         [[nodiscard]] static constexpr Raw decode(Bytes data) {
-            if(data.u8(6) != Ack) { return {Frame::noFinger, 0, 0, 0}; }
+            if(data.u8(6) != ack) { return {Frame::noFinger, 0, 0, 0}; }
             auto const count = static_cast<std::size_t>(data.u8(5) & 0x7FU);
             if(count == 0) { return {Frame::noFinger, 0, 0, 0}; }
             // the count field is four bits; the vendor clamps what it reports to 2, as MaxPoints
             // does below
             if(count > 0x0F) { return {Frame::malformed, 0, 0, 0}; }
-            if((data.u8(0) & 0x0FU) != Touching) { return {Frame::noFinger, 0, 0, 0}; }
+            if((data.u8(0) & 0x0FU) != touching) { return {Frame::noFinger, 0, 0, 0}; }
             return {
               Frame::point,
-              static_cast<std::uint8_t>(count < MaxPoints ? count : MaxPoints),
+              static_cast<std::uint8_t>(count < maxPoints ? count : maxPoints),
               static_cast<std::uint16_t>((unsigned{data.u8(1)} << 4U) | (data.u8(3) >> 4U)),
               static_cast<std::uint16_t>((unsigned{data.u8(2)} << 4U) | (data.u8(3) & 0x0FU))};
         }
 
-        static constexpr std::uint16_t AckRegister = 0;
-        static constexpr std::uint8_t  AckValue    = 0;
-        static constexpr IntEdge       Int         = IntEdge::falling;
+        static constexpr std::uint16_t ackRegister = 0;
+        static constexpr std::uint8_t  ackValue    = 0;
+        static constexpr IntEdge       intPin      = IntEdge::falling;
     };
 
     /// FocalTech FT6236 / FT6336 / FT6336U and the FT5x06 family, the controllers on most
@@ -247,16 +247,16 @@ namespace TouchDetail {
     /// - INT: in the default polling mode a low pulse per report; register A4 = 1 selects
     ///   trigger mode (level low while touched), which the driver does not need.
     struct Ft6x36 {
-        static constexpr std::string_view        Name    = "FT6x36";
-        static constexpr Address7                Address = 0x38;
-        static constexpr std::array<Address7, 1> Addresses{0x38};
-        static constexpr std::size_t             RegisterBytes = 1;
-        static constexpr auto                    ResetLow      = std::chrono::milliseconds{10};
-        static constexpr auto                    ResetSettle   = std::chrono::milliseconds{300};
+        static constexpr std::string_view        name    = "FT6x36";
+        static constexpr Address7                address = 0x38;
+        static constexpr std::array<Address7, 1> addresses{0x38};
+        static constexpr std::size_t             registerBytes = 1;
+        static constexpr auto                    resetLow      = std::chrono::milliseconds{10};
+        static constexpr auto                    resetSettle   = std::chrono::milliseconds{300};
 
-        static constexpr std::uint8_t VendorId = 0x11;
+        static constexpr std::uint8_t vendorId = 0x11;
 
-        static constexpr std::array<Engine::Step, 1> Init{
+        static constexpr std::array<Engine::Step, 1> init{
           Engine::Step::read({.reg = 0xA3, .count = 6, .offset = 0}),
         };
 
@@ -265,12 +265,12 @@ namespace TouchDetail {
             r.chip     = data.u8(0);
             r.firmware = data.u8(3);
             r.extra    = data.u8(5);   // vendor id
-            r.ok       = r.extra == VendorId || r.chip == 0x06 || r.chip == 0x36 || r.chip == 0x64;
+            r.ok       = r.extra == vendorId || r.chip == 0x06 || r.chip == 0x36 || r.chip == 0x64;
             return r;
         }
 
-        static constexpr std::uint16_t DataRegister = 0x02;
-        static constexpr std::size_t   DataLength   = 7;
+        static constexpr std::uint16_t dataRegister = 0x02;
+        static constexpr std::size_t   dataLength   = 7;
 
         [[nodiscard]] static constexpr Raw decode(Bytes data) {
             auto const count = data.u8(0) & 0x0FU;
@@ -286,9 +286,9 @@ namespace TouchDetail {
               static_cast<std::uint16_t>(((unsigned{data.u8(3)} & 0x0FU) << 8U) | data.u8(4))};
         }
 
-        static constexpr std::uint16_t AckRegister = 0;
-        static constexpr std::uint8_t  AckValue    = 0;
-        static constexpr IntEdge       Int         = IntEdge::falling;
+        static constexpr std::uint16_t ackRegister = 0;
+        static constexpr std::uint8_t  ackValue    = 0;
+        static constexpr IntEdge       intPin      = IntEdge::falling;
     };
 
     /// Goodix GT911, the five-point controller on the 4.3" to 10" panels. 16-bit registers.
@@ -315,15 +315,15 @@ namespace TouchDetail {
     /// - INT: a pulse per report; its edge is bits 1..0 of config byte 804D (INT trigger:
     ///   00 rising, 01 falling, the usual stock value). The advisory edge here is falling.
     struct Gt911 {
-        static constexpr std::string_view        Name           = "GT911";
-        static constexpr Address7                Address        = 0x5D;
-        static constexpr Address7                AddressIntHigh = 0x14;
-        static constexpr std::array<Address7, 2> Addresses{0x5D, 0x14};
-        static constexpr std::size_t             RegisterBytes = 2;
-        static constexpr auto                    ResetLow      = std::chrono::milliseconds{10};
-        static constexpr auto                    ResetSettle   = std::chrono::milliseconds{50};
+        static constexpr std::string_view        name           = "GT911";
+        static constexpr Address7                address        = 0x5D;
+        static constexpr Address7                addressIntHigh = 0x14;
+        static constexpr std::array<Address7, 2> addresses{0x5D, 0x14};
+        static constexpr std::size_t             registerBytes = 2;
+        static constexpr auto                    resetLow      = std::chrono::milliseconds{10};
+        static constexpr auto                    resetSettle   = std::chrono::milliseconds{50};
 
-        static constexpr std::array<Engine::Step, 2> Init{
+        static constexpr std::array<Engine::Step, 2> init{
           Engine::Step::read(
             {.reg = 0x8140, .count = 6, .offset = 0}),   // product id (4) + firmware (2)
           Engine::Step::read(
@@ -341,8 +341,8 @@ namespace TouchDetail {
             return r;
         }
 
-        static constexpr std::uint16_t DataRegister = 0x814E;
-        static constexpr std::size_t   DataLength   = 1 + 8;
+        static constexpr std::uint16_t dataRegister = 0x814E;
+        static constexpr std::size_t   dataLength   = 1 + 8;
 
         [[nodiscard]] static constexpr Raw decode(Bytes data) {
             auto const status = data.u8(0);
@@ -353,9 +353,9 @@ namespace TouchDetail {
             return {Frame::point, static_cast<std::uint8_t>(count), data.le16(2), data.le16(4)};
         }
 
-        static constexpr std::uint16_t AckRegister = 0x814E;
-        static constexpr std::uint8_t  AckValue    = 0;
-        static constexpr IntEdge       Int         = IntEdge::falling;
+        static constexpr std::uint16_t ackRegister = 0x814E;
+        static constexpr std::uint8_t  ackValue    = 0;
+        static constexpr IntEdge       intPin      = IntEdge::falling;
     };
 
 }   // namespace TouchDetail
@@ -388,23 +388,23 @@ struct TouchPanel {
     using Frame      = TouchDetail::Frame;
     using IntEdge    = TouchDetail::IntEdge;
 
-    static constexpr std::string_view Name          = Ctrl::Name;
-    static constexpr Address7         Address       = Ctrl::Address;
-    static constexpr auto             Addresses     = Ctrl::Addresses;
-    static constexpr std::size_t      RegisterBytes = Ctrl::RegisterBytes;
-    static constexpr auto             ResetLow      = Ctrl::ResetLow;
-    static constexpr auto             ResetSettle   = Ctrl::ResetSettle;
+    static constexpr std::string_view name          = Ctrl::name;
+    static constexpr Address7         address       = Ctrl::address;
+    static constexpr auto             addresses     = Ctrl::addresses;
+    static constexpr std::size_t      registerBytes = Ctrl::registerBytes;
+    static constexpr auto             resetLow      = Ctrl::resetLow;
+    static constexpr auto             resetSettle   = Ctrl::resetSettle;
 
     /// The engine ignores this; the application reads it to pick its GPIO edge.
-    static constexpr IntEdge Int = Ctrl::Int;
+    static constexpr IntEdge intPin = Ctrl::intPin;
 
-    static constexpr auto HeldPoll
+    static constexpr auto heldPoll
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Cfg, heldPoll, TouchDetail::PollDefaults::heldPoll));
 
-    static constexpr auto IdlePoll
+    static constexpr auto idlePoll
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Cfg, idlePoll, TouchDetail::PollDefaults::idlePoll));
 
-    static constexpr auto Init = Ctrl::Init;
+    static constexpr auto init = Ctrl::init;
 
     /// The identification, kept for the application: state().
     using State = ChipInfo;
@@ -435,30 +435,30 @@ struct TouchPanel {
 
         /// Only the compile-time "this group is cyclic", and the first deadline; what is
         /// actually waited is periodNow() below.
-        static constexpr auto Period = IdlePoll >= HeldPoll ? IdlePoll : HeldPoll;
+        static constexpr auto period = idlePoll >= heldPoll ? idlePoll : heldPoll;
 
         /// Fast while a finger is down, slow when the glass is idle. Zero parks the group
         /// until the INT line's interrupt calls request<Data>().
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(Reading const& s) {
-            return s.points != 0 ? HeldPoll : IdlePoll;
+            return s.points != 0 ? heldPoll : idlePoll;
         }
 
         /// The data read, and -- for a controller that wants one -- the write that lets it
         /// produce the next frame, once the frame read was not stale. The engine runs the
         /// script, then decodes, so the acknowledge goes out after the read, which is where
         /// the chip wants it.
-        static constexpr auto Steps = [] {
-            if constexpr(Ctrl::AckRegister != 0) {
+        static constexpr auto steps = [] {
+            if constexpr(Ctrl::ackRegister != 0) {
                 return std::array<Engine::Step, 3>{
-                  Engine::Step::read({.reg    = Ctrl::DataRegister,
-                                      .count  = static_cast<std::uint8_t>(Ctrl::DataLength),
+                  Engine::Step::read({.reg    = Ctrl::dataRegister,
+                                      .count  = static_cast<std::uint8_t>(Ctrl::dataLength),
                                       .offset = 0}),
                   Engine::Step::stopUnless(),
-                  Engine::Step::write({.reg = Ctrl::AckRegister, .payload = {Ctrl::AckValue}})};
+                  Engine::Step::write({.reg = Ctrl::ackRegister, .payload = {Ctrl::ackValue}})};
             } else {
                 return std::array<Engine::Step, 1>{
-                  Engine::Step::read({.reg    = Ctrl::DataRegister,
-                                      .count  = static_cast<std::uint8_t>(Ctrl::DataLength),
+                  Engine::Step::read({.reg    = Ctrl::dataRegister,
+                                      .count  = static_cast<std::uint8_t>(Ctrl::dataLength),
                                       .offset = 0})};
             }
         }();
@@ -491,9 +491,9 @@ struct TouchPanel {
 
     using Reads = Engine::List<Data>;
 
-    static_assert(RegisterBytes == 1 || RegisterBytes == 2,
+    static_assert(registerBytes == 1 || registerBytes == 2,
                   "a register address is one or two bytes");
-    static_assert(Ctrl::DataLength > 0 && Ctrl::DataLength <= 255,
+    static_assert(Ctrl::dataLength > 0 && Ctrl::dataLength <= 255,
                   "a data frame is between one and 255 bytes");
 };
 

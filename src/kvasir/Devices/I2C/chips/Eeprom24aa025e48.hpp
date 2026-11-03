@@ -29,11 +29,11 @@ namespace Kvasir::I2C::Chips {
 /// sends the address alone).
 template<std::size_t PageBytes = 16, std::size_t ChunkBytes = 16>
 struct Eeprom24aa025e48 {
-    static constexpr std::string_view Name          = "24AA025E48";
-    static constexpr Address7         Address       = 0x50;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "24AA025E48";
+    static constexpr Address7         address       = 0x50;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x50, 8>();
+    static constexpr auto addresses = addressRun<0x50, 8>();
 
     /// The part's write buffer is 16 bytes; a write past its page boundary wraps to the start
     /// of the same page and overwrites it (6.2), so a page here must fit the part's whole.
@@ -43,12 +43,12 @@ struct Eeprom24aa025e48 {
                   "a chunk is 1..128 bytes");
 
     /// The whole array, readable.
-    static constexpr std::size_t Capacity = 256;
+    static constexpr std::size_t capacity = 256;
 
     /// Everything at or above this is write protected.
-    static constexpr std::uint8_t UserAreaBytes = 0x80;
+    static constexpr std::uint8_t userAreaBytes = 0x80;
 
-    static constexpr std::array Init{Engine::Step::read({.reg = 0xFA, .count = 6, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0xFA, .count = 6, .offset = 0})};
 
     struct State {
         std::array<std::uint8_t, 6> eui48{};
@@ -74,7 +74,7 @@ struct Eeprom24aa025e48 {
             std::uint8_t length{ChunkBytes};
         };
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::readIndirect({.regOffset = 0, .count = ChunkBytes, .offset = 1})};
 
         /// How many bytes a request reads: its length, at most a chunk, and never past the
@@ -82,7 +82,7 @@ struct Eeprom24aa025e48 {
         [[nodiscard]] static constexpr std::size_t fits(Request const& r) {
             return std::min({static_cast<std::size_t>(r.length),
                              ChunkBytes,
-                             Capacity - static_cast<std::size_t>(r.address)});
+                             capacity - static_cast<std::size_t>(r.address)});
         }
 
         [[nodiscard]] static constexpr std::size_t prepare(Request const&       r,
@@ -116,21 +116,21 @@ struct Eeprom24aa025e48 {
     struct Page {
         using Value = PageData;
 
-        static constexpr std::size_t Bytes = PageBytes;
+        static constexpr std::size_t bytes = PageBytes;
 
         /// A page write is a one-shot command: replaying it after a reset would burn another
         /// of the part's finite write cycles.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         /// How many of the value's bytes one page write takes: none outside the user area,
         /// else up to the end of the page the address is in (the part wraps within the page)
         /// and the end of the user area.
         [[nodiscard]] static constexpr std::uint8_t fits(Value const& value) {
-            if(value.address >= UserAreaBytes) { return 0; }
-            auto const address = static_cast<std::size_t>(value.address);
-            auto const n       = std::min({static_cast<std::size_t>(value.length),
-                                           PageBytes - address % PageBytes,
-                                           static_cast<std::size_t>(UserAreaBytes) - address});
+            if(value.address >= userAreaBytes) { return 0; }
+            auto const addressHere = static_cast<std::size_t>(value.address);
+            auto const n = std::min({static_cast<std::size_t>(value.length),
+                                     PageBytes - addressHere % PageBytes,
+                                     static_cast<std::size_t>(userAreaBytes) - addressHere});
             return static_cast<std::uint8_t>(n);
         }
 
@@ -149,10 +149,10 @@ struct Eeprom24aa025e48 {
     /// The memory interface every memory description shares: `request<Block>` reads,
     /// `rewrite<Write>` writes, in chunks, not across a WritePageBytes boundary (0: no pages).
     using Write                                  = Page;
-    static constexpr std::size_t WritableBytes   = UserAreaBytes;
-    static constexpr std::size_t ReadChunkBytes  = ChunkBytes;
-    static constexpr std::size_t WriteChunkBytes = PageBytes;
-    static constexpr std::size_t WritePageBytes  = PageBytes;
+    static constexpr std::size_t writableBytes   = userAreaBytes;
+    static constexpr std::size_t readChunkBytes  = ChunkBytes;
+    static constexpr std::size_t writeChunkBytes = PageBytes;
+    static constexpr std::size_t writePageBytes  = PageBytes;
 
     using Reads  = Engine::List<Block>;
     using Writes = Engine::List<Page>;

@@ -28,20 +28,20 @@ namespace Kvasir::I2C::Chips {
 /// after a reset sets the output latches before any pin is turned into an output.
 /// 0x20..0x27 by A2..A0.
 struct Mcp23017 {
-    static constexpr std::string_view Name = "MCP23017";
+    static constexpr std::string_view name = "MCP23017";
     /// Microchip MCP23017. IOCON (0x0A with BANK 0): BANK, MIRROR and SEQOP clear -- the register
     /// pairs the description writes as 16-bit words are only adjacent with BANK 0, and only written as
     /// a pair with sequential operation on (MCP23017.md:480..541). The part has no identity register.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"iocon", 0x0A, 1, true, 0xE0, 0x00},
     };
-    static constexpr Address7    Address       = 0x20;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x20;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x20, 8>();
+    static constexpr auto addresses = addressRun<0x20, 8>();
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
         {.reg     = 0x05,
          .payload = {0x00}}),   // IOCON if BANK = 1 (else GPINTENB): BANK = 0 from here on
@@ -50,8 +50,8 @@ struct Mcp23017 {
     };
 
     struct Pins {
-        static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Engine::Step::read({.reg = 0x12, .count = 2})};
+        static constexpr auto       period = std::chrono::milliseconds{50};
+        static constexpr std::array steps{Engine::Step::read({.reg = 0x12, .count = 2})};
 
         struct Sample {
             std::uint16_t port{};   ///< GPIOA | GPIOB << 8

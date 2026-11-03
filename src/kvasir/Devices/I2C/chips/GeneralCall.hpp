@@ -25,19 +25,19 @@ namespace Kvasir::I2C::Chips {
 ///     using ResetCh6 = OnChannel<Chips::GeneralCall, 6>;
 ///     bus.get<ResetCh6>().set<Chips::GeneralCall::Command>(0xFF);
 struct GeneralCall {
-    static constexpr std::string_view Name          = "general call";
-    static constexpr Address7         Address       = Address7::reserved(0x00);
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "general call";
+    static constexpr Address7         address       = Address7::reserved(0x00);
+    static constexpr std::size_t      registerBytes = 0;
     /// Not a part (Concepts.hpp): nothing goes out until it is asked for, so until then it is
     /// `starting`, and a Bus that counted it would never have all its parts answering.
-    static constexpr bool Broadcast = true;
+    static constexpr bool broadcast = true;
 
     /// The one byte. Transient: a command, not a state, so it is not sent again after a
     /// reset of the description -- and no Initial, so nothing goes out until it is asked for.
     struct Command {
         using Value                            = std::uint8_t;
-        static constexpr std::size_t Bytes     = 1;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 1;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

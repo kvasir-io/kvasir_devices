@@ -43,7 +43,7 @@ namespace Kvasir { namespace SPI {
 
         bool readBlock(std::uint32_t               lba,
                        std::span<std::byte,
-                                 Card::BlockBytes> out) {
+                                 Card::blockBytes> out) {
             for(std::uint8_t attempt = 0;; ++attempt) {
                 auto const r = run_([&] { return card_.read(lba, out); });
                 if(r == SdResult::ok) {
@@ -60,7 +60,7 @@ namespace Kvasir { namespace SPI {
 
         bool writeBlock(std::uint32_t               lba,
                         std::span<std::byte const,
-                                  Card::BlockBytes> in) {
+                                  Card::blockBytes> in) {
             if(run_([&] { return card_.write(lba, in); }) == SdResult::ok) {
                 ++writes_;
                 return true;

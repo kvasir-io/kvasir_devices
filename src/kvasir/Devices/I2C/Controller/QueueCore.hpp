@@ -34,26 +34,26 @@ namespace Kvasir { namespace I2C {
     template<typename Hw, typename Clock, std::size_t Depth, std::size_t CallbackCapacity>
         requires QueueHw<Hw, Clock>
     struct QueueCore {
-        static constexpr std::size_t QueueDepth   = Depth;
-        static constexpr std::size_t CallbackSize = CallbackCapacity;
+        static constexpr std::size_t queueDepth   = Depth;
+        static constexpr std::size_t callbackSize = CallbackCapacity;
         using tp                                  = typename Clock::time_point;
         using Recovery                            = typename Hw::Recovery;
         using Request                             = typename Hw::Request;
 
-        static constexpr bool Cancellable    = Hw::cancellable;
-        static constexpr bool Deadlines      = Hw::deadlines;
-        static constexpr bool Tracked        = Cancellable || Deadlines;
-        static constexpr bool PerDeviceClock = Hw::perDeviceClock;
+        static constexpr bool cancellable    = Hw::cancellable;
+        static constexpr bool deadlines      = Hw::deadlines;
+        static constexpr bool tracked        = cancellable || deadlines;
+        static constexpr bool perDeviceClock = Hw::perDeviceClock;
         /// The optional parts (Bus::QueueFeatures, the config's queueFeatures): off, a part costs nothing and its
         /// accessors do not compile.
-        static constexpr ::Kvasir::Bus::QueueFeatures Features = Hw::busFeatures;
+        static constexpr ::Kvasir::Bus::QueueFeatures features = Hw::busFeatures;
         using Result
-          = std::conditional_t<Tracked, ::Kvasir::Bus::TrackedOutcome, ::Kvasir::Bus::Outcome>;
+          = std::conditional_t<tracked, ::Kvasir::Bus::TrackedOutcome, ::Kvasir::Bus::Outcome>;
         using State           = QueueState;
         using TimeoutSnapshot = I2C::TimeoutSnapshot<typename Hw::Snapshot>;
 
         /// Bus faults in an unbroken row that mean the bus is dead (the rule: Bus/DeadBus.hpp - a NAK resets it).
-        static constexpr std::uint32_t DeadBusFailures = 40;
+        static constexpr std::uint32_t deadBusFailures = 40;
 
         /// The rate limiter's fault kinds: keys only, never printed.
         enum class Fault : std::uint8_t {
@@ -67,14 +67,14 @@ namespace Kvasir { namespace I2C {
         /// The queue's view of a request (Bus/RequestQueue.hpp): the entry is the request.
         struct QueueSpec {
             using Result                    = QueueCore::Result;
-            static constexpr bool Tracked   = QueueCore::Tracked;
-            static constexpr bool Deadlines = QueueCore::Deadlines;
+            static constexpr bool tracked   = QueueCore::tracked;
+            static constexpr bool deadlines = QueueCore::deadlines;
 
             static Request& request(Request& r) { return r; }
         };
 
         // QueueDepth requests wait at once, besides the one on the wire.
-        inline static ::Kvasir::Bus::RequestQueue<Request, QueueDepth, Clock, QueueSpec> queue_{};
+        inline static ::Kvasir::Bus::RequestQueue<Request, queueDepth, Clock, QueueSpec> queue_{};
         inline static Request currentRequest_{};
         inline static bool    active_{false};
         inline static State   state_{State::idle};
@@ -124,7 +124,7 @@ namespace Kvasir { namespace I2C {
 
         /// submit(), with a ticket for cancel(); an invalid ticket (refused, no callback) when submit() would be false.
         static ::Kvasir::Bus::Ticket submitTracked(Request req)
-            requires(Tracked)
+            requires(tracked)
         {
             mask_.lock();
             req.ticket = ::Kvasir::Bus::nextTicket(ticketCounter_);
@@ -137,7 +137,7 @@ namespace Kvasir { namespace I2C {
         /// belong to the bus until then, and a stop that never comes is the transfer timeout's. tooLate: completed
         /// already, or an unknown ticket.
         static ::Kvasir::Bus::Cancel cancel(::Kvasir::Bus::Ticket t)
-            requires(Cancellable)
+            requires(cancellable)
         {
             if(!t.valid()) { return ::Kvasir::Bus::Cancel::tooLate; }
             mask_.lock();
@@ -224,7 +224,7 @@ namespace Kvasir { namespace I2C {
                       "i2c{} {} transfers failed in a row with no success -- "
                       "re-initialising the peripheral (SDA {}, SCL {})",
                       Hw::instance,
-                      DeadBusFailures,
+                      deadBusFailures,
                       std::string_view{Recovery::sdaIsHigh() ? "high" : "LOW"},
                       std::string_view{Recovery::sclIsHigh() ? "high" : "LOW"});
                     reset();
@@ -244,7 +244,7 @@ namespace Kvasir { namespace I2C {
             // leaves the queue empty for seconds. Then whatever waits may start, on the same
             // terms submit() starts it (tryStart_). A recovery begun here fails what is queued then;
             // what is queued while it runs waits for it, and starts after the recovery's re-init.
-            if constexpr(Deadlines) {
+            if constexpr(deadlines) {
                 mask_.lock();
                 expireDeadlines_(now);
                 mask_.unlock();
@@ -277,7 +277,7 @@ namespace Kvasir { namespace I2C {
                     return;
                 }
                 ++x_.timeouts;
-                if constexpr(Features.timeoutSnapshot) { lastTimeout_ = snapshot_(); }
+                if constexpr(features.timeoutSnapshot) { lastTimeout_ = snapshot_(); }
                 Hw::logTimeout(now);
                 Hw::timeoutAbort();
                 // a stop the caller asked for (cancel, deadline) that never completed: still that outcome
@@ -307,7 +307,7 @@ namespace Kvasir { namespace I2C {
         static std::uint32_t consecutiveFailures() { return x_.deadBus.consecutiveFailures(); }
 
         static std::uint32_t resuscitations()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.deadBus.resuscitations();
         }
@@ -321,7 +321,7 @@ namespace Kvasir { namespace I2C {
 
         /// Transactions turn() gave up on after the transfer timeout.
         static std::uint32_t timeouts()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.timeouts;
         }
@@ -329,7 +329,7 @@ namespace Kvasir { namespace I2C {
         /// Requests accepted for the wire since boot: what tells "nothing talks on this bus"
         /// from "nothing went wrong on it".
         static std::uint32_t transfers()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.transfers;
         }
@@ -338,14 +338,14 @@ namespace Kvasir { namespace I2C {
         /// the next start; whether the line is really held is the idle watchdog's to decide,
         /// and Recovery::idleStuck() counts the times it did.
         static std::uint32_t sdaLowAfterAbort()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.sdaLowAfterAbort;
         }
 
         /// Queued requests failed without going on the wire (a recovery emptying the queue).
         static std::uint32_t drainedRequests()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.drained;
         }
@@ -355,7 +355,7 @@ namespace Kvasir { namespace I2C {
 
         /// Times a start rewrote the block's timing for a device at another clock (PerDeviceClock only, 0 without).
         static std::uint32_t clockSwitches() {
-            if constexpr(PerDeviceClock) {
+            if constexpr(perDeviceClock) {
                 return Hw::clockSwitches();
             } else {
                 return 0;
@@ -363,14 +363,14 @@ namespace Kvasir { namespace I2C {
         }
 
         static TimeoutSnapshot const& lastTimeout()
-            requires(Features.timeoutSnapshot)
+            requires(features.timeoutSnapshot)
         {
             return lastTimeout_;
         }
 
         /// lastTimeout() as a log line, the chip's: `hw` is its block's registers.
         static void logLastTimeout()
-            requires(Features.timeoutSnapshot)
+            requires(features.timeoutSnapshot)
         {
             Hw::logLastTimeout(lastTimeout_);
         }
@@ -387,7 +387,7 @@ namespace Kvasir { namespace I2C {
         };
 
         static Latency takeLatency()
-            requires(Features.latency)
+            requires(features.latency)
         {
             mask_.lock();
             LatencyTicks const l = x_.latency;
@@ -420,7 +420,7 @@ namespace Kvasir { namespace I2C {
         /// failure left the bus busy or SDA low, which only defers - the next request. Interrupt masked, or in the
         /// ISR.
         static void complete(Result result) {
-            if constexpr(Tracked) { cancelPending_ = false; }
+            if constexpr(tracked) { cancelPending_ = false; }
             Hw::finish();
 
             // The request is over before its callback runs. An interrupt raised between the
@@ -471,9 +471,9 @@ namespace Kvasir { namespace I2C {
 
         /// The interrupt: how long the request waited for this entry, then the chip's work.
         static void onIsr() {
-            if constexpr(Stamped) {
+            if constexpr(stamped) {
                 auto const now = Clock::now();
-                if constexpr(Features.latency) {
+                if constexpr(features.latency) {
                     // How long the request waited for this entry: from its start for the first,
                     // from the entry before for the rest. A byte at 400 kHz is ~25 us, so anything
                     // in milliseconds is the interrupt held off, or a part stretching the clock.
@@ -492,7 +492,7 @@ namespace Kvasir { namespace I2C {
 
     private:
         /// The interrupt entries of the request on the wire, for takeLatency() and the timeout snapshot.
-        static constexpr bool Stamped = Features.latency || Features.timeoutSnapshot;
+        static constexpr bool stamped = features.latency || features.timeoutSnapshot;
 
         struct IsrStamps {
             std::uint32_t isrEntries{};
@@ -507,21 +507,21 @@ namespace Kvasir { namespace I2C {
         };
 
         template<typename T>
-        using Counter = ::Kvasir::detail::StatCount<Features.counters, T>;
+        using Counter = ::Kvasir::Detail::StatCount<features.counters, T>;
 
         /// The dead-bus watch and the optional parts as members of ONE static object: a static member takes a byte
         /// even when empty, a [[no_unique_address]] member of a struct takes none (the SPI core's Extras).
         struct Extras {
             // logic: the streak, and the resuscitation count that picks the reaction
-            ::Kvasir::Bus::DeadBusWatch<DeadBusFailures> deadBus{};
+            ::Kvasir::Bus::DeadBusWatch<deadBusFailures> deadBus{};
             [[no_unique_address]] Counter<std::uint32_t> timeouts{};
             [[no_unique_address]] Counter<std::uint32_t> transfers{};
             [[no_unique_address]] Counter<std::uint32_t> sdaLowAfterAbort{};
             [[no_unique_address]] Counter<std::uint32_t> drained{};
-            [[no_unique_address]] std::conditional_t<Stamped, IsrStamps, ::Kvasir::detail::NoStamp>
+            [[no_unique_address]] std::conditional_t<stamped, IsrStamps, ::Kvasir::Detail::NoStamp>
               stamps{};
             [[no_unique_address]] std::
-              conditional_t<Features.latency, LatencyTicks, ::Kvasir::detail::NoStamp> latency{};
+              conditional_t<features.latency, LatencyTicks, ::Kvasir::Detail::NoStamp> latency{};
         };
 
         inline static Extras x_{};
@@ -532,7 +532,7 @@ namespace Kvasir { namespace I2C {
         /// stayed, with their 64-bit divisions: +1.7 KB on a Cortex-M0+. Off, nothing names it and it
         /// is not in the image.
         inline static std::
-          conditional_t<Features.timeoutSnapshot, TimeoutSnapshot, ::Kvasir::detail::NoStamp>
+          conditional_t<features.timeoutSnapshot, TimeoutSnapshot, ::Kvasir::Detail::NoStamp>
             lastTimeout_{};
 
         /// The request on the wire as it timed out, before the abort: the block's registers first, then the core's.
@@ -561,7 +561,7 @@ namespace Kvasir { namespace I2C {
 
         /// What a request stopped by us ends as when the transfer timeout catches it first.
         static Result stoppingResult_(Result otherwise) {
-            if constexpr(Tracked) {
+            if constexpr(tracked) {
                 if(cancelPending_) { return stopAs_; }
             }
             return otherwise;
@@ -570,7 +570,7 @@ namespace Kvasir { namespace I2C {
         /// Interrupt masked: the request on the wire past its deadline is stopped like a cancel (timedOut);
         /// queued ones past theirs become tombstones with their callback (timedOut).
         static void expireDeadlines_(tp now)
-            requires(Deadlines)
+            requires(deadlines)
         {
             if(active_ && state_ != State::idle && !cancelPending_
                && now > currentRequest_.deadline)
@@ -609,7 +609,7 @@ namespace Kvasir { namespace I2C {
             active_ = false;
             state_  = State::idle;
             // a stop of ours still out (cancel, deadline) ends with this request: the next one starts with none
-            if constexpr(Tracked) { cancelPending_ = false; }
+            if constexpr(tracked) { cancelPending_ = false; }
             inv_.invoke(currentRequest_.callback, Result::failed);
         }
 
@@ -643,7 +643,7 @@ namespace Kvasir { namespace I2C {
             active_         = true;
             sendIndex_      = 0;
             receivedCount_  = 0;
-            if constexpr(Stamped) { x_.stamps.isrEntries = 0; }
+            if constexpr(stamped) { x_.stamps.isrEntries = 0; }
             // Every start goes through here -- submit(), turn(), and the ISR chaining the
             // next request after a success -- and each one is the bus seen free.
             Recovery::noteBusFree();
@@ -651,7 +651,7 @@ namespace Kvasir { namespace I2C {
             auto const totalBytes
               = currentRequest_.sendBytes() + currentRequest_.receiveData.size();
             auto const started = Clock::now();
-            if constexpr(Stamped) { x_.stamps.requestStart = started; }
+            if constexpr(stamped) { x_.stamps.requestStart = started; }
             timeoutTime_ = started + Hw::transferTimeout(totalBytes, currentRequest_);
 
             // Nothing to transfer: not something a driver asks for, and no block finishes it.

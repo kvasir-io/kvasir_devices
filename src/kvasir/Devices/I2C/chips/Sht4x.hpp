@@ -19,13 +19,13 @@ namespace Kvasir::I2C::Chips {
 /// clamped to 0..100, the datasheet's N.B.). 0x44 (SHT40-AD1B, SHT41, SHT45), 0x45
 /// (-BD1B), 0x46 (-CD1B).
 struct Sht4x {
-    static constexpr std::string_view Name          = "SHT4x";
-    static constexpr Address7         Address       = 0x44;
-    static constexpr auto             Addresses     = addressRun<0x44, 3>();
-    static constexpr std::size_t      RegisterBytes = 0;
-    static constexpr auto             StartupDelay  = std::chrono::milliseconds{1};
+    static constexpr std::string_view name          = "SHT4x";
+    static constexpr Address7         address       = 0x44;
+    static constexpr auto             addresses     = addressRun<0x44, 3>();
+    static constexpr std::size_t      registerBytes = 0;
+    static constexpr auto             startupDelay  = std::chrono::milliseconds{1};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x94}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::command({.payload = {0x89}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::receive({.count = 6, .offset = 0}),
@@ -42,8 +42,8 @@ struct Sht4x {
     }
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0xFD}, .delay = std::chrono::milliseconds{9}}),
           Engine::Step::receive({.count = 6, .offset = 0})};
 
@@ -72,7 +72,7 @@ struct Sht4x {
     /// while to be back at ambient. For a plausibility check of the sensor (the temperature
     /// rises, the humidity falls) and for driving off condensation.
     struct Heated {
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0x24}, .delay = std::chrono::milliseconds{120}}),
           Engine::Step::receive({.count = 6, .offset = 0})};
 

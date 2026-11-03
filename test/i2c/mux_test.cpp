@@ -53,95 +53,95 @@ namespace {
 // -- timings: a part's period, and for a command or a sweep the conversion it waits -------------
 
 struct Every10 {
-    static constexpr std::chrono::milliseconds Period{10};
+    static constexpr std::chrono::milliseconds period{10};
 };
 
 struct Every20 {
-    static constexpr std::chrono::milliseconds Period{20};
+    static constexpr std::chrono::milliseconds period{20};
 };
 
 struct Every50 {
-    static constexpr std::chrono::milliseconds Period{50};
+    static constexpr std::chrono::milliseconds period{50};
 };
 
 struct Every62 {
-    static constexpr std::chrono::milliseconds Period{62};
+    static constexpr std::chrono::milliseconds period{62};
 };
 
 struct Every78 {
-    static constexpr std::chrono::milliseconds Period{78};
+    static constexpr std::chrono::milliseconds period{78};
 };
 
 struct Every80 {
-    static constexpr std::chrono::milliseconds Period{80};
+    static constexpr std::chrono::milliseconds period{80};
 };
 
 struct Every97 {
-    static constexpr std::chrono::milliseconds Period{97};
+    static constexpr std::chrono::milliseconds period{97};
 };
 
 struct Every100 {
-    static constexpr std::chrono::milliseconds Period{100};
+    static constexpr std::chrono::milliseconds period{100};
 };
 
 struct Every110 {
-    static constexpr std::chrono::milliseconds Period{110};
+    static constexpr std::chrono::milliseconds period{110};
 };
 
 struct Every200 {
-    static constexpr std::chrono::milliseconds Period{200};
+    static constexpr std::chrono::milliseconds period{200};
 };
 
 struct Every250 {
-    static constexpr std::chrono::milliseconds Period{250};
+    static constexpr std::chrono::milliseconds period{250};
 };
 
 struct Every300 {
-    static constexpr std::chrono::milliseconds Period{300};
+    static constexpr std::chrono::milliseconds period{300};
 };
 
 struct Every450 {
-    static constexpr std::chrono::milliseconds Period{450};
+    static constexpr std::chrono::milliseconds period{450};
 };
 
 struct Every500 {
-    static constexpr std::chrono::milliseconds Period{500};
+    static constexpr std::chrono::milliseconds period{500};
 };
 
 struct Every1000 {
-    static constexpr std::chrono::milliseconds Period{1000};
+    static constexpr std::chrono::milliseconds period{1000};
 };
 
 struct Every10000 {
-    static constexpr std::chrono::milliseconds Period{10000};
+    static constexpr std::chrono::milliseconds period{10000};
 };
 
 struct Every100Wait1 : Every100 {
-    static constexpr std::chrono::milliseconds Wait{1};
+    static constexpr std::chrono::milliseconds wait{1};
 };
 
 struct Every100Wait2 : Every100 {
-    static constexpr std::chrono::milliseconds Wait{2};
+    static constexpr std::chrono::milliseconds wait{2};
 };
 
 struct Every1000Wait9 : Every1000 {
-    static constexpr std::chrono::milliseconds Wait{9};
+    static constexpr std::chrono::milliseconds wait{9};
 };
 
 struct Every1000Wait12 : Every1000 {
-    static constexpr std::chrono::milliseconds Wait{12};
+    static constexpr std::chrono::milliseconds wait{12};
 };
 
 struct Every1000Wait16 : Every1000 {
-    static constexpr std::chrono::milliseconds Wait{16};
+    static constexpr std::chrono::milliseconds wait{16};
 };
 
 struct Every1000Wait50 : Every1000 {
-    static constexpr std::chrono::milliseconds Wait{50};
+    static constexpr std::chrono::milliseconds wait{50};
 };
 
 struct Every1000Wait80 : Every1000 {
-    static constexpr std::chrono::milliseconds Wait{80};
+    static constexpr std::chrono::milliseconds wait{80};
 };
 
 // -- synthetic parts: a period and the shape of the traffic, nothing else --------------------
@@ -149,13 +149,13 @@ struct Every1000Wait80 : Every1000 {
 /// One register read of N bytes: most parts.
 template<Address7 A, typename T, std::uint8_t N>
 struct Reg {
-    static constexpr std::string_view Name          = "REG";
-    static constexpr Address7         Address       = A;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "REG";
+    static constexpr Address7         address       = A;
+    static constexpr std::size_t      registerBytes = 1;
 
     struct Data {
-        static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{
+        static constexpr auto       period = T::period;
+        static constexpr std::array steps{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = N, .offset = 0})};
         using Sample = std::uint8_t;
 
@@ -168,13 +168,13 @@ struct Reg {
 /// A bare read of N bytes (BH1750, MCP3221, the easyC boards, MCP4018).
 template<Address7 A, typename T, std::uint8_t N>
 struct Recv {
-    static constexpr std::string_view Name          = "RECV";
-    static constexpr Address7         Address       = A;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "RECV";
+    static constexpr Address7         address       = A;
+    static constexpr std::size_t      registerBytes = 0;
 
     struct Data {
-        static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{Kvasir::Engine::Step::receive({.count = N, .offset = 0})};
+        static constexpr auto       period = T::period;
+        static constexpr std::array steps{Kvasir::Engine::Step::receive({.count = N, .offset = 0})};
         using Sample = std::uint8_t;
 
         [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes b) { return b.u8(0); }
@@ -186,14 +186,14 @@ struct Recv {
 /// A measurement command, T::Wait of conversion, then N bytes (Sensirion, AHT20, HTU21D).
 template<Address7 A, typename T, std::uint8_t N>
 struct Cmd {
-    static constexpr std::string_view Name          = "CMD";
-    static constexpr Address7         Address       = A;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "CMD";
+    static constexpr Address7         address       = A;
+    static constexpr std::size_t      registerBytes = 0;
 
     struct Data {
-        static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{
-          Kvasir::Engine::Step::command({.payload = {0x24, 0x00}, .delay = T::Wait}
+        static constexpr auto       period = T::period;
+        static constexpr std::array steps{
+          Kvasir::Engine::Step::command({.payload = {0x24, 0x00}, .delay = T::wait}
           ),
           Kvasir::Engine::Step::receive({             .count = N,      .offset = 0}
           )
@@ -210,13 +210,13 @@ struct Cmd {
 /// models a panel that sends only the pages whose content changed, at the given rate.
 template<Address7 A, typename T, std::uint8_t N>
 struct Page {
-    static constexpr std::string_view Name          = "PAGE";
-    static constexpr Address7         Address       = A;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "PAGE";
+    static constexpr Address7         address       = A;
+    static constexpr std::size_t      registerBytes = 0;
 
     struct Data {
-        static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{
+        static constexpr auto       period = T::period;
+        static constexpr std::array steps{
           Kvasir::Engine::Step::command({.payload = {0x00, 0x21, 0x00, 0x7F, 0x22, 0x00, 0x07}}
           ),
           Kvasir::Engine::Step::receive({.count = N, .offset = 0}
@@ -233,26 +233,26 @@ struct Page {
 /// Four single-shot conversions, each a config write, T::Wait, and a 2-byte read (ADS1x15).
 template<Address7 A, typename T>
 struct Sweep {
-    static constexpr std::string_view Name          = "SWEEP";
-    static constexpr Address7         Address       = A;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "SWEEP";
+    static constexpr Address7         address       = A;
+    static constexpr std::size_t      registerBytes = 1;
 
     struct Data {
-        static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{
-          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xC3, 0x83}, .delay = T::Wait}
+        static constexpr auto       period = T::period;
+        static constexpr std::array steps{
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xC3, 0x83}, .delay = T::wait}
           ),
           Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 0}
           ),
-          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xD3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xD3, 0x83}, .delay = T::wait}
           ),
           Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 2}
           ),
-          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xE3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xE3, 0x83}, .delay = T::wait}
           ),
           Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 4}
           ),
-          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xF3, 0x83}, .delay = T::Wait}
+          Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0xF3, 0x83}, .delay = T::wait}
           ),
           Kvasir::Engine::Step::read({.reg = 0x00,              .count = 2,      .offset = 6}
           )
@@ -268,13 +268,13 @@ struct Sweep {
 /// The VL53L1X's shape: the status, 15 ms, the 17-byte result, the interrupt clear.
 template<Address7 A, typename T>
 struct Ranging {
-    static constexpr std::string_view Name          = "RANGING";
-    static constexpr Address7         Address       = A;
-    static constexpr std::size_t      RegisterBytes = 2;
+    static constexpr std::string_view name          = "RANGING";
+    static constexpr Address7         address       = A;
+    static constexpr std::size_t      registerBytes = 2;
 
     struct Data {
-        static constexpr auto       Period = T::Period;
-        static constexpr std::array Steps{
+        static constexpr auto       period = T::period;
+        static constexpr std::array steps{
           Kvasir::Engine::Step::read({.reg = 0x0031, .count = 1, .offset = 0, .delay = 15ms}),
           Kvasir::Engine::Step::read({.reg = 0x0089, .count = 17, .offset = 1}),
           Kvasir::Engine::Step::write({.reg = 0x0086, .payload = {0x01}})};
@@ -288,8 +288,8 @@ struct Ranging {
 
 /// The bus as the Bus sees it: 400 kHz and a queue deeper than the parts on it.
 struct Wire : FakeBus {
-    static constexpr std::uint32_t BaudRate   = 400'000;
-    static constexpr std::size_t   QueueDepth = 64;
+    static constexpr std::uint32_t baudRate   = 400'000;
+    static constexpr std::size_t   queueDepth = 64;
 };
 
 using MuxDev = Device<Wire, FakeClock, Chips::Tca9548a>;
@@ -310,7 +310,7 @@ using On = Device<Wire,
 /// The IIS2DULPX: six bytes every 10 ms on channel 6.
 template<typename Pol>
 using TargetOf                                   = On<Reg<0x19, Every10, 6>, 6, Pol>;
-constexpr std::chrono::microseconds TargetPeriod = 10ms;
+constexpr std::chrono::microseconds targetPeriod = 10ms;
 
 template<typename... Ts>
 struct Pack {};
@@ -397,8 +397,8 @@ using TargetLast = typename MakeBus<FrontOf<Pol>, BackOf<Pol>, Pack<TargetOf<Pol
 
 // -- the simulation ------------------------------------------------------------------------
 
-constexpr std::chrono::microseconds WarmUp = 1s;
-constexpr std::chrono::microseconds Run    = 10s;
+constexpr std::chrono::microseconds warmUp = 1s;
+constexpr std::chrono::microseconds run    = 10s;
 
 /// What a run has to reach: the 100 Hz part's share of its samples, how many late gaps it may
 /// have, and the rate every segment has to reach. The held-time bands are the same for every run.
@@ -408,7 +408,7 @@ struct Bands {
     double        segmentPercentMin{};
 };
 
-constexpr std::size_t Segments = 9;   // channels 0..7, and in front of the switch as 8
+constexpr std::size_t segments = 9;   // channels 0..7, and in front of the switch as 8
 
 std::chrono::microseconds now() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -422,7 +422,7 @@ std::chrono::microseconds wireTime(FakeBus::Request const& r) {
     std::size_t bytes = 1 + r.sendBytes();
     if(!r.receiveData.empty()) { bytes += 1 + r.receiveData.size(); }
     auto const bits = static_cast<std::int64_t>(bytes * 9 + 2);
-    return std::chrono::microseconds{1s} * bits / static_cast<std::int64_t>(Wire::BaudRate) + 100us;
+    return std::chrono::microseconds{1s} * bits / static_cast<std::int64_t>(Wire::baudRate) + 100us;
 }
 
 /// A main-loop turn: `turn` for the turns, plus `render` in the turn that draws a frame,
@@ -437,7 +437,7 @@ struct Outcome {
     std::uint32_t                targetSamples{};
     std::uint32_t                lateGaps{};   // gaps of two periods or more
     std::chrono::microseconds    longestGap{};
-    std::array<double, Segments> segmentPercent{};
+    std::array<double, segments> segmentPercent{};
     std::array<double, 8>        heldPercent{};
     std::array<double, 8>        grantsPerSecond{};
 };
@@ -458,7 +458,7 @@ Outcome simulate(Loop const& loop) {
     auto const& target  = bus->template get<Target>();
 
     Outcome                                  out{};
-    std::array<std::uint32_t, BusT::Count>   base{};
+    std::array<std::uint32_t, BusT::count>   base{};
     auto                                     arbiterBase = arbiter;
     std::deque<std::chrono::microseconds>    doneAt{};   // per pending request, in queue order
     std::chrono::microseconds                busyUntil{};
@@ -471,8 +471,8 @@ Outcome simulate(Loop const& loop) {
 
     for(;;) {
         auto const at = now();
-        if(at - start >= WarmUp + Run) { break; }
-        if(!measuring && at - start >= WarmUp) {
+        if(at - start >= warmUp + run) { break; }
+        if(!measuring && at - start >= warmUp) {
             measuring       = true;
             std::size_t idx = 0;
             bus->forEach([&](auto const& d) { base[idx++] = d.samples(); });
@@ -487,7 +487,7 @@ Outcome simulate(Loop const& loop) {
             if(lastSample) {
                 auto const gap = at - *lastSample;
                 out.longestGap = std::max(out.longestGap, gap);
-                if(gap >= 2 * TargetPeriod) { ++out.lateGaps; }
+                if(gap >= 2 * targetPeriod) { ++out.lateGaps; }
             }
             lastSample = at;
         }
@@ -509,7 +509,7 @@ Outcome simulate(Loop const& loop) {
             doneAt.pop_front();
             // The switch keeps its control byte and answers the engine's read-back with it.
             auto const& r = FakeBus::pending.front();
-            if(r.address == MuxDev::Address) {
+            if(r.address == MuxDev::address) {
                 if(r.sendBytes() != 0) { control = static_cast<std::uint8_t>(r.sendByte(0)); }
                 for(auto& b : r.receiveData) { b = std::byte{control}; }
             }
@@ -518,34 +518,34 @@ Outcome simulate(Loop const& loop) {
         FakeBus::log.clear();
     }
 
-    std::array<double, Segments> got{};
-    std::array<double, Segments> owed{};
+    std::array<double, segments> got{};
+    std::array<double, segments> owed{};
     std::size_t                  idx = 0;
     bus->forEach([&](auto const& d) {
         using D      = std::remove_cvref_t<decltype(d)>;
         auto const n = d.samples() - base[idx++];
-        if constexpr(requires { D::Chip::Data::Period; }) {
-            std::size_t seg = Segments - 1;
-            if constexpr(D::GateT::Gated) {
-                seg = static_cast<std::size_t>(std::countr_zero(D::GateT::Mask));
+        if constexpr(requires { D::Chip::Data::period; }) {
+            std::size_t seg = segments - 1;
+            if constexpr(D::GateT::gated) {
+                seg = static_cast<std::size_t>(std::countr_zero(D::GateT::mask));
             }
             got[seg] += static_cast<double>(n);
-            owed[seg] += std::chrono::duration<double>{Run} / D::Chip::Data::Period;
+            owed[seg] += std::chrono::duration<double>{run} / D::Chip::Data::period;
         }
     });
-    for(std::size_t s = 0; s < Segments; ++s) {
+    for(std::size_t s = 0; s < segments; ++s) {
         out.segmentPercent[s] = owed[s] > 0 ? 100.0 * got[s] / owed[s] : 100.0;
     }
     for(std::size_t c = 0; c < 8; ++c) {
         out.heldPercent[c] = 100.0
                            * std::chrono::duration<double>{arbiter.held[c] - arbiterBase.held[c]}
-                           / std::chrono::duration<double>{Run};
+                           / std::chrono::duration<double>{run};
         out.grantsPerSecond[c] = static_cast<double>(arbiter.grants[c] - arbiterBase.grants[c])
-                               / std::chrono::duration<double>{Run}.count();
+                               / std::chrono::duration<double>{run}.count();
     }
     out.targetSamples
       = target.samples()
-      - base[Kvasir::Engine::detail::IndexOf<Target, typename BusT::Devices>::value];
+      - base[Kvasir::Engine::Detail::IndexOf<Target, typename BusT::Devices>::value];
     return out;
 }
 
@@ -553,7 +553,7 @@ void report(char const*    order,
             Loop const&    loop,
             Outcome const& o,
             Bands const&   bands) {
-    auto const owed = static_cast<std::uint32_t>(Run / TargetPeriod);
+    auto const owed = static_cast<std::uint32_t>(run / targetPeriod);
     std::printf("    %-17s turn %4lld us | target %4u of %4u, %3u late gap(s), longest %5.1f ms\n",
                 order,
                 static_cast<long long>(loop.turn.count()),
@@ -562,9 +562,9 @@ void report(char const*    order,
                 o.lateGaps,
                 std::chrono::duration<double, std::milli>{o.longestGap}.count());
     std::printf("      rate %%   ");
-    for(std::size_t s = 0; s < Segments; ++s) {
+    for(std::size_t s = 0; s < segments; ++s) {
         std::printf(" %c %5.1f",
-                    s == Segments - 1 ? 'U' : static_cast<char>('0' + s),
+                    s == segments - 1 ? 'U' : static_cast<char>('0' + s),
                     o.segmentPercent[s]);
     }
     std::printf("\n      held %%   ");
@@ -582,10 +582,10 @@ void report(char const*    order,
       = 100.0 * static_cast<double>(o.targetSamples) / static_cast<double>(owed);
     check(targetPercent >= bands.targetPercentMin, "the 100 Hz part gets its share of samples");
     check(o.lateGaps <= bands.lateGapsMax, "and no more late gaps than the policy is allowed");
-    for(std::size_t s = 0; s < Segments; ++s) {
+    for(std::size_t s = 0; s < segments; ++s) {
         check(o.segmentPercent[s] >= bands.segmentPercentMin, "every segment reaches its rate");
     }
-    check(o.segmentPercent[Segments - 1] >= 99.5, "the wire in front of the switch is not slowed");
+    check(o.segmentPercent[segments - 1] >= 99.5, "the wire in front of the switch is not slowed");
     check(o.heldPercent[6] >= 7.0 && o.heldPercent[6] <= 20.0,
           "the busiest channel holds the switch between 7 and 20 % of the time");
     check(o.heldPercent[2] <= 2.5 && o.heldPercent[5] <= 2.5,
@@ -598,58 +598,58 @@ void report(char const*    order,
 }   // namespace
 
 int main() {
-    constexpr Loop Typical{.turn = 245us, .render = 1200us, .renderEvery = 25ms};
-    constexpr Loop Fast{.turn = 120us, .render = 1200us, .renderEvery = 25ms};
-    constexpr Loop Slow{.turn = 490us, .render = 1200us, .renderEvery = 25ms};
+    constexpr Loop typical{.turn = 245us, .render = 1200us, .renderEvery = 25ms};
+    constexpr Loop fast{.turn = 120us, .render = 1200us, .renderEvery = 25ms};
+    constexpr Loop slow{.turn = 490us, .render = 1200us, .renderEvery = 25ms};
 
-    constexpr Bands ShareTypical{.targetPercentMin  = 99.0,
+    constexpr Bands shareTypical{.targetPercentMin  = 99.0,
                                  .lateGapsMax       = 2,
                                  .segmentPercentMin = 99.0};
-    constexpr Bands HoldTypical{.targetPercentMin  = 98.5,
+    constexpr Bands holdTypical{.targetPercentMin  = 98.5,
                                 .lateGapsMax       = 6,
                                 .segmentPercentMin = 99.0};
-    constexpr Bands DrainTypical{.targetPercentMin  = 97.5,
+    constexpr Bands drainTypical{.targetPercentMin  = 97.5,
                                  .lateGapsMax       = 12,
                                  .segmentPercentMin = 99.0};
-    constexpr Bands ShareSlow{.targetPercentMin  = 96.0,
-                              .lateGapsMax       = 12,
-                              .segmentPercentMin = 98.0};
-    constexpr Bands HoldSlow{.targetPercentMin  = 92.0,
-                             .lateGapsMax       = 40,
-                             .segmentPercentMin = 96.0};
-    constexpr Bands DrainSlow{.targetPercentMin  = 85.0,
-                              .lateGapsMax       = 80,
-                              .segmentPercentMin = 94.0};
+    constexpr Bands shareSlowBands{.targetPercentMin  = 96.0,
+                                   .lateGapsMax       = 12,
+                                   .segmentPercentMin = 98.0};
+    constexpr Bands holdSlowBands{.targetPercentMin  = 92.0,
+                                  .lateGapsMax       = 40,
+                                  .segmentPercentMin = 96.0};
+    constexpr Bands drainSlowBands{.targetPercentMin  = 85.0,
+                                   .lateGapsMax       = 80,
+                                   .segmentPercentMin = 94.0};
 
     testCase("Mux simulation: ShareChannel, the 100 Hz part at three places in the Bus");
-    auto const declared = simulate<ShareChannel, DeclOrder>(Typical);
-    auto const first    = simulate<ShareChannel, TargetFirst>(Typical);
-    auto const last     = simulate<ShareChannel, TargetLast>(Typical);
-    report("declaration order", Typical, declared, ShareTypical);
-    report("target first", Typical, first, ShareTypical);
-    report("target last", Typical, last, ShareTypical);
+    auto const declared = simulate<ShareChannel, DeclOrder>(typical);
+    auto const first    = simulate<ShareChannel, TargetFirst>(typical);
+    auto const last     = simulate<ShareChannel, TargetLast>(typical);
+    report("declaration order", typical, declared, shareTypical);
+    report("target first", typical, first, shareTypical);
+    report("target last", typical, last, shareTypical);
     {
         auto const spread
           = std::max({declared.targetSamples, first.targetSamples, last.targetSamples})
           - std::min({declared.targetSamples, first.targetSamples, last.targetSamples});
-        check(spread <= Run / TargetPeriod / 100,
+        check(spread <= run / targetPeriod / 100,
               "where the part sits makes at most 1 % of difference");
     }
 
     testCase("Mux simulation: ShareChannel, a loop twice as fast and twice as slow");
-    report("declaration order", Fast, simulate<ShareChannel, DeclOrder>(Fast), ShareTypical);
-    auto const shareSlow = simulate<ShareChannel, DeclOrder>(Slow);
-    report("declaration order", Slow, shareSlow, ShareSlow);
+    report("declaration order", fast, simulate<ShareChannel, DeclOrder>(fast), shareTypical);
+    auto const shareSlow = simulate<ShareChannel, DeclOrder>(slow);
+    report("declaration order", slow, shareSlow, shareSlowBands);
 
     testCase("Mux simulation: HoldChannel, a typical loop and one twice as slow");
-    report("declaration order", Typical, simulate<HoldChannel, DeclOrder>(Typical), HoldTypical);
-    auto const holdSlow = simulate<HoldChannel, DeclOrder>(Slow);
-    report("declaration order", Slow, holdSlow, HoldSlow);
+    report("declaration order", typical, simulate<HoldChannel, DeclOrder>(typical), holdTypical);
+    auto const holdSlow = simulate<HoldChannel, DeclOrder>(slow);
+    report("declaration order", slow, holdSlow, holdSlowBands);
 
     testCase("Mux simulation: DrainChannel, a typical loop and one twice as slow");
-    report("declaration order", Typical, simulate<DrainChannel, DeclOrder>(Typical), DrainTypical);
-    auto const drainSlow = simulate<DrainChannel, DeclOrder>(Slow);
-    report("declaration order", Slow, drainSlow, DrainSlow);
+    report("declaration order", typical, simulate<DrainChannel, DeclOrder>(typical), drainTypical);
+    auto const drainSlow = simulate<DrainChannel, DeclOrder>(slow);
+    report("declaration order", slow, drainSlow, drainSlowBands);
 
     testCase(
       "Mux simulation: on a slow loop the policies rank Share, Hold, Drain for the fast part");

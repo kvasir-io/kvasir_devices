@@ -25,11 +25,11 @@ namespace Iis2dulpxDetail {
     /// ultra-low-power rates.
     enum class Odr : std::uint8_t {
         off    = 0x00,
-        ulp1_6 = 0x01,
+        ulp1p6 = 0x01,
         ulp3   = 0x02,
         ulp25  = 0x03,
         lp6    = 0x04,
-        lp12_5 = 0x05,
+        lp12p5 = 0x05,
         lp25   = 0x06,
         lp50   = 0x07,
         lp100  = 0x08,
@@ -37,7 +37,7 @@ namespace Iis2dulpxDetail {
         lp400  = 0x0A,
         lp800  = 0x0B,
         hp6    = 0x14,
-        hp12_5 = 0x15,
+        hp12p5 = 0x15,
         hp25   = 0x16,
         hp50   = 0x17,
         hp100  = 0x18,
@@ -111,33 +111,33 @@ template<Iis2dulpxDetail::FullScale Fs      = Iis2dulpxDetail::FullScale::g2,
          Iis2dulpxDetail::Odr       OdrCode = Iis2dulpxDetail::Odr::hp100,
          Iis2dulpxDetail::Bandwidth Bw      = Iis2dulpxDetail::Bandwidth::div2>
 struct Iis2dulpx {
-    static constexpr std::string_view Name = "IIS2DULPX";
+    static constexpr std::string_view name = "IIS2DULPX";
     /// ST IIS2DULPX. IIS2DULPX.md:1601, WHO_AM_I (0Fh) "fixed at 47h".
     /// Configuration: CTRL4 (13h) BDU set, so the two bytes of a sample belong together
     /// (IIS2DULPX.md:1713..1725).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x47},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"bdu", 0x13, 1, true, 0x20, 0x20},
     };
-    static constexpr Address7    Address       = 0x18;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x18;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr std::array<Address7, 2> Addresses{0x18, 0x19};
+    static constexpr std::array<Address7, 2> addresses{0x18, 0x19};
 
-    static constexpr unsigned FsCode = static_cast<unsigned>(Fs);
-    static constexpr unsigned OdrRaw = static_cast<unsigned>(OdrCode);
-    static constexpr unsigned BwCode = static_cast<unsigned>(Bw);
+    static constexpr unsigned fsCode = static_cast<unsigned>(Fs);
+    static constexpr unsigned odrRaw = static_cast<unsigned>(OdrCode);
+    static constexpr unsigned bwCode = static_cast<unsigned>(Bw);
 
-    static_assert((OdrRaw & 0x0FU) >= 0x01 && (OdrRaw & 0x0FU) <= 0x0B,
+    static_assert((odrRaw & 0x0FU) >= 0x01 && (odrRaw & 0x0FU) <= 0x0B,
                   "an ODR field from 0x1 (1.6 Hz, ultra low power) to 0xB (800 Hz); 0 is off");
 
     /// The sampling period each ODR field asks for, rounded up to whole milliseconds so the
     /// part is never read faster than it converts: off, the ultra-low-power 1.6, 3 and 25 Hz,
     /// then 6, 12.5, 25, 50, 100, 200, 400 and 800 Hz.
-    static constexpr std::array<std::chrono::milliseconds, 12> OdrPeriod{
+    static constexpr std::array<std::chrono::milliseconds, 12> odrPeriod{
       std::chrono::milliseconds{0},
       std::chrono::milliseconds{625},
       std::chrono::milliseconds{334},
@@ -151,48 +151,48 @@ struct Iis2dulpx {
       std::chrono::milliseconds{3},
       std::chrono::milliseconds{2}};
 
-    static constexpr std::chrono::milliseconds OutputPeriod = OdrPeriod[OdrRaw & 0x0FU];
+    static constexpr std::chrono::milliseconds outputPeriod = odrPeriod[odrRaw & 0x0FU];
 
     /// Per LSB: 0.061, 0.122, 0.244 and 0.488 mg.
-    static constexpr std::array<MicroG, 4> AccelPerCount{Units::microG(61),
+    static constexpr std::array<MicroG, 4> accelPerCount{Units::microG(61),
                                                          Units::microG(122),
                                                          Units::microG(244),
                                                          Units::microG(488)};
 
     /// IF_ADD_INC, so a burst read walks the output registers.
-    static constexpr std::uint8_t Ctrl1 = 0x10;
+    static constexpr std::uint8_t ctrl1 = 0x10;
     /// ST puts the mode bits above the four ODR bits: 0x10 in the code is high performance,
     /// which is CTRL3's HP_EN (bit 2).
-    static constexpr bool         HighPerformance = (OdrRaw & 0x30U) == 0x10U;
-    static constexpr std::uint8_t Ctrl5           = Iis2dulpxDetail::allowedCtrl5(
-      static_cast<std::uint8_t>(((OdrRaw & 0x0FU) << 4) | (BwCode << 2) | FsCode),
-      HighPerformance);
-    static constexpr std::uint8_t Ctrl3 = HighPerformance ? 0x04 : 0x00;
+    static constexpr bool         highPerformance = (odrRaw & 0x30U) == 0x10U;
+    static constexpr std::uint8_t ctrl5           = Iis2dulpxDetail::allowedCtrl5(
+      static_cast<std::uint8_t>(((odrRaw & 0x0FU) << 4) | (bwCode << 2) | fsCode),
+      highPerformance);
+    static constexpr std::uint8_t ctrl3 = highPerformance ? 0x04 : 0x00;
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{25};
+    static constexpr auto startupDelay = std::chrono::milliseconds{25};
 
     /// Out of deep power-down the part NAKs its address and powers up, 25 ms at most.
-    static constexpr std::uint8_t WakeRetries    = 5;
-    static constexpr auto         WakeRetryDelay = std::chrono::milliseconds{10};
+    static constexpr std::uint8_t wakeRetries    = 5;
+    static constexpr auto         wakeRetryDelay = std::chrono::milliseconds{10};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
         {.reg     = 0x10,
          .payload = {0x20},
          .delay   = std::chrono::milliseconds{25}}),            // SW_RESET, then the boot time
-      Engine::Step::write({.reg = 0x10, .payload = {Ctrl1}}),   // IF_ADD_INC for the burst read
-      Engine::Step::write({.reg = 0x12, .payload = {Ctrl3}}),   // HP_EN for a high-performance ODR
+      Engine::Step::write({.reg = 0x10, .payload = {ctrl1}}),   // IF_ADD_INC for the burst read
+      Engine::Step::write({.reg = 0x12, .payload = {ctrl3}}),   // HP_EN for a high-performance ODR
       Engine::Step::write({.reg = 0x13, .payload = {0x20}}),    // CTRL4: BDU
       Engine::Step::write(
         {.reg     = 0x14,
-         .payload = {Ctrl5},
+         .payload = {ctrl5},
          .delay   = std::chrono::milliseconds{25}}),   // ODR, bandwidth and full scale
     };
 
     struct State {
         std::uint8_t deviceId{};   ///< WHO_AM_I (0x0F)
-        std::uint8_t fs{FsCode};   ///< the full scale CTRL5 holds: what decode() multiplies by
-        std::uint8_t odr{static_cast<std::uint8_t>(OdrRaw & 0x0FU)};   ///< and its ODR field
+        std::uint8_t fs{fsCode};   ///< the full scale CTRL5 holds: what decode() multiplies by
+        std::uint8_t odr{static_cast<std::uint8_t>(odrRaw & 0x0FU)};   ///< and its ODR field
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs: the
@@ -200,27 +200,27 @@ struct Iis2dulpx {
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
         state.deviceId = static_cast<std::uint8_t>(ids[0]);
-        state.fs       = static_cast<std::uint8_t>(FsCode);   // what the Init script wrote
-        state.odr      = static_cast<std::uint8_t>(OdrRaw & 0x0FU);
+        state.fs       = static_cast<std::uint8_t>(fsCode);   // what the Init script wrote
+        state.odr      = static_cast<std::uint8_t>(odrRaw & 0x0FU);
     }
 
     struct Motion {
-        static constexpr auto Period = OutputPeriod;
+        static constexpr auto period = outputPeriod;
         /// The bus completion of every sample is kept: an accelerometer on a fast period is
         /// the part whose missed ticks are worth counting (Device::takeGaps<Motion>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// The rate CTRL5 holds now, which a Config write changes; `Period` is the template's,
         /// which the bus load and the nominal rates are computed from.
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             auto const field = static_cast<std::size_t>(state.odr & 0x0FU);
             auto const p
-              = field < OdrPeriod.size() ? OdrPeriod[field] : std::chrono::milliseconds::zero();
-            return p != std::chrono::milliseconds::zero() ? p : OutputPeriod;
+              = field < odrPeriod.size() ? odrPeriod[field] : std::chrono::milliseconds::zero();
+            return p != std::chrono::milliseconds::zero() ? p : outputPeriod;
         }
 
         /// STATUS, then 0x28..0x2F in one go: three axes then the temperature word.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x25, .count = 1, .offset = 8}),
           Engine::Step::read({.reg = 0x28, .count = 8, .offset = 0})};
 
@@ -234,7 +234,7 @@ struct Iis2dulpx {
         [[nodiscard]] static constexpr std::int32_t accel(std::int16_t raw,
                                                           unsigned     fs) {
             return static_cast<std::int32_t>(static_cast<std::int64_t>(raw)
-                                             * Units::value(AccelPerCount[fs & 0x03U]));
+                                             * Units::value(accelPerCount[fs & 0x03U]));
         }
 
         /// At the full scale the part holds now, which a Config write changes (applied()).
@@ -257,13 +257,13 @@ struct Iis2dulpx {
     /// multiplies by from the write's completion on, and a new rate the period Motion is read at.
     struct Config {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Ctrl5;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = ctrl5;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
             buffer[0]
-              = static_cast<std::byte>(Iis2dulpxDetail::allowedCtrl5(value, HighPerformance));
+              = static_cast<std::byte>(Iis2dulpxDetail::allowedCtrl5(value, highPerformance));
             return Engine::Step::writeBuffer({.reg = 0x14, .offset = 0, .count = 1});
         }
 

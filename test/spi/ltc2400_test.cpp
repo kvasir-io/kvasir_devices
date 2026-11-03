@@ -26,7 +26,7 @@ constexpr std::uint32_t word(bool          sig,
                              bool          exr,
                              std::uint32_t r24,
                              std::uint32_t sub = 0) {
-    return (sig ? L::SigBit : 0U) | (exr ? L::ExrBit : 0U) | (r24 << 4U) | sub;
+    return (sig ? L::sigBit : 0U) | (exr ? L::exrBit : 0U) | (r24 << 4U) | sub;
 }
 
 constexpr bool isOk(L::Decoded const& d,
@@ -37,7 +37,7 @@ constexpr bool isOk(L::Decoded const& d,
         && d.sample.clamped == clamped;
 }
 
-constexpr std::int32_t FS = L::FullScaleCounts;   // 2^28: VREF in sub-LSB counts
+constexpr std::int32_t fs = L::fullScaleCounts;   // 2^28: VREF in sub-LSB counts
 
 // Table 2, row by row (SIG, EXR, bits 27..4):
 // VIN > 9/8 VREF and 9/8 VREF: 1 1 0001 1111...  -> clamped at 9/8 VREF
@@ -45,14 +45,14 @@ static_assert(isOk(L::decode(word(true,
                                   true,
                                   0x1F'FFFF,
                                   0xF)),
-                   FS + 0x1FF'FFFF,
+                   fs + 0x1FF'FFFF,
                    L::Range::aboveVref,
                    true));
 // VREF + 1 LSB: 1 1 0000...: 2^24 LSBs
 static_assert(isOk(L::decode(word(true,
                                   true,
                                   0)),
-                   FS,
+                   fs,
                    L::Range::aboveVref));
 static_assert(L::decode(word(true,
                              true,
@@ -63,14 +63,14 @@ static_assert(L::decode(word(true,
 static_assert(isOk(L::decode(word(true,
                                   true,
                                   0x1F'FFFE)),
-                   FS + 0x1FF'FFE0,
+                   fs + 0x1FF'FFE0,
                    L::Range::aboveVref));
 // VREF: 1 0 1111...
 static_assert(isOk(L::decode(word(true,
                                   false,
                                   0xFF'FFFF,
                                   0xF)),
-                   FS - 1,
+                   fs - 1,
                    L::Range::normal));
 static_assert(L::decode(word(true,
                              false,
@@ -81,22 +81,22 @@ static_assert(L::decode(word(true,
 static_assert(isOk(L::decode(word(true,
                                   false,
                                   0xC0'0000)),
-                   3 * (FS / 4),
+                   3 * (fs / 4),
                    L::Range::normal));
 static_assert(isOk(L::decode(word(true,
                                   false,
                                   0xBF'FFFF)),
-                   3 * (FS / 4) - 16,
+                   3 * (fs / 4) - 16,
                    L::Range::normal));
 static_assert(isOk(L::decode(word(true,
                                   false,
                                   0x80'0000)),
-                   FS / 2,
+                   fs / 2,
                    L::Range::normal));
 static_assert(isOk(L::decode(word(true,
                                   false,
                                   0x40'0000)),
-                   FS / 4,
+                   fs / 4,
                    L::Range::normal));
 // 0+: SIG 1, EXR 0, all zero; the sub-LSBs count
 static_assert(isOk(L::decode(word(true,
@@ -143,7 +143,7 @@ static_assert(isOk(L::decode(word(false,
 static_assert(isOk(L::decode(word(false,
                                   true,
                                   0xE0'0000)),
-                   -(FS / 8),
+                   -(fs / 8),
                    L::Range::belowZero,
                    true));
 static_assert(L::decode(word(false,
@@ -154,12 +154,12 @@ static_assert(L::decode(word(false,
 static_assert(isOk(L::decode(word(false,
                                   true,
                                   0xE0'0001)),
-                   -(FS / 8) + 16,
+                   -(fs / 8) + 16,
                    L::Range::belowZero));
 
 // Not ready: EOC set, whatever follows (a MISO floating high reads all ones)
 static_assert(L::decode(0xFFFF'FFFFU).kind == Kind::notReady);
-static_assert(L::decode(L::EocBit
+static_assert(L::decode(L::eocBit
                         | word(true,
                                false,
                                0x12'3456))
@@ -181,14 +181,14 @@ static_assert(L::decode(word(false,
                              0x00'0001))
                 .kind
               == Kind::invalid);
-static_assert(L::decode(L::Bit30
+static_assert(L::decode(L::bit30
                         | word(true,
                                false,
                                0x12'3456))
                 .kind
               == Kind::invalid);
 // ...which is the channel on an LTC2402
-static_assert(L::decode(L::Bit30
+static_assert(L::decode(L::bit30
                           | word(true,
                                  false,
                                  0x12'3456),
@@ -238,7 +238,7 @@ static_assert(L::wordOf(std::array{std::byte{0x2F},
 // The data sheet's numbers (md:185, :188)
 static_assert(L::conversionTime(L::Rejection::hz50).max == 163'440us);
 static_assert(L::conversionTime(L::Rejection::hz60).typical == 133'530us);
-static_assert(L::MaxClock == Kvasir::Units::hertz(2'000'000));
+static_assert(L::maxClock == Kvasir::Units::hertz(2'000'000));
 
 // The Reader against a model of the part
 
@@ -332,7 +332,7 @@ void reads() {
     run(adc, p, 120ms);
     checkEq(adc.samples(), 1U, "the first conversion read");
     check(!Pins::level[Cs::id], "CS held low between frames");
-    checkEq(adc.latest().counts, FS / 2, "1/2 VREF");
+    checkEq(adc.latest().counts, fs / 2, "1/2 VREF");
     check(adc.link() == Kvasir::Link::answering, "answering");
     p.result = word(false, true, 0xFF'FFFF);
     run(adc, p, 170ms);
@@ -360,10 +360,10 @@ void ltc2402Channels() {
     testCase("LTC2402: the channel bit");
     Part p{};
     p.conversion = 133'530us;
-    p.result     = L::Bit30 | word(true, false, 0x40'0000);
+    p.result     = L::bit30 | word(true, false, 0x40'0000);
     fresh(p);
     L::Reader<Bus, FakeClock, Cs, Sdo, Ltc2402At60Hz> adc{};
-    static_assert(decltype(adc)::Timeout == 2 * 136'200us);
+    static_assert(decltype(adc)::timeout == 2 * 136'200us);
     run(adc, p, 120ms);
     check(adc.samples() == 1 && adc.latest().channel == 1, "CH1");
     Bus::reset();
@@ -372,7 +372,7 @@ void ltc2402Channels() {
 void invalidFrame() {
     testCase("LTC2401: a frame it cannot send is dropped and CS pulsed high");
     Part p{};
-    p.result = L::Bit30 | word(true, false, 0x40'0000);   // bit 30 is always low on the LTC2401
+    p.result = L::bit30 | word(true, false, 0x40'0000);   // bit 30 is always low on the LTC2401
     fresh(p);
     L::Reader<Bus, FakeClock, Cs, Sdo> adc{};
     run(adc, p, 120ms);
@@ -381,7 +381,7 @@ void invalidFrame() {
     checkEq(Pins::rises[Cs::id], 1U, "CS taken high once after the bad frame");
     p.result = word(true, false, 0x40'0000);
     run(adc, p, 400ms);
-    check(adc.samples() >= 1 && adc.latest().counts == FS / 4, "the next good frame is read");
+    check(adc.samples() >= 1 && adc.latest().counts == fs / 4, "the next good frame is read");
     check(adc.link() == Kvasir::Link::answering, "answering again");
     Bus::reset();
 }

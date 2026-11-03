@@ -15,7 +15,7 @@ namespace Kvasir::I2C::Chips {
 namespace As7341Detail {
     /// CFG1 AGAIN (4:0): 0.5x, and each step doubles up to 512x. 11..31 are reserved.
     enum class Gain : std::uint8_t {
-        x0_5 = 0,
+        x0p5 = 0,
         x1   = 1,
         x2   = 2,
         x4   = 3,
@@ -92,28 +92,28 @@ namespace As7341Detail {
 template<As7341Detail::Gain Gain = As7341Detail::Gain::x256,
          typename Timing         = Engine::DefaultTiming>
 struct As7341 {
-    static constexpr std::string_view Name = "AS7341";
+    static constexpr std::string_view name = "AS7341";
     /// ams AS7341. AS7341.md:1363..1370, ID register 0x92: part number 001001b in 7:2.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x92, 1, true, 0xFC, 0x24},
     };
-    static constexpr Address7                Address = 0x39;
-    static constexpr std::array<Address7, 1> Addresses{0x39};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x39;
+    static constexpr std::array<Address7, 1> addresses{0x39};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr bool ByTime  = requires { Timing::integrationTime; };
-    static constexpr bool ByCodes = requires { Timing::atime; } || requires { Timing::astep; };
+    static constexpr bool byTime  = requires { Timing::integrationTime; };
+    static constexpr bool byCodes = requires { Timing::atime; } || requires { Timing::astep; };
 
-    static_assert(!(ByTime && ByCodes),
+    static_assert(!(byTime && byCodes),
                   "Timing sets integrationTime or atime and astep, not both");
-    static_assert(!ByCodes || (requires { Timing::atime; } && requires { Timing::astep; }),
+    static_assert(!byCodes || (requires { Timing::atime; } && requires { Timing::astep; }),
                   "Timing sets atime and astep together");
 
-    static constexpr As7341Detail::Codes Codes = [] {
-        if constexpr(ByCodes) {
+    static constexpr As7341Detail::Codes codes = [] {
+        if constexpr(byCodes) {
             return As7341Detail::Codes{static_cast<std::int64_t>(Timing::atime),
                                        static_cast<std::int64_t>(Timing::astep)};
-        } else if constexpr(ByTime) {
+        } else if constexpr(byTime) {
             return As7341Detail::codesFor(
               Kvasir::asDuration<std::chrono::microseconds>(Timing::integrationTime));
         } else {
@@ -121,57 +121,57 @@ struct As7341 {
         }
     }();
 
-    static_assert(Codes.atime >= 0 && Codes.atime <= 255,
+    static_assert(codes.atime >= 0 && codes.atime <= 255,
                   "ATIME is one byte");
-    static_assert(Codes.astep >= 0,
+    static_assert(codes.astep >= 0,
                   "Timing::integrationTime is below half the shortest step (1.39 us)");
-    static_assert(Codes.atime + Codes.astep > 0,
+    static_assert(codes.atime + codes.astep > 0,
                   "ATIME and ASTEP may not both be 0 (datasheet, ATIME register)");
-    static_assert(Codes.astep <= 65534,
+    static_assert(codes.astep <= 65534,
                   "ASTEP is 16 bits and 65535 is reserved (the longest integration time is "
                   "256 x 65535 x 2.78 us, 46.6 s)");
 
-    static constexpr std::uint8_t  Atime = static_cast<std::uint8_t>(Codes.atime);
-    static constexpr std::uint16_t Astep = static_cast<std::uint16_t>(Codes.astep);
+    static constexpr std::uint8_t  atime = static_cast<std::uint8_t>(codes.atime);
+    static constexpr std::uint16_t astep = static_cast<std::uint16_t>(codes.astep);
 
     /// The integration time the codes give, rounded up to whole microseconds.
-    static constexpr std::chrono::microseconds IntegrationTime
-      = As7341Detail::integrationTime(Codes);
+    static constexpr std::chrono::microseconds integrationTime
+      = As7341Detail::integrationTime(codes);
 
     /// The same in whole milliseconds, rounded up, for the waits.
-    static constexpr auto IntegrationWait
-      = std::chrono::ceil<std::chrono::milliseconds>(IntegrationTime);
+    static constexpr auto integrationWait
+      = std::chrono::ceil<std::chrono::milliseconds>(integrationTime);
 
     /// Before the first integration after SP_EN, the spectral engine auto-zeroes (AZ_CONFIG
     /// reset 255, "only before first measurement cycle"), 15 ms typical (AZ_CONFIG register
     /// text): each pass starts from SP_EN = 0, so each pass pays it, with margin.
-    static constexpr auto AutoZeroWait = std::chrono::milliseconds{30};
+    static constexpr auto autoZeroWait = std::chrono::milliseconds{30};
 
-    static constexpr std::uint8_t Pon    = 0x01;
-    static constexpr std::uint8_t SpEn   = 0x02;
-    static constexpr std::uint8_t SmuxEn = 0x10;
+    static constexpr std::uint8_t pon    = 0x01;
+    static constexpr std::uint8_t spEn   = 0x02;
+    static constexpr std::uint8_t smuxEn = 0x10;
 
     /// The reference SMUX mappings, twenty bytes each.
-    static constexpr std::array<std::uint8_t, 20> SmuxLow{0x30, 0x01, 0x00, 0x00, 0x00, 0x42, 0x00,
+    static constexpr std::array<std::uint8_t, 20> smuxLow{0x30, 0x01, 0x00, 0x00, 0x00, 0x42, 0x00,
                                                           0x00, 0x50, 0x00, 0x00, 0x00, 0x20, 0x04,
                                                           0x00, 0x30, 0x01, 0x50, 0x00, 0x06};
-    static constexpr std::array<std::uint8_t, 20> SmuxHigh{0x00, 0x00, 0x00, 0x40, 0x02, 0x00, 0x10,
+    static constexpr std::array<std::uint8_t, 20> smuxHigh{0x00, 0x00, 0x00, 0x40, 0x02, 0x00, 0x10,
                                                            0x03, 0x50, 0x10, 0x03, 0x00, 0x00, 0x00,
                                                            0x24, 0x00, 0x00, 0x50, 0x00, 0x06};
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       // CFG0: REG_BANK 0, so every register from 0x80 up is reachable -- earlier firmware may
       // have left it at 1 for 0x60..0x74 (CFG0 register) -- and LOW_POWER off
       Engine::Step::write({.reg = 0xA9, .payload = {0x00}}),
-      Engine::Step::write({.reg = 0x80, .payload = {Pon}}),   // power on
-      Engine::Step::write({.reg = 0x81, .payload = {Atime}}),
+      Engine::Step::write({.reg = 0x80, .payload = {pon}}),   // power on
+      Engine::Step::write({.reg = 0x81, .payload = {atime}}),
       Engine::Step::write(
         {.reg     = 0xCA,
-         .payload = {static_cast<std::uint8_t>(Astep & 0xFF),
-                     static_cast<std::uint8_t>(Astep >> 8)}}),   // ASTEP, low then high
+         .payload = {static_cast<std::uint8_t>(astep & 0xFF),
+                     static_cast<std::uint8_t>(astep >> 8)}}),   // ASTEP, low then high
       Engine::Step::write({.reg     = 0xAA,
                            .payload = {static_cast<std::uint8_t>(Gain)},
                            .delay   = std::chrono::milliseconds{10}}),   // CFG1: AGAIN
@@ -191,8 +191,8 @@ struct As7341 {
     }
 
     struct Spectrum {
-        static constexpr auto Period
-          = 2 * (AutoZeroWait + IntegrationWait) + std::chrono::milliseconds{100};
+        static constexpr auto period
+          = 2 * (autoZeroWait + integrationWait) + std::chrono::milliseconds{100};
 
         /// One pass: stop, tell CFG6 a SMUX write follows, the twenty bytes in three
         /// chunks, latch them, auto-zero and integrate, then collect the six ADCs. ENABLE is
@@ -200,17 +200,17 @@ struct As7341 {
         /// itself once the SMUX command is done (ENABLE register), AVALID says the
         /// measurement has completed (STATUS2), and decode() runs the pass again when either
         /// says not yet -- Adafruit's library polls both.
-        static constexpr std::uint8_t EnableAt  = 24;
-        static constexpr std::uint8_t Status2At = 26;
+        static constexpr std::uint8_t enableAt  = 24;
+        static constexpr std::uint8_t status2At = 26;
 
-        static constexpr auto Steps = [] {
+        static constexpr auto steps = [] {
             std::array<Engine::Step, 20> s{};
             std::size_t                  i    = 0;
             auto const                   pass = [&](std::array<std::uint8_t, 20> const& smux,
                                                     std::uint8_t                        into,
                                                     std::uint8_t                        passIndex) {
                 s[i++] = Engine::Step::write(
-                  {.reg = 0x80, .payload = {Pon}});   // SP_EN low while the SMUX changes
+                  {.reg = 0x80, .payload = {pon}});   // SP_EN low while the SMUX changes
                 s[i++] = Engine::Step::write(
                   {.reg = 0xAF, .payload = {0x10}});   // CFG6: SMUX_CMD = write config
                 s[i++] = Engine::Step::write({
@@ -234,24 +234,24 @@ struct As7341 {
                   .payload = {smux[16], smux[17], smux[18], smux[19]}
                 });
                 s[i++] = Engine::Step::write({.reg     = 0x80,
-                                              .payload = {static_cast<std::uint8_t>(Pon | SmuxEn)},
+                                              .payload = {static_cast<std::uint8_t>(pon | smuxEn)},
                                               .delay   = std::chrono::milliseconds{5}});
                 s[i++] = Engine::Step::read(
                   {.reg    = 0x80,
                    .count  = 1,
-                   .offset = static_cast<std::uint8_t>(EnableAt + passIndex)});   // SMUXEN
+                   .offset = static_cast<std::uint8_t>(enableAt + passIndex)});   // SMUXEN
                 s[i++] = Engine::Step::write(
                   {.reg     = 0x80,
-                   .payload = {static_cast<std::uint8_t>(Pon | SpEn)},
-                   .delay   = AutoZeroWait + IntegrationWait + std::chrono::milliseconds{10}});
+                   .payload = {static_cast<std::uint8_t>(pon | spEn)},
+                   .delay   = autoZeroWait + integrationWait + std::chrono::milliseconds{10}});
                 s[i++] = Engine::Step::read(
                   {.reg    = 0xA3,
                    .count  = 1,
-                   .offset = static_cast<std::uint8_t>(Status2At + passIndex)});   // AVALID
+                   .offset = static_cast<std::uint8_t>(status2At + passIndex)});   // AVALID
                 s[i++] = Engine::Step::read({.reg = 0x95, .count = 12, .offset = into});
             };
-            pass(SmuxLow, 0, 0);
-            pass(SmuxHigh, 12, 1);
+            pass(smuxLow, 0, 0);
+            pass(smuxHigh, 12, 1);
             return s;
         }();
 
@@ -271,9 +271,9 @@ struct As7341 {
         };
 
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
-            bool const smuxDone = ((data.u8(EnableAt) | data.u8(EnableAt + 1)) & SmuxEn) == 0;
+            bool const smuxDone = ((data.u8(enableAt) | data.u8(enableAt + 1)) & smuxEn) == 0;
             bool const valid
-              = (data.u8(Status2At) & 0x40U) != 0 && (data.u8(Status2At + 1) & 0x40U) != 0;
+              = (data.u8(status2At) & 0x40U) != 0 && (data.u8(status2At + 1) & 0x40U) != 0;
             if(!smuxDone || !valid) {
                 return Engine::Outcome<Sample>::retry(std::chrono::milliseconds{10});
             }
@@ -292,8 +292,8 @@ struct As7341 {
     /// AGAIN, so the range can be changed without rebuilding.
     struct GainSetting {
         using Value                          = As7341Detail::Gain;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Gain;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Gain;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

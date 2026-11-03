@@ -41,31 +41,31 @@ namespace Kvasir { namespace SPI {
         }
 
         // Configuration register (00h read, 80h write; table 1).
-        inline constexpr std::uint8_t FaultClear     = 0x02;
-        inline constexpr std::uint8_t AutoConversion = 0x40;
-        inline constexpr std::uint8_t SettingBits    = 0xD1;
+        inline constexpr std::uint8_t faultClear     = 0x02;
+        inline constexpr std::uint8_t autoConversion = 0x40;
+        inline constexpr std::uint8_t settingBits    = 0xD1;
 
         // Fault status register (07h).
-        inline constexpr std::uint8_t FaultRtdHigh   = 0x80;
-        inline constexpr std::uint8_t FaultRtdLow    = 0x40;
-        inline constexpr std::uint8_t FaultRefInHigh = 0x20;
-        inline constexpr std::uint8_t FaultRefInLow  = 0x10;
-        inline constexpr std::uint8_t FaultRtdInLow  = 0x08;
-        inline constexpr std::uint8_t FaultVoltage   = 0x04;
+        inline constexpr std::uint8_t faultRtdHigh   = 0x80;
+        inline constexpr std::uint8_t faultRtdLow    = 0x40;
+        inline constexpr std::uint8_t faultRefInHigh = 0x20;
+        inline constexpr std::uint8_t faultRefInLow  = 0x10;
+        inline constexpr std::uint8_t faultRtdInLow  = 0x08;
+        inline constexpr std::uint8_t faultVoltage   = 0x04;
 
-        inline constexpr std::uint8_t RegConfiguration = 0x00;
-        inline constexpr std::uint8_t RegRtd           = 0x01;   // MSB, then LSB at 02h
-        inline constexpr std::uint8_t RegHighThreshold = 0x03;   // MSB, LSB, then low at 05h
-        inline constexpr std::uint8_t RegFaultStatus   = 0x07;
+        inline constexpr std::uint8_t regConfiguration = 0x00;
+        inline constexpr std::uint8_t regRtd           = 0x01;   // MSB, then LSB at 02h
+        inline constexpr std::uint8_t regHighThreshold = 0x03;   // MSB, LSB, then low at 05h
+        inline constexpr std::uint8_t regFaultStatus   = 0x07;
 
-        inline constexpr std::array<std::uint8_t, 4> ThresholdsPor{0xFF, 0xFF, 0x00, 0x00};
+        inline constexpr std::array<std::uint8_t, 4> thresholdsPor{0xFF, 0xFF, 0x00, 0x00};
 
         /// Configuration with everything off, VBIAS too: its POR state (table 1).
-        inline constexpr std::uint8_t AllOff = 0x00;
+        inline constexpr std::uint8_t allOff = 0x00;
         /// 100X010Xb, the fault-detection cycle with automatic delay (table 3); X are the 3-wire
         /// and the filter bit, kept as configured.
-        inline constexpr std::uint8_t FaultCycleKeep = 0x11;
-        inline constexpr std::uint8_t FaultCycleRun  = 0x84;
+        inline constexpr std::uint8_t faultCycleKeep = 0x11;
+        inline constexpr std::uint8_t faultCycleRun  = 0x84;
     }   // namespace Max31865Detail
 
     /// What the driver does to a part that answers and gives no reading, before it brings it up
@@ -98,10 +98,10 @@ namespace Kvasir { namespace SPI {
     namespace Chips {
         template<std::uint8_t Configuration, std::chrono::milliseconds::rep RegisterCheckMs>
         struct Max31865 {
-            static constexpr std::string_view Name = "MAX31865";
+            static constexpr std::string_view name = "MAX31865";
             /// Modes 1 and 3 (MAX31865.md:616, :671); SCLK up to 5 MHz (tCLK, :184).
-            static constexpr Hal::ClockMode Mode     = Hal::ClockMode::mode3;
-            static constexpr Units::Hertz   MaxClock = Units::hertz(5'000'000);
+            static constexpr Hal::ClockMode mode     = Hal::ClockMode::mode3;
+            static constexpr Units::Hertz   maxClock = Units::hertz(5'000'000);
 
             /// Bit 7 set for a write (table 1, :479), the reverse of the transport's default.
             static constexpr std::uint8_t readCommand(std::uint8_t reg) {
@@ -112,10 +112,10 @@ namespace Kvasir { namespace SPI {
                 return static_cast<std::uint8_t>(reg | 0x80U);
             }
 
-            static constexpr std::size_t RegisterBytes = 1;
+            static constexpr std::size_t registerBytes = 1;
 
-            static constexpr std::uint8_t Stopped
-              = static_cast<std::uint8_t>(Configuration & ~Max31865Detail::AutoConversion);
+            static constexpr std::uint8_t stopped
+              = static_cast<std::uint8_t>(Configuration & ~Max31865Detail::autoConversion);
 
             /// Auto conversion stopped first: the notch may not change while it runs (D0); VBIAS may
             /// just have come on with it, and the ADC is to wait five time constants of the input
@@ -125,21 +125,21 @@ namespace Kvasir { namespace SPI {
             /// floats SDO to all ones or zeros. 07h in that read is what the part set again at once
             /// ("if an over/undervoltage fault persists", :534).
             // clang-format off
-            static constexpr std::array Init{
-              Engine::Step::write({.reg     = Max31865Detail::RegConfiguration,
-                                   .payload = {Stopped},
+            static constexpr std::array init{
+              Engine::Step::write({.reg     = Max31865Detail::regConfiguration,
+                                   .payload = {stopped},
                                    .delay   = std::chrono::milliseconds{5}}),
-              Engine::Step::read({.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 8}),
-              Engine::Step::write({.reg     = Max31865Detail::RegConfiguration,
+              Engine::Step::read({.reg = Max31865Detail::regFaultStatus, .count = 1, .offset = 8}),
+              Engine::Step::write({.reg     = Max31865Detail::regConfiguration,
                                    .payload = {static_cast<std::uint8_t>(
-                                     Configuration | Max31865Detail::FaultClear)}}),
-              Engine::Step::write({.reg     = Max31865Detail::RegHighThreshold,
-                                   .payload = {Max31865Detail::ThresholdsPor[0],
-                                               Max31865Detail::ThresholdsPor[1],
-                                               Max31865Detail::ThresholdsPor[2],
-                                               Max31865Detail::ThresholdsPor[3]}}),
+                                     Configuration | Max31865Detail::faultClear)}}),
+              Engine::Step::write({.reg     = Max31865Detail::regHighThreshold,
+                                   .payload = {Max31865Detail::thresholdsPor[0],
+                                               Max31865Detail::thresholdsPor[1],
+                                               Max31865Detail::thresholdsPor[2],
+                                               Max31865Detail::thresholdsPor[3]}}),
               Engine::Step::read(
-                {.reg = Max31865Detail::RegConfiguration, .count = 8, .offset = 0}),
+                {.reg = Max31865Detail::regConfiguration, .count = 8, .offset = 0}),
             };
             // clang-format on
 
@@ -152,14 +152,14 @@ namespace Kvasir { namespace SPI {
             };
 
             [[nodiscard]] static constexpr bool registersRight(Bytes data) {
-                if((data.u8(0) & Max31865Detail::SettingBits)
-                   != (Configuration & Max31865Detail::SettingBits))
+                if((data.u8(0) & Max31865Detail::settingBits)
+                   != (Configuration & Max31865Detail::settingBits))
                 {
                     return false;
                 }
-                for(std::size_t i = 0; i < Max31865Detail::ThresholdsPor.size(); ++i) {
-                    if(data.u8(Max31865Detail::RegHighThreshold + i)
-                       != Max31865Detail::ThresholdsPor[i])
+                for(std::size_t i = 0; i < Max31865Detail::thresholdsPor.size(); ++i) {
+                    if(data.u8(Max31865Detail::regHighThreshold + i)
+                       != Max31865Detail::thresholdsPor[i])
                     {
                         return false;
                     }
@@ -170,21 +170,21 @@ namespace Kvasir { namespace SPI {
             [[nodiscard]] static constexpr bool setup(Bytes  data,
                                                       State& state) {
                 state.latched  = data.u8(8);
-                state.standing = data.u8(Max31865Detail::RegFaultStatus);
+                state.standing = data.u8(Max31865Detail::regFaultStatus);
                 return registersRight(data);
             }
 
             /// The RTD word; only when its bit 0 flags a fault (MAX31865.md:565) the fault status and a
             /// status clear follow. Reading 02h raises DRDY again.
             struct Conversion {
-                static constexpr std::array Steps{
-                  Engine::Step::read({.reg = Max31865Detail::RegRtd, .count = 2, .offset = 0}),
+                static constexpr std::array steps{
+                  Engine::Step::read({.reg = Max31865Detail::regRtd, .count = 2, .offset = 0}),
                   Engine::Step::stopUnless(),
                   Engine::Step::read(
-                    {.reg = Max31865Detail::RegFaultStatus, .count = 1, .offset = 2}),
-                  Engine::Step::write({.reg     = Max31865Detail::RegConfiguration,
+                    {.reg = Max31865Detail::regFaultStatus, .count = 1, .offset = 2}),
+                  Engine::Step::write({.reg     = Max31865Detail::regConfiguration,
                                        .payload = {static_cast<std::uint8_t>(
-                                         Configuration | Max31865Detail::FaultClear)}}),
+                                         Configuration | Max31865Detail::faultClear)}}),
                 };
 
                 struct Sample {
@@ -206,9 +206,9 @@ namespace Kvasir { namespace SPI {
             /// Read back every RegisterCheck to catch a part that lost them (brown-out). Reading 01h/02h
             /// raises DRDY (MAX31865.md:301, :712), so one conversion goes unread.
             struct Registers {
-                static constexpr auto       Period = std::chrono::milliseconds{RegisterCheckMs};
-                static constexpr std::array Steps{Engine::Step::read(
-                  {.reg = Max31865Detail::RegConfiguration, .count = 7, .offset = 0})};
+                static constexpr auto       period = std::chrono::milliseconds{RegisterCheckMs};
+                static constexpr std::array steps{Engine::Step::read(
+                  {.reg = Max31865Detail::regConfiguration, .count = 7, .offset = 0})};
 
                 struct Sample {
                     std::uint8_t configuration{};
@@ -224,14 +224,14 @@ namespace Kvasir { namespace SPI {
             /// A command, not a state: the bring-up that follows writes the register again.
             struct Kick {
                 using Value                            = std::uint8_t;
-                static constexpr std::size_t Bytes     = 1;
-                static constexpr bool        Transient = true;
+                static constexpr std::size_t bytes     = 1;
+                static constexpr bool        transient = true;
 
                 [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                                    std::span<std::byte> buffer) {
                     buffer[0] = static_cast<std::byte>(value);
                     return Engine::Step::writeBuffer(
-                      {.reg = Max31865Detail::RegConfiguration, .offset = 0, .count = 1});
+                      {.reg = Max31865Detail::regConfiguration, .offset = 0, .count = 1});
                 }
             };
 
@@ -264,27 +264,27 @@ namespace Kvasir { namespace SPI {
              typename Config      = Max31865Defaults>
     class Max31865 {
     public:
-        static constexpr std::chrono::milliseconds StartupDelay = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds startupDelay = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            startupDelay,
                            std::chrono::milliseconds{Max31865Defaults::startupDelay}));
-        static constexpr std::chrono::milliseconds ConversionTimeout = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds conversionTimeout = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            conversionTimeout,
                            std::chrono::milliseconds{Max31865Defaults::conversionTimeout}));
-        static constexpr std::uint16_t RejectedRestart = static_cast<std::uint16_t>(
+        static constexpr std::uint16_t rejectedRestart = static_cast<std::uint16_t>(
           KVASIR_CONFIG_OR(Config, rejectedRestart, Max31865Defaults::rejectedRestart));
-        static constexpr std::chrono::milliseconds RegisterCheck = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds registerCheck = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            registerCheck,
                            std::chrono::milliseconds{Max31865Defaults::registerCheck}));
-        static constexpr std::uint8_t Configuration = static_cast<std::uint8_t>(
+        static constexpr std::uint8_t configuration = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, configuration, Max31865Defaults::configuration));
-        static constexpr std::uint8_t PlainBringUps = static_cast<std::uint8_t>(
+        static constexpr std::uint8_t plainBringUps = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, plainBringUps, Max31865Defaults::plainBringUps));
 
         using Lever                         = Max31865Lever;
-        static constexpr std::size_t Levers = 3;
+        static constexpr std::size_t levers = 3;
 
         struct EngineConfig : Config {
             static constexpr auto unidentifiedRetry = Kvasir::asDuration(
@@ -293,8 +293,8 @@ namespace Kvasir { namespace SPI {
                                std::chrono::milliseconds{Max31865Defaults::unidentifiedRetry}));
         };
 
-        struct Chip : Chips::Max31865<Configuration, RegisterCheck.count()> {
-            static constexpr auto StartupDelay = Max31865::StartupDelay;
+        struct Chip : Chips::Max31865<configuration, registerCheck.count()> {
+            static constexpr auto startupDelay = Max31865::startupDelay;
         };
 
         using DeviceT   = Device<Master, Clock, Chip, Cs, EngineConfig>;
@@ -334,7 +334,7 @@ namespace Kvasir { namespace SPI {
             }
             if(!device_.answering()) {
                 valid_ = false;
-                conversionDue_.restart(ConversionTimeout, now);
+                conversionDue_.restart(conversionTimeout, now);
                 wasUp_ = false;
                 return;
             }
@@ -342,7 +342,7 @@ namespace Kvasir { namespace SPI {
                 wasUp_    = true;
                 fault_    = 0;
                 rejected_ = 0;
-                conversionDue_.restart(ConversionTimeout, now);
+                conversionDue_.restart(conversionTimeout, now);
                 if(barren_ != 0) {
                     UC_LOG_I(
                       "max31865: up again after {} ({} in a row without a reading): fault status "
@@ -352,17 +352,17 @@ namespace Kvasir { namespace SPI {
                       device_.state().latched,
                       device_.state().standing);
                 }
-                if constexpr(RegisterCheck.count() != 0) {
+                if constexpr(registerCheck.count() != 0) {
                     seenRegisters_ = device_.template rejected<typename Chip::Registers>();
                 }
             }
             unidentifiedWhenUp_ = device_.unidentified();
             if(device_.template fresh<typename Chip::Conversion>(seenConversion_)) {
-                conversionDue_.restart(ConversionTimeout, now);
+                conversionDue_.restart(conversionTimeout, now);
                 conversion_(device_.template latest<typename Chip::Conversion>(), now);
                 asked_ = false;
             }
-            if constexpr(RegisterCheck.count() != 0) {
+            if constexpr(registerCheck.count() != 0) {
                 auto const bad = device_.template rejected<typename Chip::Registers>();
                 if(bad != seenRegisters_) {
                     seenRegisters_ = bad;
@@ -381,7 +381,7 @@ namespace Kvasir { namespace SPI {
                 asked_ = false;   // failed or rejected: DRDY decides again next turn
             }
             if(conversionDue_.expired(now)) {
-                UC_LOG_W("max31865: no conversion within {}", ConversionTimeout);
+                UC_LOG_W("max31865: no conversion within {}", conversionTimeout);
                 restart_();
             }
         }
@@ -467,9 +467,9 @@ namespace Kvasir { namespace SPI {
 
         /// At or below R(850 degC), the top of the Callendar-Van Dusen range.
         [[nodiscard]] static constexpr bool codeInRange(std::uint16_t code) {
-            auto const topK = K + Ak * 850 + Bk * 850 * 850;
+            auto const topK = k + ak * 850 + bk * 850 * 850;
             return static_cast<std::int64_t>(code)
-                   * static_cast<std::int64_t>(Units::value(Reference)) * K
+                   * static_cast<std::int64_t>(Units::value(Reference)) * k
                 <= topK * static_cast<std::int64_t>(Units::value(Nominal)) * 32768;
         }
 
@@ -479,19 +479,19 @@ namespace Kvasir { namespace SPI {
             if(disc < 0) { return Units::milliDegC(850'000); }
             auto const root
               = static_cast<std::int64_t>(Max31865Detail::isqrt(static_cast<std::uint64_t>(disc)));
-            return Units::milliDegC((-Ak + root) * 1000 / (2 * Bk));
+            return Units::milliDegC((-ak + root) * 1000 / (2 * bk));
         }
 
     private:
-        static constexpr std::int64_t K  = 10'000'000'000;   // A and B are scaled by this
-        static constexpr std::int64_t Ak = 39'083'000;       // 3.9083e-3
-        static constexpr std::int64_t Bk = -5'775;           // -5.775e-7
+        static constexpr std::int64_t k  = 10'000'000'000;   // A and B are scaled by this
+        static constexpr std::int64_t ak = 39'083'000;       // 3.9083e-3
+        static constexpr std::int64_t bk = -5'775;           // -5.775e-7
 
         [[nodiscard]] static constexpr std::int64_t discriminant_(std::uint16_t code) {
             std::int64_t const r0  = Units::value(Nominal);
             std::int64_t const rr  = Units::value(Reference);
-            auto const         rel = K * (std::int64_t{code} * rr - 32768 * r0) / (32768 * r0);
-            return Ak * Ak + 4 * Bk * rel;
+            auto const         rel = k * (std::int64_t{code} * rr - 32768 * r0) / (32768 * r0);
+            return ak * ak + 4 * bk * rel;
         }
 
         void conversion_(typename Chip::Conversion::Sample const& s,
@@ -507,7 +507,7 @@ namespace Kvasir { namespace SPI {
                     fault_ = s.status;
                 }
                 if(rejected_ != 0xFFFF) { ++rejected_; }
-                if(RejectedRestart != 0 && rejected_ >= RejectedRestart) {
+                if(rejectedRestart != 0 && rejected_ >= rejectedRestart) {
                     UC_LOG_W(
                       "max31865: {} conversions in a row rejected (code {}, fault status {:#04x}): "
                       "bringing the part up again",
@@ -537,8 +537,8 @@ namespace Kvasir { namespace SPI {
 
         /// Plain for the first PlainBringUps, then vbias, faultCycle, plain, and round again.
         [[nodiscard]] static constexpr Lever leverFor_(std::uint16_t barren) {
-            if(PlainBringUps == 0 || barren <= PlainBringUps) { return Lever::none; }
-            switch((barren - PlainBringUps - 1U) % Levers) {
+            if(plainBringUps == 0 || barren <= plainBringUps) { return Lever::none; }
+            switch((barren - plainBringUps - 1U) % levers) {
             case 0:  return Lever::vbias;
             case 1:  return Lever::faultCycle;
             default: return Lever::none;
@@ -546,9 +546,9 @@ namespace Kvasir { namespace SPI {
         }
 
         [[nodiscard]] static constexpr std::uint8_t kick_(Lever lever) {
-            if(lever == Lever::vbias) { return Max31865Detail::AllOff; }
-            return static_cast<std::uint8_t>((Configuration & Max31865Detail::FaultCycleKeep)
-                                             | Max31865Detail::FaultCycleRun);
+            if(lever == Lever::vbias) { return Max31865Detail::allOff; }
+            return static_cast<std::uint8_t>((configuration & Max31865Detail::faultCycleKeep)
+                                             | Max31865Detail::faultCycleRun);
         }
 
         void restart_() {
@@ -575,8 +575,8 @@ namespace Kvasir { namespace SPI {
         bool               kicking_{};   ///< a lever's write is on its way, the bring-up waits
         Lever              lever_{Lever::none};   ///< before the last bring-up restart_() started
         std::uint16_t      barren_{};
-        std::array<std::uint16_t, Levers> pulled_{};
-        std::array<std::uint16_t, Levers> recovered_{};
+        std::array<std::uint16_t, levers> pulled_{};
+        std::array<std::uint16_t, levers> recovered_{};
         Engine::Ticket                    ticket_{};
         Kvasir::Deadline<Clock>           conversionDue_{};   ///< armed from the first turn on
         std::uint8_t                      fault_{};

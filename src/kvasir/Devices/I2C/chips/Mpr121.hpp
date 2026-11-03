@@ -40,20 +40,20 @@ namespace Kvasir::I2C::Chips {
 /// 0x5A..0x5D by the ADDR pin (VSS, VDD, SDA, SCL).
 template<unsigned Electrodes = 12, unsigned TouchThreshold = 12, unsigned ReleaseThreshold = 6>
 struct Mpr121 {
-    static constexpr std::string_view Name = "MPR121";
+    static constexpr std::string_view name = "MPR121";
     /// NXP MPR121. ECR (0x5E) ELE_EN 3:0: 11xxb is run mode with ELE0..ELE11 enabled, a smaller count
     /// is that many electrodes (MPR121.md:497, :798); the reset value is 0x00, stop mode, so this also says the bring-up got to its last write.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"running",
                             0x5E, 1,
                             true, Electrodes == 12 ? 0x0CU : 0x0FU,
                             Electrodes == 12 ? 0x0CU : Electrodes},
     };
-    static constexpr Address7    Address       = 0x5A;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x5A;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x5A, 4>();
+    static constexpr auto addresses = addressRun<0x5A, 4>();
 
     static_assert(Electrodes >= 1 && Electrodes <= 12,
                   "the MPR121 has twelve electrodes");
@@ -63,17 +63,17 @@ struct Mpr121 {
                   "the release threshold must be below the touch threshold or the input will "
                   "chatter");
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     /// CL = 10 (track the baseline from the initial value), then the electrode count.
-    static constexpr std::uint8_t Ecr = static_cast<std::uint8_t>(0x80U | Electrodes);
+    static constexpr std::uint8_t ecr = static_cast<std::uint8_t>(0x80U | Electrodes);
 
     /// Soft reset, stop, filters, thresholds, configuration, then the ECR that starts it.
     /// The part always has twelve electrode threshold pairs, whatever `Electrodes` enables.
-    static constexpr unsigned ElectrodePairs = 12;
+    static constexpr unsigned electrodePairs = 12;
 
-    static constexpr auto Init = [] {
-        std::array<Engine::Step, 14 + 2 * ElectrodePairs> s{};
+    static constexpr auto init = [] {
+        std::array<Engine::Step, 14 + 2 * electrodePairs> s{};
         std::size_t                                       i = 0;
         s[i++]                                              = Engine::Step::write(
           {.reg = 0x80, .payload = {0x63}, .delay = std::chrono::milliseconds{1}});   // soft reset
@@ -89,7 +89,7 @@ struct Mpr121 {
         s[i++] = Engine::Step::write({.reg = 0x30, .payload = {0x01}});   // NHD falling
         s[i++] = Engine::Step::write({.reg = 0x31, .payload = {0xFF}});   // NCL falling
         s[i++] = Engine::Step::write({.reg = 0x32, .payload = {0x02}});   // FDL falling
-        for(unsigned e = 0; e < ElectrodePairs; ++e) {
+        for(unsigned e = 0; e < electrodePairs; ++e) {
             s[i++] = Engine::Step::write({.reg     = static_cast<std::uint16_t>(0x41 + 2 * e),
                                           .payload = {static_cast<std::uint8_t>(TouchThreshold)}});
             s[i++]
@@ -103,8 +103,8 @@ struct Mpr121 {
     }();
 
     struct Touch {
-        static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{50};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
@@ -126,7 +126,7 @@ struct Mpr121 {
 
     /// The 10-bit filtered capacitance of each electrode, on demand: request<Filtered>().
     struct Filtered {
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x04, .count = 26, .offset = 0})};
 
         struct Sample {
@@ -144,7 +144,7 @@ struct Mpr121 {
 
     /// The electrode configuration register, which is also the run/stop control: writing 0
     /// stops the part, and it is the one register writable while it runs.
-    using Config = Engine::Groups::InitialByte<0x5E, Ecr>;
+    using Config = Engine::Groups::InitialByte<0x5E, ecr>;
 
     struct State {
         std::uint8_t cdc{};   ///< 0x5C as the reset left it
@@ -163,8 +163,8 @@ struct Mpr121 {
     struct ClearOverCurrent {
         struct Value {};
 
-        static constexpr std::size_t Bytes     = 1;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 1;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&,
                                                            std::span<std::byte>) {

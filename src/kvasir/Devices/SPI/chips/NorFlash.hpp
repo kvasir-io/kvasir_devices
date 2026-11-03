@@ -73,15 +73,15 @@ struct NorFlashDefaults {
 /// Addresses are 24 bits: an operation at or past 16 MB is refused (no 4-byte addressing).
 template<typename Spi, typename Clock, typename Cs, typename Config = NorFlashDefaults>
 struct NorFlash {
-    static constexpr std::size_t PageSize   = 256;
-    static constexpr std::size_t SectorSize = 4096;
+    static constexpr std::size_t pageSize   = 256;
+    static constexpr std::size_t sectorSize = 4096;
 
     enum class Outcome : std::uint8_t { running, ok, failed };
 
-    static constexpr auto Setup
+    static constexpr auto setup
       = Spi::setup(KVASIR_CONFIG_OR(Config, mode, NorFlashDefaults::mode),
                    KVASIR_CONFIG_OR(Config, maxClock, NorFlashDefaults::maxClock));
-    static constexpr std::uint8_t AbsentAfterFailures = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t absentAfterFailures = static_cast<std::uint8_t>(
       KVASIR_CONFIG_OR(Config, absentAfterFailures, NorFlashDefaults::absentAfterFailures));
 
     NorFlash() { ChipSelect<Cs>::release(); }
@@ -99,39 +99,39 @@ struct NorFlash {
 
     [[nodiscard]] std::uint32_t errors() const { return errors_; }
 
-    static constexpr std::string_view Name = "SPI NOR flash";
+    static constexpr std::string_view name = "SPI NOR flash";
 
-    static constexpr std::uint8_t CmdPageProgram    = 0x02;
-    static constexpr std::uint8_t CmdRead           = 0x03;
-    static constexpr std::uint8_t CmdReadStatus     = 0x05;
-    static constexpr std::uint8_t CmdWriteEnable    = 0x06;
-    static constexpr std::uint8_t CmdSectorErase    = 0x20;
-    static constexpr std::uint8_t CmdEnableReset    = 0x66;
-    static constexpr std::uint8_t CmdGlobalUnlock   = 0x98;
-    static constexpr std::uint8_t CmdReset          = 0x99;
-    static constexpr std::uint8_t CmdJedecId        = 0x9F;
-    static constexpr std::uint8_t CmdReleasePowerDn = 0xAB;
-    static constexpr std::uint8_t CmdChipErase      = 0xC7;
+    static constexpr std::uint8_t cmdPageProgram    = 0x02;
+    static constexpr std::uint8_t cmdRead           = 0x03;
+    static constexpr std::uint8_t cmdReadStatus     = 0x05;
+    static constexpr std::uint8_t cmdWriteEnable    = 0x06;
+    static constexpr std::uint8_t cmdSectorErase    = 0x20;
+    static constexpr std::uint8_t cmdEnableReset    = 0x66;
+    static constexpr std::uint8_t cmdGlobalUnlock   = 0x98;
+    static constexpr std::uint8_t cmdReset          = 0x99;
+    static constexpr std::uint8_t cmdJedecId        = 0x9F;
+    static constexpr std::uint8_t cmdReleasePowerDn = 0xAB;
+    static constexpr std::uint8_t cmdChipErase      = 0xC7;
 
     /// The largest address plus one: 24 bits on the wire.
-    static constexpr std::uint32_t AddressSpace = std::uint32_t{1} << 24;
+    static constexpr std::uint32_t addressSpace = std::uint32_t{1} << 24;
 
-    static constexpr std::chrono::milliseconds PageProgramTimeout = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds pageProgramTimeout = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        pageProgramTimeout,
                        std::chrono::milliseconds{NorFlashDefaults::pageProgramTimeout}));
 
-    static constexpr std::chrono::milliseconds SectorEraseTimeout = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds sectorEraseTimeout = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        sectorEraseTimeout,
                        std::chrono::milliseconds{NorFlashDefaults::sectorEraseTimeout}));
 
-    static constexpr std::chrono::milliseconds ChipEraseTimeout = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds chipEraseTimeout = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        chipEraseTimeout,
                        std::chrono::milliseconds{NorFlashDefaults::chipEraseTimeout}));
 
-    static constexpr std::chrono::milliseconds StatusPollInterval = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds statusPollInterval = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        statusPollInterval,
                        std::chrono::milliseconds{NorFlashDefaults::statusPollInterval}));
@@ -171,7 +171,7 @@ struct NorFlash {
         case State::settle:
             // A part left busy by an operation that failed or timed out: nothing but Read
             // Status is taken until it is done.
-            deadline_.restart(ChipEraseTimeout, now);
+            deadline_.restart(chipEraseTimeout, now);
             pollGap_.stop();   // the first Read Status at once
             state_ = State::settlePoll;
             break;
@@ -185,20 +185,20 @@ struct NorFlash {
                     break;
                 }
                 status_ = static_cast<std::uint8_t>(rx_[1]);
-                if((status_ & StatusBusy) == 0) {
+                if((status_ & statusBusy) == 0) {
                     settled_ = true;
                     state_   = State::start;
                 } else if(deadline_.expired(now)) {
                     ++timeouts_;
                     finish_(Result::timedOut);
                 } else {
-                    pollGap_.restart(StatusPollInterval, now);
+                    pollGap_.restart(statusPollInterval, now);
                     state_ = State::settlePoll;
                 }
             }
             break;
         case State::wake:
-            if(singleFrame_(WakeSequence[wakeStep_])) { state_ = State::wakeWait; }
+            if(singleFrame_(wakeSequence[wakeStep_])) { state_ = State::wakeWait; }
             break;
         case State::wakeWait:
             if(auto const o = take_(); o != Outcome::running) {
@@ -207,13 +207,13 @@ struct NorFlash {
                     break;
                 }
                 // tRES1 after 0xAB, tRST after 0x99: well under the poll interval
-                pollGap_.restart(StatusPollInterval, now);
+                pollGap_.restart(statusPollInterval, now);
                 state_ = State::wakeGap;
             }
             break;
         case State::wakeGap:
             if(!pollGap_.armed(now)) {
-                if(++wakeStep_ < WakeSequence.size()) {
+                if(++wakeStep_ < wakeSequence.size()) {
                     state_ = State::wake;
                 } else {
                     settled_ = false;   // reset: the first operation after it checks BUSY
@@ -245,7 +245,7 @@ struct NorFlash {
                     break;
                 }
                 deadline_.restart(timeoutFor_(op_), now);
-                pollGap_.restart(StatusPollInterval, now);
+                pollGap_.restart(statusPollInterval, now);
                 state_ = State::poll;
             }
             break;
@@ -259,13 +259,13 @@ struct NorFlash {
                     break;
                 }
                 status_ = static_cast<std::uint8_t>(rx_[1]);
-                if((status_ & StatusBusy) == 0) {
+                if((status_ & statusBusy) == 0) {
                     finish_(Result::ok);
                 } else if(deadline_.expired(now)) {
                     ++timeouts_;
                     finish_(Result::timedOut);
                 } else {
-                    pollGap_.restart(StatusPollInterval, now);
+                    pollGap_.restart(statusPollInterval, now);
                     state_ = State::poll;
                 }
             }
@@ -337,7 +337,7 @@ struct NorFlash {
 
     /// Erase the 4 KB sector at `address` (on a sector boundary).
     [[nodiscard]] bool eraseSector(std::uint32_t address) {
-        return address % SectorSize == 0 && begin_(Op::eraseSector, address, {}, 0);
+        return address % sectorSize == 0 && begin_(Op::eraseSector, address, {}, 0);
     }
 
     /// Erase the whole part; the wait is ChipEraseTimeout at most.
@@ -351,7 +351,7 @@ struct NorFlash {
     /// go away once this returns true.
     [[nodiscard]] bool program(std::uint32_t              address,
                                std::span<std::byte const> data) {
-        if(data.empty() || data.size() > PageSize || (address % PageSize) + data.size() > PageSize)
+        if(data.empty() || data.size() > pageSize || (address % pageSize) + data.size() > pageSize)
         {
             return false;
         }
@@ -382,24 +382,24 @@ private:
         frameWait,
     };
 
-    static constexpr std::uint8_t StatusBusy = 0x01;
+    static constexpr std::uint8_t statusBusy = 0x01;
 
     /// readJedec()'s frames before the id: out of deep power-down, then the reset pair.
-    static constexpr std::array<std::uint8_t, 3> WakeSequence{CmdReleasePowerDn,
-                                                              CmdEnableReset,
-                                                              CmdReset};
+    static constexpr std::array<std::uint8_t, 3> wakeSequence{cmdReleasePowerDn,
+                                                              cmdEnableReset,
+                                                              cmdReset};
 
     [[nodiscard]] static constexpr bool inRange_(std::uint32_t address,
                                                  std::size_t   length) {
-        return address < AddressSpace && length <= AddressSpace - address;
+        return address < addressSpace && length <= addressSpace - address;
     }
 
     [[nodiscard]] static constexpr std::chrono::milliseconds timeoutFor_(Op op) {
         switch(op) {
         case Op::program:
-        case Op::unlock:      return PageProgramTimeout;
-        case Op::eraseSector: return SectorEraseTimeout;
-        case Op::eraseChip:   return ChipEraseTimeout;
+        case Op::unlock:      return pageProgramTimeout;
+        case Op::eraseSector: return sectorEraseTimeout;
+        case Op::eraseChip:   return chipEraseTimeout;
         default:              return std::chrono::milliseconds{0};
         }
     }
@@ -409,7 +409,7 @@ private:
                 std::span<std::byte> target,
                 std::size_t          length) {
         if(op_ != Op::none) { return false; }
-        if(length > PageSize || !inRange_(address, length)) { return false; }
+        if(length > pageSize || !inRange_(address, length)) { return false; }
         op_       = op;
         address_  = address;
         length_   = length;
@@ -432,7 +432,7 @@ private:
     bool startOp_() {
         switch(op_) {
         case Op::jedec:
-            tx_[0] = std::byte{CmdJedecId};
+            tx_[0] = std::byte{cmdJedecId};
             tx_[1] = tx_[2] = tx_[3] = std::byte{0};
             return submit_(std::span<std::byte const>{tx_}.first(4),
                            std::span<std::byte>{rx_}.first(4));
@@ -441,10 +441,10 @@ private:
             // the caller's span under the same CS; MOSI is 0xFF meanwhile, which the part
             // ignores - only the code and the address are latched from DI (W25Q128JV 8.2.6,
             // md l.1113).
-            tx_[0] = std::byte{CmdRead};
+            tx_[0] = std::byte{cmdRead};
             putAddress_(1);
             return xfer_.start(
-              typename Spi::Request{.setup   = Setup,
+              typename Spi::Request{.setup   = setup,
                                     .lines   = ChipSelect<Cs>::lines,
                                     .command = std::span<std::byte const>{tx_}.first(4),
                                     .rx      = target_});
@@ -452,7 +452,7 @@ private:
         case Op::eraseChip:
         case Op::program:
         case Op::unlock:
-            tx_[0] = std::byte{CmdWriteEnable};
+            tx_[0] = std::byte{cmdWriteEnable};
             return submit_(std::span<std::byte const>{tx_}.first(1), {});
         case Op::none: break;
         }
@@ -462,13 +462,13 @@ private:
     bool commandFrame_() {
         switch(op_) {
         case Op::eraseSector:
-            tx_[0] = std::byte{CmdSectorErase};
+            tx_[0] = std::byte{cmdSectorErase};
             putAddress_(1);
             return submit_(std::span<std::byte const>{tx_}.first(4), {});
-        case Op::eraseChip: return singleFrame_(CmdChipErase);
-        case Op::unlock:    return singleFrame_(CmdGlobalUnlock);
+        case Op::eraseChip: return singleFrame_(cmdChipErase);
+        case Op::unlock:    return singleFrame_(cmdGlobalUnlock);
         case Op::program:
-            tx_[0] = std::byte{CmdPageProgram};
+            tx_[0] = std::byte{cmdPageProgram};
             putAddress_(1);   // the data is in tx_[4..] since program()
             return submit_(std::span<std::byte const>{tx_}.first(4 + length_), {});
         default: return false;
@@ -476,7 +476,7 @@ private:
     }
 
     bool statusFrame_() {
-        tx_[0] = std::byte{CmdReadStatus};
+        tx_[0] = std::byte{cmdReadStatus};
         tx_[1] = std::byte{0};
         return submit_(std::span<std::byte const>{tx_}.first(2),
                        std::span<std::byte>{rx_}.first(2));
@@ -493,7 +493,7 @@ private:
     /// `rx` (when given) as long as `tx`. false: a frame is still out, or the master refused it.
     bool submit_(std::span<std::byte const> tx,
                  std::span<std::byte>       rx) {
-        return xfer_.start(typename Spi::Request{.setup = Setup,
+        return xfer_.start(typename Spi::Request{.setup = setup,
                                                  .lines = ChipSelect<Cs>::lines,
                                                  .tx    = tx,
                                                  .rx    = rx});
@@ -510,11 +510,11 @@ private:
         return Outcome::running;
     }
 
-    std::array<std::byte, 4 + PageSize> tx_{};   ///< a command, or a page program's header and data
+    std::array<std::byte, 4 + pageSize> tx_{};   ///< a command, or a page program's header and data
     std::array<std::byte, 4>
                   rx_{};   ///< the id's or the status's answer (a read goes to the caller)
     OneFrame<Spi> xfer_{};
-    LinkTracker<AbsentAfterFailures> link_{};   ///< the link, failures in a row, bring-ups
+    LinkTracker<absentAfterFailures> link_{};   ///< the link, failures in a row, bring-ups
     std::uint32_t                    errors_{};
 
     Op                      op_{Op::none};

@@ -50,34 +50,34 @@ namespace Bma456Detail {
     }
 
     /// The temperature byte the part reports when it has no valid temperature.
-    inline constexpr std::uint8_t InvalidTemperature = 0x80;
+    inline constexpr std::uint8_t invalidTemperature = 0x80;
 }   // namespace Bma456Detail
 
 template<Bma456Detail::Range Range = Bma456Detail::Range::g2>
 struct Bma456 {
-    static constexpr std::string_view Name = "BMA456";
+    static constexpr std::string_view name = "BMA456";
     /// Bosch BMA456. BMA456.md:455: CHIP_ID (0x00) is 0x16.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"chip-id", 0x00, 1, true, 0xFF, 0x16},
     };
-    static constexpr Address7    Address       = 0x18;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x18;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr std::array<Address7, 2> Addresses{0x18, 0x19};
+    static constexpr std::array<Address7, 2> addresses{0x18, 0x19};
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{5};
+    static constexpr auto startupDelay = std::chrono::milliseconds{5};
 
-    static constexpr std::uint8_t RangeCode = static_cast<std::uint8_t>(Range);
+    static constexpr std::uint8_t rangeCode = static_cast<std::uint8_t>(Range);
 
     /// 16384 LSB/g at +-2 g, halving with each range.
-    static constexpr std::uint16_t CountsPerG = Bma456Detail::countsPerG(RangeCode);
+    static constexpr std::uint16_t countsPerG = Bma456Detail::countsPerG(rangeCode);
 
     /// perf_mode = 1, bwp = OSR4, odr = 50 Hz.
-    static constexpr std::uint8_t AccConf = 0x87;
+    static constexpr std::uint8_t accConf = 0x87;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
-        {.reg = 0x7E, .payload = {0xB6}, .delay = StartupDelay}),   // CMD: softreset
+        {.reg = 0x7E, .payload = {0xB6}, .delay = startupDelay}),   // CMD: softreset
       Engine::Step::write({.reg     = 0x7C,
                            .payload = {0x00},
                            .delay   = std::chrono::milliseconds{1}}),   // PWR_CONF: no power save
@@ -86,29 +86,29 @@ struct Bma456 {
         {.reg     = 0x59,
          .payload = {0x01},
          .delay   = std::chrono::milliseconds{150}}),   // and end it; the engine takes 150 ms
-      Engine::Step::write({.reg = 0x40, .payload = {AccConf}}),     // ACC_CONF
-      Engine::Step::write({.reg = 0x41, .payload = {RangeCode}}),   // ACC_RANGE
+      Engine::Step::write({.reg = 0x40, .payload = {accConf}}),     // ACC_CONF
+      Engine::Step::write({.reg = 0x41, .payload = {rangeCode}}),   // ACC_RANGE
       Engine::Step::write({.reg     = 0x7D,
                            .payload = {0x04},
                            .delay = std::chrono::milliseconds{50}}),   // PWR_CTRL: accelerometer on
     };
 
     struct State : Engine::Groups::DeviceId {
-        std::uint8_t range{RangeCode};   ///< ACC_RANGE as written now
+        std::uint8_t range{rangeCode};   ///< ACC_RANGE as written now
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs:
     /// `state().deviceId` is the part's own word, read once.
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
-        state.range    = RangeCode;
+        state.range    = rangeCode;
         state.deviceId = static_cast<std::uint16_t>(ids[0]);
     }
 
     struct Motion {
-        static constexpr auto Period = std::chrono::milliseconds{20};   ///< the 50 Hz ODR
+        static constexpr auto period = std::chrono::milliseconds{20};   ///< the 50 Hz ODR
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read(
             {.reg = 0x03, .count = 1, .offset = 7}),   // STATUS, before the data clears it
           Engine::Step::read(
@@ -116,7 +116,7 @@ struct Bma456 {
           Engine::Step::read({.reg = 0x22, .count = 1, .offset = 6}),   // temperature
         };
 
-        static constexpr std::uint8_t DrdyAcc = 0x80U;   ///< STATUS bit 7
+        static constexpr std::uint8_t drdyAcc = 0x80U;   ///< STATUS bit 7
 
         struct Sample {
             MicroG x{};
@@ -136,8 +136,8 @@ struct Bma456 {
         /// part's "invalid" marker; nothing without drdy_acc.
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
                                                                       State const& state) {
-            if((data.u8(7) & DrdyAcc) == 0) { return Engine::Outcome<Sample>::unchanged(); }
-            bool const temperatureValid = data.u8(6) != Bma456Detail::InvalidTemperature;
+            if((data.u8(7) & drdyAcc) == 0) { return Engine::Outcome<Sample>::unchanged(); }
+            bool const temperatureValid = data.u8(6) != Bma456Detail::invalidTemperature;
             return Engine::Outcome<Sample>::ok(
               {toAccel(data.s16le(0), state.range),
                toAccel(data.s16le(2), state.range),
@@ -160,8 +160,8 @@ struct Bma456 {
     /// ACC_RANGE (1:0), changeable at run time.
     struct RangeSetting {
         using Value                          = Bma456Detail::Range;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Range;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Range;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

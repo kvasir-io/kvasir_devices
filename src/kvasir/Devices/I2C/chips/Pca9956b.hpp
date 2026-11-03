@@ -48,29 +48,29 @@ namespace Kvasir::I2C::Chips {
 /// conservative default, not a requirement of the part.
 template<Address7 Addr, Ohm Rext = Units::ohm(1000), typename Timing = Engine::DefaultTiming>
 struct Pca9956b {
-    static constexpr std::string_view Name = "PCA9956B";
+    static constexpr std::string_view name = "PCA9956B";
     /// NXP PCA9956B. MODE1 (00h) SLEEP, bit 4, clear: normal mode, the oscillator runs
     /// (PCA9956B.md:847; it is also the power-up value, so this only says nothing put the part to
     /// sleep). The part has no identity register.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"awake", 0x00, 1, true, 0x10, 0x00},
     };
-    static constexpr Address7    Address       = Addr;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = Addr;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr std::array<Address7, 1> Addresses{Addr};
+    static constexpr std::array<Address7, 1> addresses{Addr};
 
-    static constexpr std::size_t Channels = 24;
+    static constexpr std::size_t channels = 24;
 
     static_assert(Rext > Units::ohm(0),
                   "Rext is what the output current is set against");
 
-    static constexpr std::chrono::milliseconds StartupDelay
+    static constexpr std::chrono::milliseconds startupDelay
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
     /// The largest current the part can be asked for at this Rext: code 255.
-    static constexpr MilliAmp MaxCurrent
+    static constexpr MilliAmp maxCurrent
       = Units::milliAmp(static_cast<std::int32_t>(255U * 900U / (4U * Units::value(Rext))));
 
     /// IREF = I_O(mA) x 4 x Rext(Ohm) / 900, rounded to the nearest code and clamped to 255
@@ -84,12 +84,12 @@ struct Pca9956b {
 
     /// MODE2 is the probe as well as the error flag; then MODE1 turns the All Call and
     /// sub-address responses off.
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x81, .count = 1, .offset = 0}),
+    static constexpr std::array init{Engine::Step::read({.reg = 0x81, .count = 1, .offset = 0}),
                                      Engine::Step::write({.reg = 0x80, .payload = {0x00}})};
 
     struct Status {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x81, .count = 1, .offset = 0})};
 
         struct Sample {
@@ -120,13 +120,13 @@ struct Pca9956b {
     /// block.
     template<std::uint16_t Reg>
     struct Block {
-        using Value                        = std::array<std::uint8_t, Channels>;
-        static constexpr std::size_t Bytes = Channels;
+        using Value                        = std::array<std::uint8_t, channels>;
+        static constexpr std::size_t bytes = channels;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            for(std::size_t i = 0; i < Channels; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Engine::Step::writeBuffer({.reg = Reg, .offset = 0, .count = Channels});
+            for(std::size_t i = 0; i < channels; ++i) { buffer[i] = std::byte{value[i]}; }
+            return Engine::Step::writeBuffer({.reg = Reg, .offset = 0, .count = channels});
         }
     };
 
@@ -137,9 +137,9 @@ struct Pca9956b {
     /// Two bits per channel: 00 off, 01 fully on, 10 PWM, 11 PWM with group dimming.
     struct LedOut {
         using Value                        = std::array<std::uint8_t, 6>;
-        static constexpr std::size_t Bytes = 6;
+        static constexpr std::size_t bytes = 6;
         /// Every channel in PWM mode, which is what the PWM registers are for.
-        static constexpr Value Initial{0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
+        static constexpr Value initial{0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -150,7 +150,7 @@ struct Pca9956b {
 
     /// MODE2 bit 4, write only and self-clearing: clears ERROR and every EFLAGn bit.
     /// `set<Mode2>(Pca9956b::ClrErr)`.
-    static constexpr std::uint8_t ClrErr = 0x10;
+    static constexpr std::uint8_t clrErr = 0x10;
 
     using Pwm     = Block<0x8A>;
     using Iref    = Block<0xA2>;
@@ -160,7 +160,7 @@ struct Pca9956b {
     /// MODE2. CLRERR clears itself, so writing the same value again is a new command: every
     /// set goes out. The Initial 0x00 leaves the read-only reserved bits (2:0) to the part.
     struct Mode2 : Byte<0x81, 0x00> {
-        static constexpr bool AlwaysWrite = true;
+        static constexpr bool alwaysWrite = true;
     };
 
     /// Which outputs the ERROR flag is about. EFLAG0..5 (41h..46h), two bits per channel with
@@ -173,8 +173,8 @@ struct Pca9956b {
     /// Not read by `Pca9956b` itself -- six transactions a second is a cost a user that only
     /// needs the ERROR flag should not pay -- but by `Pca9956bDiagnostics` below.
     struct Errors {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x41, .count = 1, .offset = 0}),
           Engine::Step::read({.reg = 0x42, .count = 1, .offset = 1}),
           Engine::Step::read({.reg = 0x43, .count = 1, .offset = 2}),
@@ -200,7 +200,7 @@ struct Pca9956b {
         private:
             [[nodiscard]] constexpr std::uint32_t mask_(std::uint8_t which) const {
                 std::uint32_t m = 0;
-                for(std::size_t c = 0; c < Channels; ++c) {
+                for(std::size_t c = 0; c < channels; ++c) {
                     if(code(c) == which) { m |= 1UL << c; }
                 }
                 return m;

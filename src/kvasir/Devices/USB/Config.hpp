@@ -15,10 +15,10 @@ namespace Kvasir::USB {
 ///   busPowered                            true
 template<typename ConfigT>
 struct ConfigTraits {
-    static constexpr bool UseSof = requires { ConfigT::startOfFrameCallback(std::uint16_t{}); };
+    static constexpr bool useSof = requires { ConfigT::startOfFrameCallback(std::uint16_t{}); };
 
-    static constexpr auto BusPower = KVASIR_CONFIG_OR(ConfigT, busPower, 500);
+    static constexpr auto busPower = KVASIR_CONFIG_OR(ConfigT, busPower, 500);
 
-    static constexpr auto BusPowered = KVASIR_CONFIG_OR(ConfigT, busPowered, true);
+    static constexpr auto busPowered = KVASIR_CONFIG_OR(ConfigT, busPowered, true);
 };
 }   // namespace Kvasir::USB

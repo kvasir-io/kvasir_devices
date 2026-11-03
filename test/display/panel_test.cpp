@@ -187,8 +187,8 @@ void exercise(char const* name) {
     using Dcs                       = Kvasir::Display::Dcs::Cmd;
     using Chip                      = typename Panel::Chip;
     using Config                    = typename Panel::Config;
-    constexpr int            width  = Config::Width;
-    constexpr int            height = Config::Height;
+    constexpr int            width  = Config::width;
+    constexpr int            height = Config::height;
     constexpr int            colOff = Config::columnOffset;
     constexpr int            rowOff = Config::rowOffset;
     Kvasir::Test::Case const thisCase{name};
@@ -216,11 +216,11 @@ void exercise(char const* name) {
     auto const release = findKind(Transaction::Kind::resetRelease);
     check(hold == 0, "RESX is driven low first");
     check(release > hold, "RESX is released after the pulse");
-    check(msBetween(hold, release) >= static_cast<long>(Chip::ResetPulse.count()),
+    check(msBetween(hold, release) >= static_cast<long>(Chip::resetPulse.count()),
           "reset pulse is long enough");
     auto const firstCmd = findKind(Transaction::Kind::command);
     check(firstCmd > release, "no command before RESX is released");
-    check(msBetween(release, firstCmd) >= static_cast<long>(Chip::ResetToCommand.count()),
+    check(msBetween(release, firstCmd) >= static_cast<long>(Chip::resetToCommand.count()),
           "reset-to-command wait honoured");
 
     // The chip's script went out first, verbatim.
@@ -229,7 +229,7 @@ void exercise(char const* name) {
     auto                       idx      = static_cast<std::size_t>(firstCmd);
     bool                       scriptOk = true;
     std::size_t                steps    = 0;
-    while(Chip::Init.next(pos, step)) {
+    while(Chip::init.next(pos, step)) {
         auto const& t = MockBus::log[idx];
         if(t.kind != Transaction::Kind::command || t.cmd != step.cmd
            || t.params.size() != step.params.size()
@@ -250,33 +250,33 @@ void exercise(char const* name) {
           "init script sent verbatim with its delays (" + std::to_string(steps) + " steps)");
 
     // Then the format block, sleep out, its wait, the clear, display on.
-    auto const colmod = findCommand(Dcs::Colmod, idx);
-    auto const madctl = findCommand(Dcs::Madctl, idx);
-    auto const slpout = findCommand(Dcs::Slpout, idx);
+    auto const colmod = findCommand(Dcs::colmod, idx);
+    auto const madctl = findCommand(Dcs::madctl, idx);
+    auto const slpout = findCommand(Dcs::slpout, idx);
     auto const fill   = findKind(Transaction::Kind::fill);
-    auto const dispon = findCommand(Dcs::Dispon);
+    auto const dispon = findCommand(Dcs::dispon);
     check(colmod > 0
             && MockBus::log[static_cast<std::size_t>(colmod)].params
-                 == std::vector<std::uint8_t>{Chip::Colmod565},
+                 == std::vector<std::uint8_t>{Chip::colmod565},
           "COLMOD carries the chip's 16 bit code");
     check(madctl > colmod, "MADCTL after COLMOD");
     check(slpout > madctl, "SLPOUT after the format block");
     check(fill > slpout, "clear after SLPOUT");
-    check(msBetween(slpout, fill) >= static_cast<long>(Chip::SleepOut.count()),
+    check(msBetween(slpout, fill) >= static_cast<long>(Chip::sleepOut.count()),
           "SLPOUT wait honoured");
     check(dispon > fill, "DISPON after the clear");
-    check(findCommand(Dcs::Slpout) == slpout, "exactly one SLPOUT, from the driver");
-    if(Chip::Brightness) {
-        check(findCommand(Dcs::Wrctrld, idx) > 0 && findCommand(Dcs::Wrdisbv, idx) > 0,
+    check(findCommand(Dcs::slpout) == slpout, "exactly one SLPOUT, from the driver");
+    if(Chip::brightness) {
+        check(findCommand(Dcs::wrctrld, idx) > 0 && findCommand(Dcs::wrdisbv, idx) > 0,
               "brightness enabled and set");
     } else {
-        check(findCommand(Dcs::Wrdisbv) < 0, "no brightness command on a chip without it");
+        check(findCommand(Dcs::wrdisbv) < 0, "no brightness command on a chip without it");
     }
 
     // The clear covers the whole active area, at the module's offset.
     {
-        auto const  caset = findCommand(Dcs::Caset, static_cast<std::size_t>(slpout));
-        auto const  raset = findCommand(Dcs::Raset, static_cast<std::size_t>(slpout));
+        auto const  caset = findCommand(Dcs::caset, static_cast<std::size_t>(slpout));
+        auto const  raset = findCommand(Dcs::raset, static_cast<std::size_t>(slpout));
         auto const& c     = MockBus::log[static_cast<std::size_t>(caset)].params;
         auto const& r     = MockBus::log[static_cast<std::size_t>(raset)].params;
         auto const  x0    = (c[0] << 8) | c[1];
@@ -302,8 +302,8 @@ void exercise(char const* name) {
         while(!Panel::ready()) { Panel::turn(); }
         Panel::blit(Kvasir::Display::Rect{0, 48, width, 48},
                     std::span<Kvasir::Display::Rgb565 const>{px});
-        auto const  caset = findCommand(Dcs::Caset, before);
-        auto const  raset = findCommand(Dcs::Raset, before);
+        auto const  caset = findCommand(Dcs::caset, before);
+        auto const  raset = findCommand(Dcs::raset, before);
         auto const& r     = MockBus::log[static_cast<std::size_t>(raset)].params;
         check(caset >= 0 && raset > caset, "blit sets the window");
         check(((r[0] << 8) | r[1]) == rowOff + 48 && ((r[2] << 8) | r[3]) == rowOff + 95,
@@ -322,8 +322,8 @@ void exercise(char const* name) {
         auto const id     = Panel::readId();
         auto const rd     = findKind(Transaction::Kind::read, before);
         check(rd >= 0
-                && MockBus::log[static_cast<std::size_t>(rd)].instruction == Chip::ReadInstruction
-                && MockBus::log[static_cast<std::size_t>(rd)].count == Chip::ReadDummyBytes,
+                && MockBus::log[static_cast<std::size_t>(rd)].instruction == Chip::readInstruction
+                && MockBus::log[static_cast<std::size_t>(rd)].count == Chip::readDummyBytes,
               "readId uses the chip's read instruction and dummy byte count");
         check(id.has_value() && id->id1 == 0x33, "readId returns the bus's bytes");
     }
@@ -391,26 +391,26 @@ void exercise(char const* name) {
 }
 
 struct Co5300Config : Kvasir::Display::DcsDefaults {
-    static constexpr int          Width        = 466;
-    static constexpr int          Height       = 466;
+    static constexpr int          width        = 466;
+    static constexpr int          height       = 466;
     static constexpr int          columnOffset = 6;
     static constexpr int          rowOffset    = 0;
     static constexpr std::uint8_t brightness   = 0xA0;
 };
 
 struct St77916Config : Kvasir::Display::DcsDefaults {
-    static constexpr int Width  = 360;
-    static constexpr int Height = 360;
+    static constexpr int width  = 360;
+    static constexpr int height = 360;
 };
 
 struct St77922Config : Kvasir::Display::DcsDefaults {
-    static constexpr int Width  = 532;
-    static constexpr int Height = 300;
+    static constexpr int width  = 532;
+    static constexpr int height = 300;
 };
 
 struct St7789Config : Kvasir::Display::DcsDefaults {
-    static constexpr int Width  = 240;
-    static constexpr int Height = 135;
+    static constexpr int width  = 240;
+    static constexpr int height = 135;
 };
 
 /// RESX on RUN (Kvasir::NoReset): no pulse, no wait; SWRESET first, at once (ST7789V.md:5588).
@@ -433,12 +433,12 @@ void noResetLine() {
           "no pulse on a line that does not exist");
     auto const first = findKind(Transaction::Kind::command);
     check(first == 0, "the first transaction is a command");
-    check(first == 0 && MockBus::log[0].cmd == Kvasir::Display::Dcs::Cmd::Swreset,
+    check(first == 0 && MockBus::log[0].cmd == Kvasir::Display::Dcs::Cmd::swreset,
           "and it is the script's SWRESET");
     auto const atMs
       = std::chrono::duration_cast<std::chrono::milliseconds>(MockBus::log[0].timeSinceEpochAt())
           .count();
-    check(atMs < static_cast<long>(Chip::ResetToCommand.count()),
+    check(atMs < static_cast<long>(Chip::resetToCommand.count()),
           "sent without the reset-to-command wait");
 }
 
@@ -462,17 +462,17 @@ void queuedBus() {
     check(Panel::initialised(), "bring-up completes");
     std::size_t                pos = 0;
     Kvasir::Display::Dcs::Step step{};
-    check(Chip::Init.next(pos, step) && step.cmd == Dcs::Swreset, "the script starts with SWRESET");
-    auto const swreset = findCommand(Dcs::Swreset);
+    check(Chip::init.next(pos, step) && step.cmd == Dcs::swreset, "the script starts with SWRESET");
+    auto const swreset = findCommand(Dcs::swreset);
     auto const next = findKind(Transaction::Kind::command, static_cast<std::size_t>(swreset) + 1);
     check(swreset >= 0 && next > swreset
             && msBetween(swreset, next) >= 20 + static_cast<long>(step.delayMs),
           "SWRESET's delay counted from its completion: " + std::to_string(msBetween(swreset, next))
             + " ms");
-    auto const slpout = findCommand(Dcs::Slpout);
+    auto const slpout = findCommand(Dcs::slpout);
     auto const fill   = findKind(Transaction::Kind::fill);
     check(slpout >= 0 && fill > slpout
-            && msBetween(slpout, fill) >= 20 + static_cast<long>(Chip::SleepOut.count()),
+            && msBetween(slpout, fill) >= 20 + static_cast<long>(Chip::sleepOut.count()),
           "SLPOUT's wait counted from its completion");
     MockBus::commandTurns = 0;
 }

@@ -62,11 +62,11 @@ static_assert(D::voltage(0,
 // The timing the data sheet gives (md:228-238), and what 25 MHz leaves of it: a 20 ns half period
 // against t3/t4 9 ns and the DIN setup t1 10 ns (data changes on the falling edge, half a period
 // before the rising one).
-static_assert(D::MaxClock == Kvasir::Units::hertz(50'000'000));
-static_assert(D::SclkHighMinNs == 9 && D::SclkLowMinNs == 9 && D::DinSetupMinNs == 10);
-static_assert(D::CsHighMinNs == 10 && D::LastSclkToCsHighMinNs == 8 && D::CsLowToSclkMinNs == 8);
-static_assert(1'000'000'000U / 25'000'000U / 2U >= D::SclkHighMinNs
-              && 1'000'000'000U / 25'000'000U / 2U >= D::DinSetupMinNs);
+static_assert(D::maxClock == Kvasir::Units::hertz(50'000'000));
+static_assert(D::sclkHighMinNs == 9 && D::sclkLowMinNs == 9 && D::dinSetupMinNs == 10);
+static_assert(D::csHighMinNs == 10 && D::lastSclkToCsHighMinNs == 8 && D::csLowToSclkMinNs == 8);
+static_assert(1'000'000'000U / 25'000'000U / 2U >= D::sclkHighMinNs
+              && 1'000'000'000U / 25'000'000U / 2U >= D::dinSetupMinNs);
 
 // The Dac over the queued master
 

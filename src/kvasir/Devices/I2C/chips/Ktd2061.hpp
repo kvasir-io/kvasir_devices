@@ -38,7 +38,7 @@ namespace Ktd2061Detail {
     /// The twelve RGB modules as the data sheet names them, by the anode pin each hangs on. In
     /// register order: ISELA12 (09h) holds A1 in bits 7:4 and A2 in bits 3:0, ISELA34 (0Ah) A3
     /// and A4, and so on to ISELC34 (0Eh).
-    enum class Module : std::uint8_t { A1, A2, A3, A4, B1, B2, B3, B4, C1, C2, C3, C4 };
+    enum class Module : std::uint8_t { a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4 };
 
     /// One LED's four bits in a select register: bit 3 turns the LED on, and bits 2, 1 and 0 say
     /// which of the two colour slots its red, green and blue each take. The choice is per
@@ -57,7 +57,7 @@ namespace Ktd2061Detail {
     };
 
     /// The LED off, whatever the slots hold.
-    inline constexpr Channels Off{};
+    inline constexpr Channels off{};
 }   // namespace Ktd2061Detail
 
 /// Kinetic KTD2061 12-channel RGB LED driver: twelve LEDs, each assigned one of two colours.
@@ -90,46 +90,46 @@ struct Ktd2061 {
     using Channels   = Ktd2061Detail::Channels;
     using Module     = Ktd2061Detail::Module;
 
-    static constexpr Channels Off = Ktd2061Detail::Off;
+    static constexpr Channels off = Ktd2061Detail::off;
 
-    static constexpr std::string_view        Name    = "KTD2061";
-    static constexpr Address7                Address = Addr;
-    static constexpr std::array<Address7, 1> Addresses{Addr};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "KTD2061";
+    static constexpr Address7                address = Addr;
+    static constexpr std::array<Address7, 1> addresses{Addr};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::size_t Leds  = 12;
-    static constexpr std::size_t Slots = 2;
+    static constexpr std::size_t leds  = 12;
+    static constexpr std::size_t slots = 2;
 
     /// The largest current code, 24 mA (1.5 mA in night mode); anything above reads back as it.
-    static constexpr std::uint8_t FullScale = 192;
+    static constexpr std::uint8_t fullScale = 192;
 
     /// What ID (00h) reads: VENDOR 101, DIE_ID 00100.
-    static constexpr std::uint8_t ChipId = 0xA4;
+    static constexpr std::uint8_t chipId = 0xA4;
 
     /// Mode 7:6, BrightExtend 5 (off), CoolExtend 4:3, FadeRate 2:0.
-    static constexpr std::uint8_t ControlValue = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t controlValue = static_cast<std::uint8_t>(
       (static_cast<std::uint8_t>(M) << 6U) | (static_cast<std::uint8_t>(CE) << 3U)
       | static_cast<std::uint8_t>(FR));
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{500};
+    static constexpr auto startupDelay = std::chrono::milliseconds{500};
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = 0x02, .payload = {ControlValue}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = 0x02, .payload = {controlValue}}),
     };
 
     /// ID (00h) and Monitor (01h), once a second: the part answering, and what it reports about
     /// itself. Monitor is DIE_REV 7:4 (3 is mass production), SC_STAT 3, BE_STAT 2, COOL_STAT 1,
     /// UV/OT_STAT 0.
     struct Status {
-        static constexpr auto       Period = std::chrono::seconds{1};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::seconds{1};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
             std::uint8_t id{};
             std::uint8_t monitor{};
 
-            [[nodiscard]] constexpr bool idMatches() const { return id == ChipId; }
+            [[nodiscard]] constexpr bool idMatches() const { return id == chipId; }
 
             [[nodiscard]] constexpr std::uint8_t dieRevision() const { return monitor >> 4U; }
 
@@ -159,33 +159,33 @@ struct Ktd2061 {
 
     /// The two colour slots as one block at 03h: R0 G0 B0 R1 G1 B1, a current code each.
     struct Colour {
-        using Value                        = std::array<std::uint8_t, 3 * Slots>;
-        static constexpr std::size_t Bytes = 3 * Slots;
-        static constexpr Value       Initial{};
+        using Value                        = std::array<std::uint8_t, 3 * slots>;
+        static constexpr std::size_t bytes = 3 * slots;
+        static constexpr Value       initial{};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            for(std::size_t i = 0; i < Bytes; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Engine::Step::writeBuffer({.reg = 0x03, .offset = 0, .count = Bytes});
+            for(std::size_t i = 0; i < bytes; ++i) { buffer[i] = std::byte{value[i]}; }
+            return Engine::Step::writeBuffer({.reg = 0x03, .offset = 0, .count = bytes});
         }
     };
 
     /// The six select registers as one block at 09h. Every LED off to begin with, so a part that
     /// comes up mid-animation shows nothing rather than the last frame.
     struct Select {
-        using Value                        = std::array<std::uint8_t, Leds / 2>;
-        static constexpr std::size_t Bytes = Leds / 2;
-        static constexpr Value       Initial{};
+        using Value                        = std::array<std::uint8_t, leds / 2>;
+        static constexpr std::size_t bytes = leds / 2;
+        static constexpr Value       initial{};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            for(std::size_t i = 0; i < Bytes; ++i) { buffer[i] = std::byte{value[i]}; }
-            return Engine::Step::writeBuffer({.reg = 0x09, .offset = 0, .count = Bytes});
+            for(std::size_t i = 0; i < bytes; ++i) { buffer[i] = std::byte{value[i]}; }
+            return Engine::Step::writeBuffer({.reg = 0x09, .offset = 0, .count = bytes});
         }
     };
 
     /// Control (02h), so the mode and the fade rate can be changed at run time.
-    using Control = Engine::Groups::InitialByte<0x02, ControlValue>;
+    using Control = Engine::Groups::InitialByte<0x02, controlValue>;
 
     /// The select block with `module` set to `channels`, for
     /// `set<Select>(Ktd2061::with(current, Module::B3, channels))`.

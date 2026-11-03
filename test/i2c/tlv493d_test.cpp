@@ -65,7 +65,7 @@ struct Tlv493dModel {
     /// A conversion here lasts 1.5 ms, not the part's ~270 us: this model sees time in the
     /// simulation's 1 ms turns, so "the next transaction a turn after the one that started a
     /// conversion" is what landing inside it looks like.
-    static constexpr std::chrono::microseconds Conversion{1500};
+    static constexpr std::chrono::microseconds conversion{1500};
     FakeClock::time_point                      busyUntil;
     int insideConversion{};   ///< transactions while converting
 
@@ -74,7 +74,7 @@ struct Tlv493dModel {
     void convert() {
         if(!converts) { return; }
         ++conversions;
-        busyUntil      = FakeClock::now() + Conversion;
+        busyUntil      = FakeClock::now() + conversion;
         auto const x   = static_cast<std::uint16_t>(bx) & 0x0FFFU;
         auto const y   = static_cast<std::uint16_t>(by) & 0x0FFFU;
         auto const z   = static_cast<std::uint16_t>(bz) & 0x0FFFU;

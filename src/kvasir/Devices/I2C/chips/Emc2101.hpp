@@ -28,18 +28,18 @@ namespace Kvasir::I2C::Chips {
 /// is written and again every 10 seconds: a fan controller that has quietly lost its fan
 /// setting is a thermal problem.
 struct Emc2101 {
-    static constexpr std::string_view Name = "EMC2101";
+    static constexpr std::string_view name = "EMC2101";
     /// SMSC EMC2101. EMC2101.md:2179..2180: the product ID (FDh) is 16h, or 28h for the EMC2101-R;
     /// :2192: the SMSC ID (FEh) is 5Dh.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"product-id", 0xFD, 1, true, 0xFF, 0x16, 0x28},
       Engine::RegisterCheck{"smsc-id", 0xFE, 1, true, 0xFF, 0x5D},
     };
-    static constexpr Address7                Address = 0x4C;
-    static constexpr std::array<Address7, 1> Addresses{0x4C};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x4C;
+    static constexpr std::array<Address7, 1> addresses{0x4C};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{50};
+    static constexpr auto startupDelay = std::chrono::milliseconds{50};
 
     struct State {
         std::uint8_t deviceId{};       ///< Product ID (0xFD): 0x16, or 0x28 on the -R
@@ -55,10 +55,10 @@ struct Emc2101 {
     }
 
     struct Sensors {
-        static constexpr auto Period = std::chrono::milliseconds{500};
+        static constexpr auto period = std::chrono::milliseconds{500};
 
         /// 0x46 before 0x47: reading the low byte latches the high one.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),   // internal temperature
           Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1}),   // external, whole degrees
           Engine::Step::read(
@@ -70,8 +70,8 @@ struct Emc2101 {
 
         /// Table 5.2: an open DP-DN, or DP shorted to VDD, reads exactly +127.000 degC; a
         /// DP-DN short, or DN to ground, exactly +127.875 degC.
-        static constexpr MilliDegC DiodeOpen  = Units::milliDegC(127000);
-        static constexpr MilliDegC DiodeShort = Units::milliDegC(127875);
+        static constexpr MilliDegC diodeOpen  = Units::milliDegC(127000);
+        static constexpr MilliDegC diodeShort = Units::milliDegC(127875);
 
         struct Sample {
             MilliDegC     temperature{};           ///< the internal (die) channel, 0.001 degC
@@ -92,11 +92,11 @@ struct Emc2101 {
             }
 
             [[nodiscard]] constexpr bool externalDiodeOpen() const {
-                return externalTemperature == DiodeOpen;
+                return externalTemperature == diodeOpen;
             }
 
             [[nodiscard]] constexpr bool externalDiodeShort() const {
-                return externalTemperature == DiodeShort;
+                return externalTemperature == diodeShort;
             }
 
             [[nodiscard]] constexpr bool externalValid() const {
@@ -128,8 +128,8 @@ struct Emc2101 {
 
     /// Read back 100 ms after a write, then every ten seconds.
     struct ByteTiming {
-        static constexpr std::chrono::milliseconds VerifyDelay{100};
-        static constexpr std::chrono::milliseconds VerifyInterval{10000};
+        static constexpr std::chrono::milliseconds verifyDelay{100};
+        static constexpr std::chrono::milliseconds verifyInterval{10000};
     };
 
     /// One configuration register, put back after every bring-up and checked afterwards.
@@ -148,12 +148,12 @@ struct Emc2101 {
     using PwmDivide      = Byte<0x4E, 0x01>;
     using Filter         = Byte<0xBF, 0x06>;   ///< level 2 averaging
 
-    static constexpr std::uint8_t FanSettingMax = 63;
+    static constexpr std::uint8_t fanSettingMax = 63;
 
     /// set<FanSetting>(Emc2101::fanSetting(Units::percent(40))).
     [[nodiscard]] static constexpr std::uint8_t fanSetting(Percent duty) {
         auto const p = Units::value(duty) > 100U ? 100U : Units::value(duty);
-        return static_cast<std::uint8_t>(p * FanSettingMax / 100U);
+        return static_cast<std::uint8_t>(p * fanSettingMax / 100U);
     }
 
     using Reads  = Engine::List<Sensors>;

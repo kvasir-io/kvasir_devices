@@ -37,8 +37,8 @@ struct MiniFrame {
         if(!P::ready()) { return false; }
         Canvas c{};
         draw(c);
-        P::pagesChanged(P::Pages >= 32 ? 0xFFFF'FFFFU
-                                       : (1U << static_cast<unsigned>(P::Pages)) - 1U);
+        P::pagesChanged(P::pages >= 32 ? 0xFFFF'FFFFU
+                                       : (1U << static_cast<unsigned>(P::pages)) - 1U);
         return true;
     }
 };
@@ -69,8 +69,8 @@ struct MockBusy {
     static bool busy() { return stuck || FakeClock::now() < until; }
 
     static void onCommand(std::uint8_t cmd) {
-        if(cmd == Cmd::SwReset) { until = FakeClock::now() + std::chrono::milliseconds{3}; }
-        if(cmd == Cmd::MasterActivation) {
+        if(cmd == Cmd::swReset) { until = FakeClock::now() + std::chrono::milliseconds{3}; }
+        if(cmd == Cmd::masterActivation) {
             until = FakeClock::now() + std::chrono::milliseconds{400};
         }
     }
@@ -197,7 +197,7 @@ std::string describe(Command const& c) {
     char buf[16];
     std::snprintf(buf, sizeof buf, "%02Xh", c.cmd);
     std::string s = buf;
-    if(c.cmd == Cmd::WriteRamBw || c.cmd == Cmd::WriteLut) {
+    if(c.cmd == Cmd::writeRamBw || c.cmd == Cmd::writeLut) {
         return s + " x" + std::to_string(c.params.size());
     }
     for(auto const p : c.params) {
@@ -281,7 +281,7 @@ std::size_t inkCount(Command const& ram) {
 Command const* lastRam(std::vector<Command> const& cs) {
     Command const* r = nullptr;
     for(auto const& c : cs) {
-        if(c.cmd == Cmd::WriteRamBw) { r = &c; }
+        if(c.cmd == Cmd::writeRamBw) { r = &c; }
     }
     return r;
 }
@@ -289,9 +289,9 @@ Command const* lastRam(std::vector<Command> const& cs) {
 template<typename Panel>
 void exercise(char const* name) {
     using Config          = typename Panel::Config;
-    int const  width      = Panel::Width;
-    int const  height     = Panel::Height;
-    auto const rowBytes   = Panel::RowBytes;
+    int const  width      = Panel::width;
+    int const  height     = Panel::height;
+    auto const rowBytes   = Panel::rowBytes;
     auto const frameBytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(rowBytes);
     Kvasir::Test::Case const thisCase{name};
 
@@ -314,48 +314,48 @@ void exercise(char const* name) {
         for(auto const& c : bringUp) { std::printf("    %s\n", describe(c).c_str()); }
     }
 
-    check(!MockBus::log.empty() && MockReset::releaseAt - MockReset::holdAt >= Panel::ResetPulse,
+    check(!MockBus::log.empty() && MockReset::releaseAt - MockReset::holdAt >= Panel::resetPulse,
           "RES# is held low for the reset pulse");
     check(!MockBus::log.empty()
-            && MockBus::log.front().at - MockReset::releaseAt >= Panel::ResetToCommand,
+            && MockBus::log.front().at - MockReset::releaseAt >= Panel::resetToCommand,
           "nothing is sent until the reset-to-command wait is over");
 
     // The full-waveform bring-up, command by command.
     std::uint8_t const         lastLo = static_cast<std::uint8_t>((Config::gateLines - 1) & 0xFF);
     std::uint8_t const         lastHi = static_cast<std::uint8_t>((Config::gateLines - 1) >> 8);
     std::vector<Command> const fullHead{
-      {              Cmd::SwReset,                                              {}},
-      {  Cmd::DriverOutputControl,                             {lastLo, lastHi, 0}},
-      {        Cmd::DataEntryMode,                                          {0x03}},
-      {Cmd::DisplayUpdateControl1,                                    {0x00, 0x80}},
-      {       Cmd::BorderWaveform,                                          {0x05}},
-      {Cmd::DisplayUpdateControl2,                                          {0xF7}},
-      {            Cmd::RamXRange, {0x00, static_cast<std::uint8_t>(rowBytes - 1)}},
-      {            Cmd::RamYRange,                          {0, 0, lastLo, lastHi}},
-      {          Cmd::RamXCounter,                                             {0}},
-      {          Cmd::RamYCounter,                                          {0, 0}},
+      {              Cmd::swReset,                                              {}},
+      {  Cmd::driverOutputControl,                             {lastLo, lastHi, 0}},
+      {        Cmd::dataEntryMode,                                          {0x03}},
+      {Cmd::displayUpdateControl1,                                    {0x00, 0x80}},
+      {       Cmd::borderWaveform,                                          {0x05}},
+      {Cmd::displayUpdateControl2,                                          {0xF7}},
+      {            Cmd::ramXRange, {0x00, static_cast<std::uint8_t>(rowBytes - 1)}},
+      {            Cmd::ramYRange,                          {0, 0, lastLo, lastHi}},
+      {          Cmd::ramXCounter,                                             {0}},
+      {          Cmd::ramYCounter,                                          {0, 0}},
     };
     bool headOk = bringUp.size() > fullHead.size() + 1;
     for(std::size_t i = 0; headOk && i < fullHead.size(); ++i) {
         headOk = bringUp[i].cmd == fullHead[i].cmd && bringUp[i].params == fullHead[i].params;
     }
     check(headOk, "bring-up: reset, output control, entry mode, full waveform, RAM window");
-    check(headOk && bringUp[fullHead.size()].cmd == Cmd::WriteRamBw
+    check(headOk && bringUp[fullHead.size()].cmd == Cmd::writeRamBw
             && bringUp[fullHead.size()].params == std::vector<std::uint8_t>(frameBytes, 0xFF),
           "bring-up writes the whole frame, white");
-    check(headOk && bringUp[fullHead.size() + 1].cmd == Cmd::MasterActivation,
+    check(headOk && bringUp[fullHead.size() + 1].cmd == Cmd::masterActivation,
           "and activates the refresh");
 
     std::size_t rams = 0;
-    for(auto const& c : bringUp) { rams += c.cmd == Cmd::WriteRamBw ? 1U : 0U; }
+    for(auto const& c : bringUp) { rams += c.cmd == Cmd::writeRamBw ? 1U : 0U; }
     if(Config::partial) {
         std::size_t lut = 0;
         for(auto const& c : bringUp) {
-            if(c.cmd == Cmd::WriteLut) { lut = c.params.size(); }
+            if(c.cmd == Cmd::writeLut) { lut = c.params.size(); }
         }
         check(lut == 153, "partial: the 153 byte LUT is loaded");
         check(rams == 2, "partial: the frame is refreshed with both waveforms");
-        check(!bringUp.empty() && bringUp.back().cmd == Cmd::MasterActivation,
+        check(!bringUp.empty() && bringUp.back().cmd == Cmd::masterActivation,
               "partial: bring-up ends on the partial refresh");
     } else {
         check(rams == 1, "full: one refresh at bring-up");
@@ -380,12 +380,12 @@ void exercise(char const* name) {
     if(verbose) {
         for(auto const& c : frame) { std::printf("    %s\n", describe(c).c_str()); }
     }
-    std::vector<std::uint8_t> const order{Cmd::RamXRange,
-                                          Cmd::RamYRange,
-                                          Cmd::RamXCounter,
-                                          Cmd::RamYCounter,
-                                          Cmd::WriteRamBw,
-                                          Cmd::MasterActivation};
+    std::vector<std::uint8_t> const order{Cmd::ramXRange,
+                                          Cmd::ramYRange,
+                                          Cmd::ramXCounter,
+                                          Cmd::ramYCounter,
+                                          Cmd::writeRamBw,
+                                          Cmd::masterActivation};
     bool                            orderOk = frame.size() == order.size();
     for(std::size_t i = 0; orderOk && i < order.size(); ++i) { orderOk = frame[i].cmd == order[i]; }
     check(orderOk, "a refresh is window, WRITE RAM, activation and nothing else");
@@ -425,11 +425,11 @@ void exercise(char const* name) {
         pump(UntilReady<Panel>{}, 10000);
         auto const  cleaned = commands(mark);
         auto const* r       = lastRam(cleaned);
-        check(Panel::ready() && !cleaned.empty() && cleaned.front().cmd == Cmd::SwReset,
+        check(Panel::ready() && !cleaned.empty() && cleaned.front().cmd == Cmd::swReset,
               "clean() starts over with a SW reset");
         check(r != nullptr && r->params.size() == frameBytes && inkCount(*r) == 3,
               "clean() refreshes with the picture that was showing");
-        check(without(cleaned, Cmd::WriteRamBw).size() == without(bringUp, Cmd::WriteRamBw).size(),
+        check(without(cleaned, Cmd::writeRamBw).size() == without(bringUp, Cmd::writeRamBw).size(),
               "clean() sends the bring-up sequence");
     }
 
@@ -466,7 +466,7 @@ void exercise(char const* name) {
               "the bring-up starts retryAfter after the failure, with a reset pulse");
         auto const  back = commands(mark);
         auto const* r    = lastRam(back);
-        check(!back.empty() && back.front().cmd == Cmd::SwReset, "the bring-up starts over");
+        check(!back.empty() && back.front().cmd == Cmd::swReset, "the bring-up starts over");
         check(r != nullptr && r->params.size() == frameBytes && inkCount(*r) == 3,
               "and resends the picture that was showing");
         check(!MockBus::commandWhileBusy, "no command while BUSY, across the failure");

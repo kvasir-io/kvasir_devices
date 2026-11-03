@@ -50,17 +50,17 @@ namespace Ads1219Detail {
 template<Ads1219Detail::Gain     Gain     = Ads1219Detail::Gain::x1,
          Ads1219Detail::DataRate DataRate = Ads1219Detail::DataRate::sps90>
 struct Ads1219 {
-    static constexpr std::string_view Name    = "ADS1219";
-    static constexpr Address7         Address = 0x40;
+    static constexpr std::string_view name    = "ADS1219";
+    static constexpr Address7         address = 0x40;
     /// A0 and A1 each tie to DGND, DVDD, SDA or SCL: sixteen addresses from 0x40.
-    static constexpr auto        Addresses     = addressRun<0x40, 16>();
-    static constexpr std::size_t RegisterBytes = 0;
+    static constexpr auto        addresses     = addressRun<0x40, 16>();
+    static constexpr std::size_t registerBytes = 0;
 
-    static constexpr std::size_t Channels = 4;
+    static constexpr std::size_t channels = 4;
 
     /// One conversion, rounded up generously: 50, 11.1, 3.03 and 1 ms (Table 4's single-shot
     /// times; one Arduino library returns 1 ms for 90 SPS, which is not the table's).
-    static constexpr std::chrono::milliseconds Conversion
+    static constexpr std::chrono::milliseconds conversion
       = std::array<std::chrono::milliseconds, 4>{
         std::chrono::milliseconds{60},
         std::chrono::milliseconds{15},
@@ -68,15 +68,15 @@ struct Ads1219 {
         std::chrono::milliseconds{3}}[static_cast<std::size_t>(DataRate)];
 
     /// Full scale is VREF / gain over 2^23 counts; the internal reference is 2.048 V.
-    static constexpr MicroVolt FullScale
+    static constexpr MicroVolt fullScale
       = Units::microVolt(Gain == Ads1219Detail::Gain::x1 ? 2'048'000 : 512'000);
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     /// RESET, then the configuration register read back with RREG: the reset leaves it 00h
     /// (Table 9), which is the check that the part is an ADS1219 (SparkFun's begin() makes the
     /// same one) before a sweep writes to it.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x06}, .delay = std::chrono::milliseconds{1}}),   // RESET
       Engine::Step::command({.payload = {0x20}}),   // RREG config
       Engine::Step::receive({.count = 1, .offset = 0}),
@@ -94,21 +94,21 @@ struct Ads1219 {
 
     struct Sweep {
         /// A sweep is four conversions: every 200 ms, or as fast as four of them allow.
-        static constexpr auto Period
-          = 4 * Conversion + std::chrono::milliseconds{40} > std::chrono::milliseconds{200}
-            ? 4 * Conversion + std::chrono::milliseconds{40}
+        static constexpr auto period
+          = 4 * conversion + std::chrono::milliseconds{40} > std::chrono::milliseconds{200}
+            ? 4 * conversion + std::chrono::milliseconds{40}
             : std::chrono::milliseconds{200};
 
         /// Per channel: select it, start it, wait it out, then ask for the result.
-        static constexpr auto Steps = [] {
-            std::array<Engine::Step, 4 * Channels> s{};
+        static constexpr auto steps = [] {
+            std::array<Engine::Step, 4 * channels> s{};
             std::size_t                            i = 0;
-            for(unsigned c = 0; c < Channels; ++c) {
+            for(unsigned c = 0; c < channels; ++c) {
                 s[i++] = Engine::Step::command({
                   .payload = {0x40, Ads1219Detail::config(c, Gain, DataRate)}
                 });
                 s[i++]
-                  = Engine::Step::command({.payload = {0x08}, .delay = Conversion});   // START/SYNC
+                  = Engine::Step::command({.payload = {0x08}, .delay = conversion});   // START/SYNC
                 s[i++] = Engine::Step::command({.payload = {0x10}});   // RDATA, then a STOP
                 s[i++]
                   = Engine::Step::receive({.count = 3, .offset = static_cast<std::uint8_t>(3 * c)});
@@ -117,11 +117,11 @@ struct Ads1219 {
         }();
 
         struct Sample {
-            std::array<std::int32_t, Channels> code{};   ///< 24-bit two's complement
+            std::array<std::int32_t, channels> code{};   ///< 24-bit two's complement
 
             /// A raw code; 2^23 counts span the full-scale range.
             [[nodiscard]] static constexpr MicroVolt toVoltage(std::int32_t c) {
-                return Units::microVolt(static_cast<std::int64_t>(c) * Units::value(FullScale)
+                return Units::microVolt(static_cast<std::int64_t>(c) * Units::value(fullScale)
                                         / 8388608LL);
             }
 
@@ -133,7 +133,7 @@ struct Ads1219 {
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
             Sample sample{};
-            for(std::size_t c = 0; c < Channels; ++c) {
+            for(std::size_t c = 0; c < channels; ++c) {
                 sample.code[c] = Bytes::signExtend(data.be24(3 * c), 24);
             }
             return sample;

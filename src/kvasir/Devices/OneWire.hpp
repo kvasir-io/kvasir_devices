@@ -38,17 +38,17 @@ struct OneWireDefaults {
 ///     operationState(now) until it is not ongoing -> getReceivedBytes(...) -> release()
 template<typename Clock, typename Pin, std::size_t Size, typename Config = OneWireDefaults>
 struct OneWire {
-    static constexpr std::size_t BufferSize = Size;
+    static constexpr std::size_t bufferSize = Size;
     using TimePoint                         = typename Clock::time_point;
     enum class State : std::uint8_t { idle, blocked, resetPulse, sending, receiving };
     enum class OperationState : std::uint8_t { succeeded, failed, ongoing };
 
-    static constexpr std::chrono::milliseconds TransactionTimeout = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds transactionTimeout = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        transactionTimeout,
                        std::chrono::milliseconds{OneWireDefaults::transactionTimeout}));
 
-    static constexpr std::chrono::milliseconds SlotBudget = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds slotBudget = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config, slotBudget, std::chrono::milliseconds{OneWireDefaults::slotBudget}));
 
     template<typename C>
@@ -133,14 +133,14 @@ struct OneWire {
             {
                 if(currentTime > waitTime_) {
                     pinSet();
-                    Clock::delay(PresenceSample);
+                    Clock::delay(presenceSample);
                     if(pinRead()) {
                         state_          = State::blocked;
                         operationState_ = OperationState::failed;
                     } else {
                         // tRSTH (480 us min) counts from the release, which was at currentTime,
                         // not from the presence sample
-                        waitTime_ = currentTime + PresenceSample + PresenceRest;
+                        waitTime_ = currentTime + presenceSample + presenceRest;
                         bitCount_ = 0;
                         state_    = State::sending;
                     }
@@ -163,7 +163,7 @@ struct OneWire {
                             bitCount_ = 0;
                             buffer_.pop();
                         }
-                        waitTime_ = currentTime + Slot;
+                        waitTime_ = currentTime + slot;
                     }
                 }
             }
@@ -184,7 +184,7 @@ struct OneWire {
                             currentByte_ = std::byte{};
                             --receiveSize_;
                         }
-                        waitTime_ = currentTime + Slot;
+                        waitTime_ = currentTime + slot;
                     }
                 }
             }
@@ -201,20 +201,20 @@ struct OneWire {
     static void writeBit(bool v) {
         if(v) {
             pinClear();
-            Clock::delay(Write1Low);
+            Clock::delay(write1Low);
             pinSet();
         } else {
             pinClear();
-            Clock::delay(Write0Low);
+            Clock::delay(write0Low);
             pinSet();
         }
     }
 
     static bool readBit() {
         pinClear();
-        Clock::delay(ReadLow);
+        Clock::delay(readLow);
         pinSet();
-        Clock::delay(ReadSample);
+        Clock::delay(readSample);
         return pinRead();
     }
 
@@ -235,14 +235,14 @@ struct OneWire {
 private:
     // Standard-speed slot timings: AN126's where they match it, the others inside the MAX31820
     // limits (the class comment above).
-    static constexpr std::chrono::microseconds ResetLow{480};
-    static constexpr std::chrono::microseconds PresenceSample{70};
-    static constexpr std::chrono::microseconds PresenceRest{410};
-    static constexpr std::chrono::microseconds Slot{64};
-    static constexpr std::chrono::microseconds Write1Low{5};
-    static constexpr std::chrono::microseconds Write0Low{65};
-    static constexpr std::chrono::microseconds ReadLow{3};
-    static constexpr std::chrono::microseconds ReadSample{10};
+    static constexpr std::chrono::microseconds resetLow{480};
+    static constexpr std::chrono::microseconds presenceSample{70};
+    static constexpr std::chrono::microseconds presenceRest{410};
+    static constexpr std::chrono::microseconds slot{64};
+    static constexpr std::chrono::microseconds write1Low{5};
+    static constexpr std::chrono::microseconds write0Low{65};
+    static constexpr std::chrono::microseconds readLow{3};
+    static constexpr std::chrono::microseconds readSample{10};
 
     /// Every transaction starts from nothing: an empty buffer, no bits of a previous byte,
     /// the reset pulse. Its deadline covers `bytes` bytes of slots.
@@ -255,16 +255,16 @@ private:
         state_          = State::resetPulse;
         operationState_ = OperationState::ongoing;
         timeoutTime_
-          = currentTime + TransactionTimeout + static_cast<std::int64_t>(8 * bytes) * SlotBudget;
+          = currentTime + transactionTimeout + static_cast<std::int64_t>(8 * bytes) * slotBudget;
         pinClear();
-        waitTime_ = currentTime + ResetLow;
+        waitTime_ = currentTime + resetLow;
     }
 
     inline static TimePoint      waitTime_{};
     inline static TimePoint      timeoutTime_{};
     inline static State          state_{State::idle};
     inline static OperationState operationState_{OperationState::succeeded};
-    inline static Kvasir::Atomic::Queue<std::byte, BufferSize> buffer_{};
+    inline static Kvasir::Atomic::Queue<std::byte, bufferSize> buffer_{};
     inline static std::uint8_t                                 receiveSize_{};
     inline static std::uint8_t                                 bitCount_{};
     inline static std::byte                                    currentByte_{};

@@ -32,6 +32,9 @@ jobs := num_cpus()
 # Override with `just kvasir_root=/path test` or $KVASIR_ROOT. Passed to CMake only
 # when it exists; without it the test tree fetches the SDK.
 kvasir_root := env('KVASIR_ROOT', tree / 'Kvasir_SDK')
+# The SDK's tools (tidy.py, layer_check.py): kvasir_root if it has them, else a shallow clone of master (no submodules)
+# in .kvasir_sdk/, made by the first recipe that needs it (sdk-tools); `just clean-all` removes it.
+sdk_tools := if path_exists(kvasir_root / "tools" / "tidy.py") == "true" { kvasir_root } else { root / ".kvasir_sdk" }
 
 default_config := "clang"
 
@@ -151,13 +154,13 @@ build-all:
 # The build-and-test job runs through act (gcc and clang, warnings as errors, against the SDK it fetches from GitHub),
 # the layer job's check against the sibling Kvasir_SDK's table.
 # What .github/workflows/ci.yml runs: build-and-test, then the layer check
-ci:
+ci: sdk-tools
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{ root }}"
     docker image inspect archlinux:latest >/dev/null 2>&1 || docker pull archlinux:latest
     act push -j build-and-test --reuse --pull=false
-    python3 -B "{{ kvasir_root }}/tools/layer_check.py" --repo "kvasir_devices={{ root }}"
+    python3 -B "{{ sdk_tools }}/tools/layer_check.py" --repo "kvasir_devices={{ root }}"
 
 # Format every header and test source in place (.clang-format at the repo root)
 format:
@@ -171,9 +174,14 @@ format-check:
 clean config=default_config:
     rm -rf "{{ build_root }}/{{ config }}"
 
-# Remove every build directory
+# Remove every build directory and the cloned SDK tools (.kvasir_sdk/)
 clean-all:
-    rm -rf "{{ build_root }}"
+    rm -rf "{{ build_root }}" "{{ root }}/.kvasir_sdk"
+
+# Clone the SDK's tools into .kvasir_sdk/ when there is no Kvasir_SDK to take them from
+[private]
+sdk-tools:
+    @[ -f "{{ sdk_tools }}/tools/tidy.py" ] || git clone --quiet --depth 1 https://github.com/kvasir-io/Kvasir_SDK.git "{{ sdk_tools }}"
 
 # --- clang-tidy ----------------------------------------------------------------
 
@@ -181,8 +189,8 @@ clean-all:
 # other libraries' count as foreign. `just tidy --changed`, `just tidy --fix`, `--audit <check>`, `--only '<glob>'`.
 # clang-tidy over the clang host tree (exit 0 clean, 1 findings)
 [positional-arguments]
-tidy *args: (configure "clang")
-    python3 -B "{{ kvasir_root }}/tools/tidy.py" --tree "{{ build_root }}/clang" --repo "{{ root }}" "$@"
+tidy *args: sdk-tools (configure "clang")
+    python3 -B "{{ sdk_tools }}/tools/tidy.py" --tree "{{ build_root }}/clang" --repo "{{ root }}" "$@"
 
 # The configured clang tree `tidy` reads, if there is one (the workspace's `just tidy` collects them)
 tidy-trees:

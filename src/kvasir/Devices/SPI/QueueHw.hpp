@@ -16,6 +16,9 @@
 //   using Snapshot; static Snapshot snapshot(); static void log(Snapshot const&);
 // and optionally (QueueCore asks for them by `requires`, so they are not part of the concept):
 //   static void poll();                          no completion interrupt: called masked
+//   static bool transferPolled(Transfer const&); the transfer by the CPU through the FIFOs, masked, nothing on the
+//                  wire; true once every frame is back, false when they stopped moving (bounded; the core aborts).
+//                  With it the core runs short requests polled inside submit() (QueueCore.hpp, `pollUpTo`)
 //   static constexpr bool SupportsWide;          false: no 16-bit frames
 //   static constexpr std::uint32_t MaxFrames;    the DMA's count limit
 #include <concepts>

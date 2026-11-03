@@ -13,14 +13,14 @@ using DT = Kvasir::USB::DescriptorType;
 
 namespace {
 using HidRequest           = Kvasir::USB::HID::Request;
-constexpr auto ReportValue = descriptorValue(Kvasir::USB::HID::ReportDescriptorType);
+constexpr auto reportValue = descriptorValue(Kvasir::USB::HID::reportDescriptorType);
 
 struct Knob {
     // Vendor usage page, one 4-byte input report and one 2-byte output report, no report ids.
-    static constexpr auto ReportDescriptor = std::to_array<std::uint8_t>(
+    static constexpr auto reportDescriptor = std::to_array<std::uint8_t>(
       {0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08,
        0x95, 0x04, 0x09, 0x02, 0x81, 0x02, 0x95, 0x02, 0x09, 0x03, 0x91, 0x02, 0xC0});
-    static constexpr std::size_t  InputReportSize = 4;
+    static constexpr std::size_t  inputReportSize = 4;
     static constexpr std::uint8_t pollIntervalMs  = 5;
 
     static inline std::vector<std::byte> lastOutput{};
@@ -83,15 +83,15 @@ void run(char const* name) {
                 && std::to_integer<int>(cfg.data[19]) == 0x21,
               "the HID descriptor follows the interface");
         checkEq(std::to_integer<unsigned>(cfg.data[25]),
-                Knob::ReportDescriptor.size(),
+                Knob::reportDescriptor.size(),
                 "with the report descriptor's length");
         auto const report = Host::controlIn(
-          Host::makeSetup(fromInterface, Setup::Request::getDescriptor, ReportValue, 0, 255));
-        check(report.ok() && report.data.size() == Knob::ReportDescriptor.size(),
+          Host::makeSetup(fromInterface, Setup::Request::getDescriptor, reportValue, 0, 255));
+        check(report.ok() && report.data.size() == Knob::reportDescriptor.size(),
               "GET_DESCRIPTOR(report) to the interface");
         check(std::to_integer<int>(report.data[0]) == 0x06, "and it is the traits' bytes");
         check(Host::controlIn(
-                Host::makeSetup(fromInterface, Setup::Request::getDescriptor, ReportValue, 1, 255))
+                Host::makeSetup(fromInterface, Setup::Request::getDescriptor, reportValue, 1, 255))
                 .stalled,
               "not from the bulk interface");
     }

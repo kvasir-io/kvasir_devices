@@ -18,10 +18,10 @@ struct MixinTraits {
     // A mixin may require a newer bcdUSB than 2.00 (e.g. 2.01 for a BOS descriptor).
     template<typename Mixin>
     static consteval std::uint16_t bcdUSBOf() {
-        if constexpr(requires { Mixin::BcdUSB; }) {
-            return Mixin::BcdUSB;
+        if constexpr(requires { Mixin::bcdUSB; }) {
+            return Mixin::bcdUSB;
         } else {
-            return Kvasir::USB::detail::bcdUSB;
+            return Kvasir::USB::Detail::bcdUSB;
         }
     }
 
@@ -53,19 +53,19 @@ template<typename Clock,
          template<typename, typename, typename, std::size_t, std::size_t> class... Mixins>
 struct MixinTraits::Layout<Clock, Config, Derived, std::index_sequence<Is...>, Mixins...> {
     // The counts and bcdUSB do not depend on where a mixin sits: read at numbers 0, 0.
-    static constexpr std::array<std::size_t, sizeof...(Mixins)> InterfaceCounts{
-      Mixins<Clock, Config, Derived, 0, 0>::InterfaceCount...};
-    static constexpr std::array<std::size_t, sizeof...(Mixins)> EndpointCounts{
-      Mixins<Clock, Config, Derived, 0, 0>::EndpointCount...};
+    static constexpr std::array<std::size_t, sizeof...(Mixins)> interfaceCounts{
+      Mixins<Clock, Config, Derived, 0, 0>::interfaceCount...};
+    static constexpr std::array<std::size_t, sizeof...(Mixins)> endpointCounts{
+      Mixins<Clock, Config, Derived, 0, 0>::endpointCount...};
 
-    static constexpr auto InterfaceOffsets = MixinTraits::prefixSums(InterfaceCounts);
-    static constexpr auto EndpointOffsets  = MixinTraits::prefixSums(EndpointCounts);
+    static constexpr auto interfaceOffsets = MixinTraits::prefixSums(interfaceCounts);
+    static constexpr auto endpointOffsets  = MixinTraits::prefixSums(endpointCounts);
 
-    static constexpr std::size_t InterfaceCount = InterfaceOffsets.back();
-    static constexpr std::size_t EndpointCount  = EndpointOffsets.back();
+    static constexpr std::size_t interfaceCount = interfaceOffsets.back();
+    static constexpr std::size_t endpointCount  = endpointOffsets.back();
 
-    static constexpr std::uint16_t BcdUSB
-      = std::max({Kvasir::USB::detail::bcdUSB,
+    static constexpr std::uint16_t bcdUSB
+      = std::max({Kvasir::USB::Detail::bcdUSB,
                   MixinTraits::bcdUSBOf<Mixins<Clock, Config, Derived, 0, 0>>()...});
 
     /// The mixins placed from the device's first interface and endpoint number on; the device
@@ -75,13 +75,13 @@ struct MixinTraits::Layout<Clock, Config, Derived, std::index_sequence<Is...>, M
       : Mixins<Clock,
                Config,
                Derived,
-               BaseInterface + InterfaceOffsets[Is],
-               BaseEndpoint + EndpointOffsets[Is]>... {
+               BaseInterface + interfaceOffsets[Is],
+               BaseEndpoint + endpointOffsets[Is]>... {
         using Placed = std::tuple<Mixins<Clock,
                                          Config,
                                          Derived,
-                                         BaseInterface + InterfaceOffsets[Is],
-                                         BaseEndpoint + EndpointOffsets[Is]>...>;
+                                         BaseInterface + interfaceOffsets[Is],
+                                         BaseEndpoint + endpointOffsets[Is]>...>;
 
         /// The device's I-th mixin as the type that holds its state, for an application that has
         /// several with the same member names (`Usb::Function<1>::send(...)`). The numbers are the
@@ -95,7 +95,7 @@ struct MixinTraits::Layout<Clock, Config, Derived, std::index_sequence<Is...>, M
                 return std::array<std::byte, 0>{};
             } else {
                 return Descriptors::generateArray(
-                  Descriptors::generateArray(Function<Is>::InterfaceDescriptor)...);
+                  Descriptors::generateArray(Function<Is>::interfaceDescriptor)...);
             }
         }
 

@@ -18,7 +18,7 @@ namespace Kvasir::Engine::Groups {
 template<std::uint16_t Reg>
 struct Byte {
     using Value                        = std::uint8_t;
-    static constexpr std::size_t Bytes = 1;
+    static constexpr std::size_t bytes = 1;
 
     [[nodiscard]] static constexpr Step encode(Value const&         value,
                                                std::span<std::byte> buffer) {
@@ -30,7 +30,7 @@ struct Byte {
 /// A one-byte register that holds `Init` from every bring-up on, unless the application set it.
 template<std::uint16_t Reg, std::uint8_t Init>
 struct InitialByte : Byte<Reg> {
-    static constexpr typename Byte<Reg>::Value Initial = Init;
+    static constexpr typename Byte<Reg>::Value initial = Init;
 };
 
 /// A 16-bit big-endian register that holds `Init` from every bring-up on, unless the
@@ -38,8 +38,8 @@ struct InitialByte : Byte<Reg> {
 template<std::uint16_t Reg, std::uint16_t Init>
 struct Word {
     using Value                          = std::uint16_t;
-    static constexpr std::size_t Bytes   = 2;
-    static constexpr Value       Initial = Init;
+    static constexpr std::size_t bytes   = 2;
+    static constexpr Value       initial = Init;
 
     [[nodiscard]] static constexpr Step encode(Value const&         value,
                                                std::span<std::byte> buffer) {
@@ -53,8 +53,8 @@ struct Word {
 template<std::uint16_t Reg, std::uint16_t Init>
 struct WordLe {
     using Value                          = std::uint16_t;
-    static constexpr std::size_t Bytes   = 2;
-    static constexpr Value       Initial = Init;
+    static constexpr std::size_t bytes   = 2;
+    static constexpr Value       initial = Init;
 
     [[nodiscard]] static constexpr Step encode(Value const&         value,
                                                std::span<std::byte> buffer) {
@@ -74,25 +74,25 @@ struct WordLe {
 ///     using Enable = Groups::VerifiedByte<0x80, 0x00, Checked>;
 template<std::uint16_t Reg, std::uint8_t Init, typename Timing>
 struct VerifiedByte : InitialByte<Reg, Init> {
-    static constexpr std::chrono::milliseconds VerifyDelay    = Timing::VerifyDelay;
-    static constexpr std::chrono::milliseconds VerifyInterval = Timing::VerifyInterval;
+    static constexpr std::chrono::milliseconds verifyDelay    = Timing::verifyDelay;
+    static constexpr std::chrono::milliseconds verifyInterval = Timing::verifyInterval;
 };
 
-/// A temperature sensor's alert limits, read back every `Timing::LimitsVerifyInterval` (and
-/// `LimitsVerifyDelay` after a write, default 100 ms) and rewritten when they differ: a part
+/// A temperature sensor's alert limits, read back every `Timing::limitsVerifyInterval` (and
+/// `limitsVerifyDelay` after a write, default 100 ms) and rewritten when they differ: a part
 /// that lost them to a supply dip keeps answering with its reset defaults. Empty otherwise.
-///     struct Checked { static constexpr std::chrono::seconds LimitsVerifyInterval{5}; };
+///     struct Checked { static constexpr std::chrono::seconds limitsVerifyInterval{5}; };
 ///     using Sensor = Chips::Tmp1075<Checked>;
 template<typename Timing>
 struct LimitsReadBack {};
 
 template<typename Timing>
-    requires requires { Timing::LimitsVerifyInterval; }
+    requires requires { Timing::limitsVerifyInterval; }
 struct LimitsReadBack<Timing> {
-    static constexpr std::chrono::milliseconds VerifyDelay = Kvasir::asDuration(
-      KVASIR_CONFIG_OR(Timing, LimitsVerifyDelay, std::chrono::milliseconds{100}));
-    static constexpr std::chrono::milliseconds VerifyInterval
-      = Kvasir::asDuration(Timing::LimitsVerifyInterval);
+    static constexpr std::chrono::milliseconds verifyDelay = Kvasir::asDuration(
+      KVASIR_CONFIG_OR(Timing, limitsVerifyDelay, std::chrono::milliseconds{100}));
+    static constexpr std::chrono::milliseconds verifyInterval
+      = Kvasir::asDuration(Timing::limitsVerifyInterval);
 };
 
 /// The State of a description that publishes its identity register and nothing else: filled by its

@@ -53,7 +53,7 @@ namespace Kvasir { namespace Display {
         { r.h } -> std::convertible_to<int>;
     };
 
-    namespace detail {
+    namespace Detail {
         /// The Pixel concept sees the members, not their order: a {lo, hi} layout would blit swapped.
         template<Pixel C>
         consteval bool highByteFirst() {
@@ -66,7 +66,7 @@ namespace Kvasir { namespace Display {
         /// turn (`Burst`) against what the bus holds at once (`Slots`, its CommandSlots).
         template<std::size_t Burst, std::size_t Slots>
         inline constexpr bool busHoldsFormatBurst = Burst <= Slots;
-    }   // namespace detail
+    }   // namespace Detail
 
     /// Defaults for a panel config; a config derives from this and redeclares what it sets.
     struct DcsDefaults {
@@ -81,38 +81,38 @@ namespace Kvasir { namespace Display {
     };
 
     /// A DCS controller's own facts, as constants:
-    ///   Name              for the log
-    ///   ReadInstruction   the bus instruction that starts a register read (03h, 0Bh)
-    ///   ReadDummyBytes    bytes clocked out before the answer (0 or 1)
-    ///   WindowAlign       CASET/RASET start and count must be multiples of this
-    ///   MaxAddress        one past the largest column/row the address fields can hold
-    ///   MaxWriteClock     the bus clock ceiling for writes (Units::Hertz); the transport is checked
-    ///   MaxReadClock      ... and for reads
-    ///   Colmod565         the COLMOD parameter for 16 bit pixels
-    ///   ResetPulse        RESX low time (std::chrono::milliseconds, as the three below)
-    ///   ResetToCommand    RESX high to the first command
-    ///   SleepOut          SLPOUT (its completion) to the next command
-    ///   Init              the chip's own script (Dcs::Script), sent before COLMOD
-    ///   Brightness        whether WRCTRLD/WRDISBV do anything on this chip
-    ///   CtrlDisplay       the WRCTRLD parameter that enables brightness control
-    ///   ExpectedId1       RDDID's first byte, or 0 if unknown
+    ///   name              for the log
+    ///   readInstruction   the bus instruction that starts a register read (03h, 0Bh)
+    ///   readDummyBytes    bytes clocked out before the answer (0 or 1)
+    ///   windowAlign       CASET/RASET start and count must be multiples of this
+    ///   maxAddress        one past the largest column/row the address fields can hold
+    ///   maxWriteClock     the bus clock ceiling for writes (Units::Hertz); the transport is checked
+    ///   maxReadClock      ... and for reads
+    ///   colmod565         the COLMOD parameter for 16 bit pixels
+    ///   resetPulse        RESX low time (std::chrono::milliseconds, as the three below)
+    ///   resetToCommand    RESX high to the first command
+    ///   sleepOut          SLPOUT (its completion) to the next command
+    ///   init              the chip's own script (Dcs::Script), sent before COLMOD
+    ///   brightness        whether WRCTRLD/WRDISBV do anything on this chip
+    ///   ctrlDisplay       the WRCTRLD parameter that enables brightness control
+    ///   expectedId1       RDDID's first byte, or 0 if unknown
     template<typename C>
     concept Chip = requires {
-        { C::Name } -> std::convertible_to<std::string_view>;
-        { C::ReadInstruction } -> std::convertible_to<std::uint8_t>;
-        { C::ReadDummyBytes } -> std::convertible_to<std::size_t>;
-        { C::WindowAlign } -> std::convertible_to<int>;
-        { C::MaxAddress } -> std::convertible_to<int>;
-        { C::MaxWriteClock } -> std::convertible_to<Units::Hertz>;
-        { C::MaxReadClock } -> std::convertible_to<Units::Hertz>;
-        { C::Colmod565 } -> std::convertible_to<std::uint8_t>;
-        { C::ResetPulse } -> std::convertible_to<std::chrono::milliseconds>;
-        { C::ResetToCommand } -> std::convertible_to<std::chrono::milliseconds>;
-        { C::SleepOut } -> std::convertible_to<std::chrono::milliseconds>;
-        { C::Init } -> std::convertible_to<Dcs::Script>;
-        { C::Brightness } -> std::convertible_to<bool>;
-        { C::CtrlDisplay } -> std::convertible_to<std::uint8_t>;
-        { C::ExpectedId1 } -> std::convertible_to<std::uint8_t>;
+        { C::name } -> std::convertible_to<std::string_view>;
+        { C::readInstruction } -> std::convertible_to<std::uint8_t>;
+        { C::readDummyBytes } -> std::convertible_to<std::size_t>;
+        { C::windowAlign } -> std::convertible_to<int>;
+        { C::maxAddress } -> std::convertible_to<int>;
+        { C::maxWriteClock } -> std::convertible_to<Units::Hertz>;
+        { C::maxReadClock } -> std::convertible_to<Units::Hertz>;
+        { C::colmod565 } -> std::convertible_to<std::uint8_t>;
+        { C::resetPulse } -> std::convertible_to<std::chrono::milliseconds>;
+        { C::resetToCommand } -> std::convertible_to<std::chrono::milliseconds>;
+        { C::sleepOut } -> std::convertible_to<std::chrono::milliseconds>;
+        { C::init } -> std::convertible_to<Dcs::Script>;
+        { C::brightness } -> std::convertible_to<bool>;
+        { C::ctrlDisplay } -> std::convertible_to<std::uint8_t>;
+        { C::expectedId1 } -> std::convertible_to<std::uint8_t>;
     };
 
     /// Driver for any DCS controller. The module's facts come from `UserConfig`:
@@ -136,51 +136,51 @@ namespace Kvasir { namespace Display {
                       "derive the panel config from Kvasir::Display::DcsDefaults");
         using Config = UserConfig;
 
-        static constexpr std::chrono::milliseconds RetryAfter
+        static constexpr std::chrono::milliseconds retryAfter
           = Kvasir::asDuration(Config::retryAfter);
-        static_assert(RetryAfter > std::chrono::milliseconds::zero(),
+        static_assert(retryAfter > std::chrono::milliseconds::zero(),
                       "retryAfter is the pause before a failed panel is brought up again");
 
-        static constexpr int Width  = static_cast<int>(Config::Width);
-        static constexpr int Height = static_cast<int>(Config::Height);
+        static constexpr int width  = static_cast<int>(Config::width);
+        static constexpr int height = static_cast<int>(Config::height);
 
         /// Window start and size must be multiples of this (gfx::Display contract).
-        static constexpr int WindowAlign = Chip::WindowAlign;
+        static constexpr int windowAlign = Chip::windowAlign;
 
-        static_assert(Width > 0 && Height > 0);
-        static_assert(Config::columnOffset % Chip::WindowAlign == 0
-                        && Width % Chip::WindowAlign == 0,
+        static_assert(width > 0 && height > 0);
+        static_assert(Config::columnOffset % Chip::windowAlign == 0
+                        && width % Chip::windowAlign == 0,
                       "this controller needs the column start and count aligned (WindowAlign)");
-        static_assert(Config::rowOffset % Chip::WindowAlign == 0 && Height % Chip::WindowAlign == 0,
+        static_assert(Config::rowOffset % Chip::windowAlign == 0 && height % Chip::windowAlign == 0,
                       "this controller needs the row start and count aligned (WindowAlign)");
-        static_assert(Config::columnOffset + Width <= Chip::MaxAddress
-                        && Config::rowOffset + Height <= Chip::MaxAddress,
+        static_assert(Config::columnOffset + width <= Chip::maxAddress
+                        && Config::rowOffset + height <= Chip::maxAddress,
                       "the window does not fit the controller's address fields");
 
         // Checked only when the bus says what it runs at (a mock bus does not).
-        static constexpr unsigned long BusWriteHz
+        static constexpr unsigned long busWriteHz
           = static_cast<unsigned long>(KVASIR_CONFIG_OR(Bus, writeHz, 0UL));
 
-        static constexpr unsigned long BusReadHz
+        static constexpr unsigned long busReadHz
           = static_cast<unsigned long>(KVASIR_CONFIG_OR(Bus, readHz, 0UL));
 
-        static_assert(Units::hertz(BusWriteHz) <= Units::Hertz{Chip::MaxWriteClock},
+        static_assert(Units::hertz(busWriteHz) <= Units::Hertz{Chip::maxWriteClock},
                       "the bus write clock exceeds what this controller allows");
-        static_assert(Units::hertz(BusReadHz) <= Units::Hertz{Chip::MaxReadClock},
+        static_assert(Units::hertz(busReadHz) <= Units::Hertz{Chip::maxReadClock},
                       "the bus read clock exceeds what this controller allows");
 
         /// The commands one turn() hands the bus without waiting for it: format() (COLMOD,
         /// MADCTL, WRCTRLD + WRDISBV with brightness control, INVON when inverted) and SLPOUT.
         /// Every other step waits until the bus is idle.
-        static constexpr std::size_t FormatBurst
-          = 3U + (Chip::Brightness ? 2U : 0U) + (Config::invert ? 1U : 0U);
+        static constexpr std::size_t formatBurst
+          = 3U + (Chip::brightness ? 2U : 0U) + (Config::invert ? 1U : 0U);
 
         // Checked only when the bus queues its commands (SpiDcsBus: CommandSlots, itself checked
         // against the SPI master's QueueDepth); a bus that sends each command at once holds any burst.
-        static_assert(detail::busHoldsFormatBurst<FormatBurst,
+        static_assert(Detail::busHoldsFormatBurst<formatBurst,
                                                   KVASIR_CONFIG_OR(Bus,
-                                                                   CommandSlots,
-                                                                   FormatBurst)>,
+                                                                   commandSlots,
+                                                                   formatBurst)>,
                       "the bus queues fewer commands than format() and SLPOUT hand it in one turn: "
                       "the last of them would be refused and every bring-up fail - raise the bus's "
                       "commandSlots (and the SPI master's QueueDepth with it)");
@@ -188,7 +188,7 @@ namespace Kvasir { namespace Display {
         using Color = Display::Rgb565;
         using Rect  = Display::Rect;
 
-        static constexpr Rect FullScreen{0, 0, Width, Height};
+        static constexpr Rect fullScreen{0, 0, width, height};
 
         struct DeviceId {
             std::uint8_t id1{};
@@ -223,12 +223,12 @@ namespace Kvasir { namespace Display {
         /// The retry schedule: the first pause retryAfter, doubling up to ten minutes (or retryAfter if that is
         /// longer).
         static inline Kvasir::
-          Backoff<Clock, Kvasir::RetryFromMs<static_cast<std::uint64_t>(RetryAfter.count())>>
+          Backoff<Clock, Kvasir::RetryFromMs<static_cast<std::uint64_t>(retryAfter.count())>>
                                     retry_{};   ///< failed when a failure is seen
         static inline std::uint32_t failures_{};
         static inline bool          failureSeen_{};
 
-        static constexpr bool HasResetLine = !requires { requires Reset::NoLine; };
+        static constexpr bool hasResetLine = !requires { requires Reset::noLine; };
 
         static bool send(std::uint8_t               cmd,
                          std::span<std::byte const> params = {}) {
@@ -279,25 +279,25 @@ namespace Kvasir { namespace Display {
             };
             auto const caset = span(x0, x1);
             auto const raset = span(y0, y1);
-            if(send(Dcs::Cmd::Caset, caset)) { send(Dcs::Cmd::Raset, raset); }
+            if(send(Dcs::Cmd::caset, caset)) { send(Dcs::Cmd::raset, raset); }
         }
 
         /// All before SLPOUT, where every datasheet's power-on figure puts them.
         static bool format() {
-            if(!send1(Dcs::Cmd::Colmod, Chip::Colmod565)) { return false; }
-            if(!send1(Dcs::Cmd::Madctl, Config::madctl)) { return false; }
-            if constexpr(Chip::Brightness) {
-                if(!send1(Dcs::Cmd::Wrctrld, Chip::CtrlDisplay)) { return false; }
-                if(!send1(Dcs::Cmd::Wrdisbv, Config::brightness)) { return false; }
+            if(!send1(Dcs::Cmd::colmod, Chip::colmod565)) { return false; }
+            if(!send1(Dcs::Cmd::madctl, Config::madctl)) { return false; }
+            if constexpr(Chip::brightness) {
+                if(!send1(Dcs::Cmd::wrctrld, Chip::ctrlDisplay)) { return false; }
+                if(!send1(Dcs::Cmd::wrdisbv, Config::brightness)) { return false; }
             }
             if constexpr(Config::invert) {
-                if(!send(Dcs::Cmd::Invon)) { return false; }
+                if(!send(Dcs::Cmd::invon)) { return false; }
             }
             return true;
         }
 
     public:
-        static constexpr std::string_view Name = Chip::Name;
+        static constexpr std::string_view name = Chip::name;
 
         /// Back to the start of bring-up. The bus is reset separately (Bus::primaryPrepare).
         static void restart() {
@@ -340,10 +340,10 @@ namespace Kvasir { namespace Display {
         template<Area R>
         static void setWindow(R const& r) {
             assert(r.w > 0 && r.h > 0 && r.x >= 0 && r.y >= 0);
-            assert(r.x + r.w <= Width && r.y + r.h <= Height);
+            assert(r.x + r.w <= width && r.y + r.h <= height);
             // A misaligned window silently renders something else.
-            assert(r.x % Chip::WindowAlign == 0 && r.w % Chip::WindowAlign == 0);
-            assert(r.y % Chip::WindowAlign == 0 && r.h % Chip::WindowAlign == 0);
+            assert(r.x % Chip::windowAlign == 0 && r.w % Chip::windowAlign == 0);
+            assert(r.y % Chip::windowAlign == 0 && r.h % Chip::windowAlign == 0);
 
             auto const x0 = r.x + Config::columnOffset;
             auto const y0 = r.y + Config::rowOffset;
@@ -357,8 +357,8 @@ namespace Kvasir { namespace Display {
                                  int x1,
                                  int y1) {
             assert(x0 >= 0 && y0 >= 0 && x0 <= x1 && y0 <= y1);
-            assert(x1 < Chip::MaxAddress && y1 < Chip::MaxAddress);
-            assert(x0 % Chip::WindowAlign == 0 && (x1 - x0 + 1) % Chip::WindowAlign == 0);
+            assert(x1 < Chip::maxAddress && y1 < Chip::maxAddress);
+            assert(x0 % Chip::windowAlign == 0 && (x1 - x0 + 1) % Chip::windowAlign == 0);
             window(x0, y0, x1, y1);
         }
 
@@ -368,7 +368,7 @@ namespace Kvasir { namespace Display {
                             int                x1,
                             int                y1,
                             std::span<C const> pixels) {
-            static_assert(detail::highByteFirst<C>(), "a Pixel is {hi, lo}, high byte first");
+            static_assert(Detail::highByteFirst<C>(), "a Pixel is {hi, lo}, high byte first");
             assert(pixels.size()
                    == static_cast<std::size_t>(x1 - x0 + 1)
                         * static_cast<std::size_t>(y1 - y0 + 1));
@@ -382,7 +382,7 @@ namespace Kvasir { namespace Display {
                  Pixel C>
         static void fill(R const& r,
                          C        c) {
-            static_assert(detail::highByteFirst<C>(), "a Pixel is {hi, lo}, high byte first");
+            static_assert(Detail::highByteFirst<C>(), "a Pixel is {hi, lo}, high byte first");
             setWindow(r);
             if(failed()) { return; }
             Bus::fillPixels(static_cast<std::uint8_t>(c.hi),
@@ -392,7 +392,7 @@ namespace Kvasir { namespace Display {
 
         template<Pixel C>
         static void fillScreen(C c) {
-            fill(FullScreen, c);
+            fill(fullScreen, c);
         }
 
         /// Asynchronous, zero-copy: `pixels` must stay unmodified until ready().
@@ -400,7 +400,7 @@ namespace Kvasir { namespace Display {
                  Pixel C>
         static void blit(R const&           r,
                          std::span<C const> pixels) {
-            static_assert(detail::highByteFirst<C>(), "a Pixel is {hi, lo}, high byte first");
+            static_assert(Detail::highByteFirst<C>(), "a Pixel is {hi, lo}, high byte first");
             assert(pixels.size() == static_cast<std::size_t>(r.w) * static_cast<std::size_t>(r.h));
             setWindow(r);
             if(failed()) { return; }
@@ -408,19 +408,19 @@ namespace Kvasir { namespace Display {
         }
 
         static void setBrightness(std::uint8_t dbv) {
-            if constexpr(Chip::Brightness) { send1(Dcs::Cmd::Wrdisbv, dbv); }
+            if constexpr(Chip::brightness) { send1(Dcs::Cmd::wrdisbv, dbv); }
         }
 
-        static void displayOn(bool on) { send(on ? Dcs::Cmd::Dispon : Dcs::Cmd::Dispoff); }
+        static void displayOn(bool on) { send(on ? Dcs::Cmd::dispon : Dcs::Cmd::dispoff); }
 
-        static void sleep(bool on) { send(on ? Dcs::Cmd::Slpin : Dcs::Cmd::Slpout); }
+        static void sleep(bool on) { send(on ? Dcs::Cmd::slpin : Dcs::Cmd::slpout); }
 
-        static void invert(bool on) { send(on ? Dcs::Cmd::Invon : Dcs::Cmd::Invoff); }
+        static void invert(bool on) { send(on ? Dcs::Cmd::invon : Dcs::Cmd::invoff); }
 
         /// Tells a broken bus from a misconfigured panel: both look like a black screen.
         static std::optional<DeviceId> readId() {
             std::array<std::byte, 3> b{};
-            if(!Bus::readRegister(Chip::ReadInstruction, Dcs::Cmd::Rddid, Chip::ReadDummyBytes, b))
+            if(!Bus::readRegister(Chip::readInstruction, Dcs::Cmd::rddid, Chip::readDummyBytes, b))
             {
                 return std::nullopt;
             }
@@ -444,7 +444,7 @@ namespace Kvasir { namespace Display {
                 ++failures_;
                 UC_LOG_W(
                   "{}: the panel or its bus failed (failure {}), bringing it up again in {} ms",
-                  Chip::Name,
+                  Chip::name,
                   failures_,
                   static_cast<long long>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(retry_.next - now)
@@ -453,8 +453,8 @@ namespace Kvasir { namespace Display {
 
             switch(state_) {
             case State::resetAssert:
-                if constexpr(HasResetLine) {
-                    reset_.begin(now, Chip::ResetPulse, Chip::ResetToCommand);
+                if constexpr(hasResetLine) {
+                    reset_.begin(now, Chip::resetPulse, Chip::resetToCommand);
                     state_ = State::resetRelease;
                 } else {
                     // The script's SWRESET does the resetting (ST7789V.md:5588).
@@ -475,7 +475,7 @@ namespace Kvasir { namespace Display {
             case State::script:
                 if(waited(now)) {
                     Dcs::Step step{};
-                    if(Chip::Init.next(scriptPos_, step)) {
+                    if(Chip::init.next(scriptPos_, step)) {
                         if(!send(step.cmd, std::as_bytes(step.params))) { break; }
                         waitAfter(now, std::chrono::milliseconds{step.delayMs});
                     } else {
@@ -486,8 +486,8 @@ namespace Kvasir { namespace Display {
 
             case State::format:
                 if(!format()) { break; }
-                if(!send(Dcs::Cmd::Slpout)) { break; }
-                waitAfter(now, Chip::SleepOut);
+                if(!send(Dcs::Cmd::slpout)) { break; }
+                waitAfter(now, Chip::sleepOut);
                 state_ = State::sleepOut;
                 break;
 
@@ -496,7 +496,7 @@ namespace Kvasir { namespace Display {
                 break;
 
             case State::clearScreen:
-                fill(FullScreen, Rgb565{});   // black
+                fill(fullScreen, Rgb565{});   // black
                 if(!failed()) { state_ = State::clearWait; }
                 break;
 
@@ -505,7 +505,7 @@ namespace Kvasir { namespace Display {
                 break;
 
             case State::displayOn:
-                if(send(Dcs::Cmd::Dispon)) {
+                if(send(Dcs::Cmd::dispon)) {
                     state_ = State::ready;
                     retry_.succeeded();
                 }

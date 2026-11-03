@@ -372,7 +372,7 @@ void submitFromACallbackDuringReset() {
 void deadBus() {
     testCase("40 failures in a row re-initialise the block");
     fresh();
-    for(std::uint32_t i = 0; i < Core::DeadBusFailures; ++i) {
+    for(std::uint32_t i = 0; i < Core::deadBusFailures; ++i) {
         Core::submit(write(Device<1>::lines, 1));
         FakeHw::finish(true);
     }
@@ -541,6 +541,216 @@ void polledCompletion() {
     check(!Polled::submit(Polled::RequestT{.lines = Device<1>::lines, .tx = one, .repeat = 17}),
           "nor a repeat past it");
     checkEq(Polled::refused(), 3U, "each counted");
+}
+
+/// A policy with the FIFO path (QueueHw.hpp `transferPolled`): the core runs short requests on an idle bus through
+/// it inside submit(). The fake loops MOSI back to MISO; `fifoOk` false is a block whose frames stopped moving.
+struct FifoHw : FakeHw {
+    static inline bool fifoOk{true};
+
+    static bool transferPolled(Transfer const& t) {
+        events.push_back("polled " + std::to_string(t.frames));
+        for(std::uint32_t i = 0; i < t.frames; ++i) {
+            t.rx[t.rxIncrement ? i : 0] = t.tx[t.txIncrement ? i : 0];
+        }
+        return fifoOk;
+    }
+};
+
+/// 20 MHz: 52 per bit in Q10, so up to 9 bytes (3744) are within pollUpTo's 4 us (4096), 10 (4160) are not.
+constexpr FifoHw::Setup fast{.hz = 20'000'000, .usPerBitQ10 = Kvasir::SPI::usPerBitQ10(20'000'000)};
+
+struct NoPollTiming : CountingTiming {
+    static constexpr std::chrono::microseconds pollUpTo{0};
+};
+
+using Fifo       = Kvasir::SPI::QueueCore<FifoHw, FakeClock, 4, 16, CountingTiming>;
+using FifoNoPoll = Kvasir::SPI::QueueCore<FifoHw, FakeClock, 4, 16, NoPollTiming>;
+static_assert(Fifo::polls && !FifoNoPoll::polls && !Core::polls,
+              "polled with transferPolled() and pollUpTo > 0 only");
+
+Fifo::RequestT fifoWrite(Lines       l,
+                         int         tag,
+                         std::size_t n = 4) {
+    return Fifo::RequestT{.setup    = fast,
+                          .lines    = l,
+                          .tx       = std::span{txBuf}.first(n),
+                          .callback = recordAs(tag)};
+}
+
+void ffresh() {
+    fresh();
+    Fifo::reset();
+    FifoNoPoll::reset();
+    events.clear();
+    results.clear();
+    FakeHw::reset();
+    FifoHw::fifoOk = true;
+}
+
+int countEvents(std::string const& e) {
+    int n = 0;
+    for(auto const& x : events) { n += x == e ? 1 : 0; }
+    return n;
+}
+
+void polledShortTransfer() {
+    testCase(
+      "a short request on an idle bus runs polled: done and called back before submit() returns");
+    ffresh();
+    static bool doneInside{};
+    static bool maskedInside{};
+    doneInside   = false;
+    maskedInside = false;
+    for(std::size_t i = 0; i < txBuf.size(); ++i) { txBuf[i] = std::byte(0x30 + i); }
+    rxBuf      = {};
+    auto r     = fifoWrite(Device<1>::lines, 1);
+    r.rx       = std::span{rxBuf}.first(4);
+    r.callback = [](Outcome o) {
+        doneInside   = o == Outcome::ok && !Device<1>::low();
+        maskedInside = FakeHw::masked;
+    };
+    check(Fifo::submit(r), "accepted");
+    check(doneInside, "the callback ran inside submit(), ok, CS already up");
+    check(maskedInside, "under the mask, as a completion interrupt");
+    check(!FakeHw::masked, "unmasked after");
+    check(events == std::vector<std::string>{"configure 0", "select 1", "polled 4", "deselect 1"},
+          "configure, select, the FIFO path, deselect - no DMA start");
+    check(rxBuf[0] == std::byte{0x30} && rxBuf[3] == std::byte{0x33},
+          "full duplex: what came back is in rx");
+    checkEq(Fifo::transfers(), 1U, "counted as a transfer");
+    check(!Fifo::busy(), "idle");
+
+    events.clear();
+    std::array<std::byte, 9> nine{};
+    check(Fifo::submit(Fifo::RequestT{.setup    = fast,
+                                      .lines    = Device<1>::lines,
+                                      .tx       = nine,
+                                      .callback = recordAs(2)}),
+          "nine bytes: still within pollUpTo");
+    check(events == std::vector<std::string>{"select 1", "polled 9", "deselect 1"},
+          "polled, and the set-up is not written again");
+}
+
+void polledOnlyWhenItWouldStartAtOnce() {
+    testCase(
+      "polled only what would start at once: not past pollUpTo, not behind a transfer, not from a "
+      "callback");
+    ffresh();
+    std::array<std::byte, 10> ten{};
+    check(Fifo::submit(Fifo::RequestT{.setup    = fast,
+                                      .lines    = Device<1>::lines,
+                                      .tx       = ten,
+                                      .callback = recordAs(1)}),
+          "ten bytes accepted");
+    check(countEvents("start 10") == 1 && countEvents("polled 10") == 0,
+          "ten bytes are past pollUpTo: by DMA");
+    check(Fifo::submit(fifoWrite(Device<2>::lines, 2)), "a short one behind it accepted");
+    check(countEvents("polled 4") == 0 && !Device<2>::low(),
+          "queued, not polled past the transfer on the wire");
+    FakeHw::finish();
+    check(countEvents("start 4") == 1 && Device<2>::low(), "started by DMA from the completion");
+    FakeHw::finish();
+    check(results.size() == 2 && count(Outcome::ok) == 2, "both completed");
+
+    // a polled request's callback submits another short one: it does not nest, it goes by DMA after
+    ffresh();
+    static int inner{};
+    inner      = 0;
+    auto r     = fifoWrite(Device<1>::lines, 1);
+    r.callback = [](Outcome) {
+        Fifo::submit(fifoWrite(Device<2>::lines, 2));
+        inner = countEvents("polled 4");
+    };
+    check(Fifo::submit(r), "accepted");
+    checkEq(inner, 1, "the inner submit was not polled inside the callback");
+    check(countEvents("start 4") == 1 && Device<2>::low(),
+          "it started by DMA once the callback returned");
+    FakeHw::finish();
+    check(results.size() == 1 && results[0].first == 2 && results[0].second == Outcome::ok,
+          "and completed by its interrupt");
+
+    // pollUpTo 0: the same request by DMA
+    ffresh();
+    check(FifoNoPoll::submit(FifoNoPoll::RequestT{.setup    = fast,
+                                                  .lines    = Device<1>::lines,
+                                                  .tx       = std::span{txBuf}.first(4),
+                                                  .callback = recordAs(1)}),
+          "accepted");
+    check(countEvents("start 4") == 1 && countEvents("polled 4") == 0 && results.empty(),
+          "pollUpTo 0: by DMA, no callback yet");
+    FakeHw::finish();
+    checkEq(results.size(), 1U, "completed by the interrupt");
+    FifoNoPoll::reset();
+}
+
+void polledHoldAndCommand() {
+    testCase(
+      "polled: a hold keeps CS, its continuation runs polled; a command phase calls between()");
+    ffresh();
+    auto first = fifoWrite(Device<1>::lines, 1);
+    first.hold = true;
+    check(Fifo::submit(first), "the holding part accepted");
+    check(Device<1>::low() && results.size() == 1 && results[0].second == Outcome::ok,
+          "done, CS stays low");
+    check(Fifo::submit(fifoWrite(Device<2>::lines, 2)), "another device's request accepted");
+    check(countEvents("polled 4") == 1 && !Device<2>::low(), "it waits behind the hold");
+    check(Fifo::submit(fifoWrite(Device<1>::lines, 3)), "the continuation accepted");
+    checkEq(countEvents("select 1"), 1, "the continuation selects nothing again");
+    check(results.size() >= 2 && results[1].first == 3, "the continuation ran polled at once");
+    check(!Device<1>::low(), "and ended the hold");
+    check(countEvents("start 4") == 1 && Device<2>::low(),
+          "the waiting device started by DMA after it");
+    FakeHw::finish();
+    checkEq(results.size(), 3U, "all three called back");
+
+    ffresh();
+    static int betweens{};
+    betweens  = 0;
+    Lines l   = Device<1>::lines;
+    l.between = [] {
+        ++betweens;
+        events.emplace_back("between");
+    };
+    std::array<std::byte, 3> cmd{std::byte{0x00}, std::byte{0x39}, std::byte{0x00}};
+    rxBuf = {};
+    check(Fifo::submit(Fifo::RequestT{.setup    = fast,
+                                      .lines    = l,
+                                      .command  = cmd,
+                                      .rx       = std::span{rxBuf}.first(1),
+                                      .callback = recordAs(1)}),
+          "a W5500-shaped access: 3 command bytes, 1 read");
+    check(events
+            == std::vector<std::string>{"configure 0",
+                                        "select 1",
+                                        "polled 3",
+                                        "between",
+                                        "polled 1",
+                                        "deselect 1"},
+          "command, between(), data, under one CS");
+    checkEq(betweens, 1, "between() once");
+    check(results.size() == 1 && results[0].second == Outcome::ok, "one callback");
+}
+
+void polledStall() {
+    testCase(
+      "a polled transfer whose frames stop: aborted, failed, counted and logged as a timeout");
+    ffresh();
+    FifoHw::fifoOk = false;
+    check(Fifo::submit(fifoWrite(Device<1>::lines, 1)), "accepted");
+    checkEq(FakeHw::aborts, 1, "the block aborted");
+    check(results.size() == 1 && results[0].second == Outcome::failed,
+          "the request failed at once");
+    check(!Device<1>::low(), "CS up");
+    checkEq(Fifo::timeouts(), 1U, "counted as a timeout");
+    checkEq(Fifo::lastTimeout().hw.marker, 42U, "with the block's snapshot");
+    checkEq(Log::warnings, 1, "and logged");
+    checkEq(Fifo::consecutiveFailures(), 1U, "towards a dead bus");
+    FifoHw::fifoOk = true;
+    check(Fifo::submit(fifoWrite(Device<1>::lines, 2)) && results.size() == 2
+            && results[1].second == Outcome::ok,
+          "the next one goes through");
+    checkEq(Fifo::consecutiveFailures(), 0U, "and ends the streak");
 }
 
 void callbacksMaySubmit() {
@@ -937,6 +1147,10 @@ int main() {
     wireTime();
     latency();
     polledCompletion();
+    polledShortTransfer();
+    polledOnlyWhenItWouldStartAtOnce();
+    polledHoldAndCommand();
+    polledStall();
     commandPhase();
     callbacksMaySubmit();
     resetAndReleaseHoldFromACallback();

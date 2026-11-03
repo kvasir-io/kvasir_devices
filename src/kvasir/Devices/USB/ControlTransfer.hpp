@@ -8,21 +8,21 @@
 #include <cstdint>
 #include <utility>
 
-namespace Kvasir::USB::detail {
+namespace Kvasir::USB::Detail {
 
 /// Where endpoint 0's control transfer stands (USB 2.0 chapter 8.5.3), shared by its IN and OUT
 /// side. A transition the protocol does not allow is logged and taken anyway: the host decides
 /// what happens next, the device only notices that it lost track.
 struct EP0ControlState {
 private:
-    ControlStage currentStage{ControlStage::Idle};
+    ControlStage currentStage{ControlStage::idle};
     // A protocol bug repeats per transfer; no clock here, so count based.
     Kvasir::CountLimiter<> badTransitionLog_{};
 
     // Transition table: for each destination state, bitmask of valid source states
     // valid_from[to_state] = bitmask where bit N = 1 if transition from state N is valid
     // Bit 0=Idle, Bit 1=Setup, Bit 2=Data, Bit 3=Status, Bit 4=Stall
-    static constexpr std::array<std::uint8_t, 5> valid_from = {
+    static constexpr std::array<std::uint8_t, 5> validFrom = {
       0b01000,   // [0] to Idle:   valid from Status (bit 3)
       0b11111,   // [1] to Setup:  valid from any state (bits 0-4)
       0b00010,   // [2] to Data:   valid from Setup (bit 1)
@@ -32,7 +32,7 @@ private:
 
 public:
     constexpr void transition(ControlStage newStage) {
-        auto const validMask  = valid_from[std::to_underlying(newStage)];
+        auto const validMask  = validFrom[std::to_underlying(newStage)];
         auto const currentBit = 1U << std::to_underlying(currentStage);
 
         if(!(validMask & currentBit)) {
@@ -48,6 +48,6 @@ public:
 
     [[nodiscard]] constexpr ControlStage stage() const { return currentStage; }
 
-    constexpr void reset() { currentStage = ControlStage::Idle; }
+    constexpr void reset() { currentStage = ControlStage::idle; }
 };
-}   // namespace Kvasir::USB::detail
+}   // namespace Kvasir::USB::Detail

@@ -11,28 +11,28 @@
 #include "kvasir/Log/LogLimited.hpp"
 #include "kvasir/Log/RateLimiter.hpp"
 
-namespace Kvasir::detail {
+namespace Kvasir::Detail {
 /// The no-op lines' arguments: named only inside `sizeof`, never called or defined. They stay
 /// type-checked, and two lines that differ only in their text stay two different statements.
 template<typename... Args>
 int unloggedLine(Args const&...);
-}   // namespace Kvasir::detail
+}   // namespace Kvasir::Detail
 
 #ifndef UC_LOG_W
-    #define UC_LOG_W(...) static_cast<void>(sizeof(::Kvasir::detail::unloggedLine(__VA_ARGS__)))
+    #define UC_LOG_W(...) static_cast<void>(sizeof(::Kvasir::Detail::unloggedLine(__VA_ARGS__)))
 #endif
 #ifndef UC_LOG_I
-    #define UC_LOG_I(...) static_cast<void>(sizeof(::Kvasir::detail::unloggedLine(__VA_ARGS__)))
+    #define UC_LOG_I(...) static_cast<void>(sizeof(::Kvasir::Detail::unloggedLine(__VA_ARGS__)))
 #endif
 #ifndef UC_LOG_D
-    #define UC_LOG_D(...) static_cast<void>(sizeof(::Kvasir::detail::unloggedLine(__VA_ARGS__)))
+    #define UC_LOG_D(...) static_cast<void>(sizeof(::Kvasir::Detail::unloggedLine(__VA_ARGS__)))
 #endif
 #ifndef UC_LOG_E
-    #define UC_LOG_E(...) static_cast<void>(sizeof(::Kvasir::detail::unloggedLine(__VA_ARGS__)))
+    #define UC_LOG_E(...) static_cast<void>(sizeof(::Kvasir::Detail::unloggedLine(__VA_ARGS__)))
 #endif
 // uc_log's scoped settings (uc_log/LogEnv.hpp); nothing where uc_log is not there. The drivers'
 // log modules need no declaration: uc_log derives each line's from the scope of its function
-// (Kvasir::I2C::Bus<...>::run -> "i2c.bus", Kvasir::Engine::detail::logUp -> "engine").
+// (Kvasir::I2C::Bus<...>::run -> "i2c.bus", Kvasir::Engine::Detail::logUp -> "engine").
 #ifndef UC_LOG_SCOPE_MODULE
     #define UC_LOG_SCOPE_MODULE(name) static_assert(true)
 #endif

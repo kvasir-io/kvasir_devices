@@ -62,22 +62,22 @@ namespace Adt7420Detail {
 /// `Adt7420<>` is the 13-bit reset default, 1/16 degC; `Adt7420<Resolution::bits16>` is 16-bit,
 /// 1/128 degC.
 /// Setpoints are always the 13-bit format, left-aligned by three. 0x48..0x4B by A1 A0.
-/// `Timing::LimitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
+/// `Timing::limitsVerifyInterval`: limits read back (Groups::LimitsReadBack).
 template<Adt7420Detail::Resolution Res = Adt7420Detail::Resolution::bits13,
          typename Timing               = Engine::DefaultTiming>
 struct Adt7420 {
-    static constexpr std::string_view Name = "ADT7420";
+    static constexpr std::string_view name = "ADT7420";
     /// Analog Devices ADT7420. ADT7420.md:592, :739: ID (0x0B) is 0xCB, the manufacturer in 7:3 and
     /// the silicon revision below it.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x0B, 1, true, 0xF8, 0xC8},
     };
-    static constexpr Address7    Address       = 0x48;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x48;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x48, 4>();
+    static constexpr auto addresses = addressRun<0x48, 4>();
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{250};
+    static constexpr auto startupDelay = std::chrono::milliseconds{250};
 
     using Mode       = Adt7420Detail::Mode;
     using Faults     = Adt7420Detail::Faults;
@@ -91,13 +91,13 @@ struct Adt7420 {
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
         state.deviceId   = static_cast<std::uint8_t>(ids[0]);
-        state.resolution = Res;   // what Config::Initial writes right after
+        state.resolution = Res;   // what Config::initial writes right after
         // Table 19: the manufacturer ID 11001 in bits 7:3; bits 2:0 are the silicon revision
     }
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
@@ -126,12 +126,12 @@ struct Adt7420 {
     struct Config {
         using Value = Adt7420Detail::Config;
 
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         /// A one-shot mode starts a conversion with every write, so the same value again is a
         /// new command: every set goes out.
-        static constexpr bool  AlwaysWrite = true;
-        static constexpr Value Initial{.resolution = Res};
+        static constexpr bool  alwaysWrite = true;
+        static constexpr Value initial{.resolution = Res};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -164,10 +164,10 @@ struct Adt7420 {
     /// THIGH, TLOW then TCRIT, always the 13-bit format (1/16 degC).
     struct Limits : Engine::Groups::LimitsReadBack<Timing> {
         using Value                        = CentiDegC;
-        static constexpr std::size_t Items = 3;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t items = 3;
+        static constexpr std::size_t bytes = 2;
 
-        static constexpr std::array<std::uint8_t, 3> Registers{0x04, 0x06, 0x08};
+        static constexpr std::array<std::uint8_t, 3> registers{0x04, 0x06, 0x08};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
                                                            std::size_t          item,
@@ -180,15 +180,15 @@ struct Adt7420 {
             putBe16(buffer,
                     0,
                     static_cast<std::uint16_t>(static_cast<std::uint16_t>(sixteenths) << 3));
-            return Engine::Step::writeBuffer({.reg = Registers[item], .offset = 0, .count = 2});
+            return Engine::Step::writeBuffer({.reg = registers[item], .offset = 0, .count = 2});
         }
     };
 
     /// Whole degrees, 0..15.
     struct Hysteresis {
         using Value                          = DegC;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Units::degC(5);
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Units::degC(5);
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         hysteresis,
                                                            std::span<std::byte> buffer) {
@@ -199,9 +199,9 @@ struct Adt7420 {
         }
     };
 
-    static constexpr std::size_t High     = 0;
-    static constexpr std::size_t Low      = 1;
-    static constexpr std::size_t Critical = 2;
+    static constexpr std::size_t high     = 0;
+    static constexpr std::size_t low      = 1;
+    static constexpr std::size_t critical = 2;
 
     using Reads  = Engine::List<Temperature>;
     using Writes = Engine::List<Config, Limits, Hysteresis>;

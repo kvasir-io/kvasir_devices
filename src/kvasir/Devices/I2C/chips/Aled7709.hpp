@@ -86,49 +86,49 @@ template<Aled7709Detail::Variant      V           = Aled7709Detail::Variant::a,
          Aled7709Detail::Curve        Conversion  = Aled7709Detail::Curve::linear,
          std::uint8_t                 ChannelMask = 0x0F>
 struct Aled7709 {
-    static constexpr std::string_view Name = "ALED7709";
+    static constexpr std::string_view name = "ALED7709";
 
     /// DEVID (00h): VERS_ID, bits 7:4, is 1h, "cut 1.x (hardwired)"; REV_ID below it is 3h on the
     /// parts of DS14214 rev 5 and is left open (ALED7709.md:1745..1766).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"devid", 0x00, 1, true, 0xF0, 0x10},
     };
 
-    static constexpr std::uint8_t DimCfg = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t dimCfg = static_cast<std::uint8_t>(
       0x80U | (static_cast<unsigned>(Frequency) << 3U) | (static_cast<unsigned>(Conversion) << 2U)
       | static_cast<unsigned>(Dim));
 
     /// What a finished bring-up leaves in the part: operation mode, the channels of `ChannelMask`
     /// on and none tied together, the registers (not the PWMI pin) in control, user dimming at the
     /// frequency, curve and global / local mode of the template arguments.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"operating", 0x01, 1, true, 0x01,        0x01},
       Engine::RegisterCheck{ "channels", 0x11, 1, true, 0x7F, ChannelMask},
-      Engine::RegisterCheck{  "dimming", 0x14, 1, true, 0xFF,      DimCfg},
+      Engine::RegisterCheck{  "dimming", 0x14, 1, true, 0xFF,      dimCfg},
     };
 
-    static constexpr Address7 Address
+    static constexpr Address7 address
       = V == Aled7709Detail::Variant::a ? Address7{0x28} : Address7{0x29};
-    static constexpr std::array<Address7, 2> Addresses{0x28, 0x29};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::array<Address7, 2> addresses{0x28, 0x29};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::size_t Channels = 4;
+    static constexpr std::size_t channels = 4;
 
     static_assert((ChannelMask & 0xF0U) == 0,
                   "four channels: CEN1..CEN4 are bits 0..3");
 
     /// The current a gain of 255 gives: ICH_SET = 1022 V / RISET (Table 5).
-    static constexpr MicroAmp MaxCurrent
+    static constexpr MicroAmp maxCurrent
       = Units::microAmp(static_cast<std::int32_t>(1'022'000'000LL / Units::value(Riset)));
 
-    static_assert(Units::value(MaxCurrent) >= 25'000 && Units::value(MaxCurrent) <= 200'000,
+    static_assert(Units::value(maxCurrent) >= 25'000 && Units::value(maxCurrent) <= 200'000,
                   "RISET sets 25 mA (40.7 k) to 200 mA (5.11 k)");
 
     /// The gain at or below a wanted current: IOUT = IOUT,max * GAIN / 255 (8.3.4). The data
     /// sheet's accuracy figures hold from 25 mA up; below that the part still follows the code.
     [[nodiscard]] static constexpr std::uint8_t gainFor(MicroAmp current) {
         auto const wanted = Units::value(current);
-        auto const max    = Units::value(MaxCurrent);
+        auto const max    = Units::value(maxCurrent);
         if(wanted <= 0) { return 0; }
         if(wanted >= max) { return 255; }
         return static_cast<std::uint8_t>(static_cast<std::int64_t>(wanted) * 255 / max);
@@ -138,17 +138,17 @@ struct Aled7709 {
     /// whatever an earlier run latched is gone. 2 ms for the start-up the part runs from there
     /// before its status means anything is not in the data sheet as a number; the first Status
     /// read a period later is what sees it.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x01, .payload = {0x00}}),   // standby: configuration first
-      Engine::Step::write({.reg = 0x14, .payload = {DimCfg}}),
+      Engine::Step::write({.reg = 0x14, .payload = {dimCfg}}),
       Engine::Step::write({.reg = 0x11, .payload = {ChannelMask}}),
       Engine::Step::write({.reg = 0x01, .payload = {0x81}, .delay = std::chrono::milliseconds{2}}),
     };
 
     /// DEVSTA, CHSTA, INITSTA in one read.
     struct Status {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x17, .count = 3, .offset = 0})};
 
         struct Sample {
@@ -208,8 +208,8 @@ struct Aled7709 {
     /// application's -- but a level it has set is put back after a bring-up, like any write group.
     struct Level {
         using Value                        = Aled7709Detail::Level;
-        static constexpr std::size_t Items = Channels;
-        static constexpr std::size_t Bytes = 3;
+        static constexpr std::size_t items = channels;
+        static constexpr std::size_t bytes = 3;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::size_t          item,
@@ -228,8 +228,8 @@ struct Aled7709 {
     struct ClearFaults {
         struct Value {};
 
-        static constexpr std::size_t Bytes     = 1;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 1;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&,
                                                            std::span<std::byte> buffer) {

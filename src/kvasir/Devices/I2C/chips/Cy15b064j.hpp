@@ -25,21 +25,21 @@ namespace Kvasir::I2C::Chips {
 /// `Store::fits()` say how much would go, for an application that wants to check first.
 template<std::size_t ChunkBytes = 64>
 struct Cy15b064j {
-    static constexpr std::string_view Name          = "CY15B064J";
-    static constexpr Address7         Address       = 0x50;
-    static constexpr std::size_t      RegisterBytes = 2;
+    static constexpr std::string_view name          = "CY15B064J";
+    static constexpr Address7         address       = 0x50;
+    static constexpr std::size_t      registerBytes = 2;
 
-    static constexpr auto Addresses = addressRun<0x50, 8>();
+    static constexpr auto addresses = addressRun<0x50, 8>();
 
     static_assert(ChunkBytes >= 1 && ChunkBytes <= 128,
                   "a chunk is 1..128 bytes");
 
     /// The whole 8 KB address space; there is no protected region.
-    static constexpr std::uint16_t Capacity = 0x2000;
+    static constexpr std::uint16_t capacity = 0x2000;
 
     /// A one-byte read from address zero: the bring-up transaction, and the probe an absent
     /// part is looked for with.
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x0000, .count = 1, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0x0000, .count = 1, .offset = 0})};
 
     struct Block {
         struct Request {
@@ -48,19 +48,19 @@ struct Cy15b064j {
         };
 
         /// The address goes at the front of the buffer and the data behind it.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::readIndirect({.regOffset = 0, .count = ChunkBytes, .offset = 2})};
 
         /// The address a request reads from: clamped to the last byte of the array.
         [[nodiscard]] static constexpr std::uint16_t start(Request const& r) {
-            return r.address < Capacity ? r.address : static_cast<std::uint16_t>(Capacity - 1);
+            return r.address < capacity ? r.address : static_cast<std::uint16_t>(capacity - 1);
         }
 
         /// How many bytes it reads: its length, at most a chunk, and not past the end.
         [[nodiscard]] static constexpr std::size_t fits(Request const& r) {
             return std::min({static_cast<std::size_t>(r.length),
                              ChunkBytes,
-                             static_cast<std::size_t>(Capacity) - start(r)});
+                             static_cast<std::size_t>(capacity) - start(r)});
         }
 
         /// Returns how many bytes to read, so one description serves every length.
@@ -95,18 +95,18 @@ struct Cy15b064j {
     struct Store {
         using Value = Chunk;
 
-        static constexpr std::size_t Bytes = ChunkBytes;
+        static constexpr std::size_t bytes = ChunkBytes;
 
         /// Writing memory is a one-shot command, not a state to restore after a reset.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         /// How many of the value's bytes go out: none from an address past the end, else up
         /// to a chunk and the end of the array.
         [[nodiscard]] static constexpr std::uint8_t fits(Value const& value) {
-            if(value.address >= Capacity) { return 0; }
+            if(value.address >= capacity) { return 0; }
             auto const n = std::min({static_cast<std::size_t>(value.length),
                                      ChunkBytes,
-                                     static_cast<std::size_t>(Capacity) - value.address});
+                                     static_cast<std::size_t>(capacity) - value.address});
             return static_cast<std::uint8_t>(n);
         }
 
@@ -122,10 +122,10 @@ struct Cy15b064j {
 
     /// The memory interface (Eeprom24aa025e48).
     using Write                                  = Store;
-    static constexpr std::size_t WritableBytes   = Capacity;
-    static constexpr std::size_t ReadChunkBytes  = ChunkBytes;
-    static constexpr std::size_t WriteChunkBytes = ChunkBytes;
-    static constexpr std::size_t WritePageBytes  = 0;
+    static constexpr std::size_t writableBytes   = capacity;
+    static constexpr std::size_t readChunkBytes  = ChunkBytes;
+    static constexpr std::size_t writeChunkBytes = ChunkBytes;
+    static constexpr std::size_t writePageBytes  = 0;
 
     using Reads  = Engine::List<Block>;
     using Writes = Engine::List<Store>;

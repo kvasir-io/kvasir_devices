@@ -80,7 +80,7 @@ struct I2cBus : Record<I2cBus<Tag>> {
     using Result   = typename Core::Result;
 
     static constexpr char const* name  = "i2c";
-    static constexpr std::size_t Depth = Core::QueueDepth;
+    static constexpr std::size_t depth = Core::queueDepth;
 
     static R map(Result r) { return static_cast<R>(r); }
 
@@ -196,7 +196,7 @@ struct SpiBus : Record<SpiBus<Tag>> {
     using Result  = typename Core::Result;
 
     static constexpr char const* name  = "spi";
-    static constexpr std::size_t Depth = Core::QueueDepth;
+    static constexpr std::size_t depth = Core::queueDepth;
 
     static R map(Result r) {
         switch(r) {

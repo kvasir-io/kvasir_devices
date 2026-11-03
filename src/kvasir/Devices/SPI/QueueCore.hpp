@@ -6,6 +6,13 @@
 // main loop, a callback or any interrupt; each runs under the policy's mask, depth-counted (Bus/MaskDepth.hpp). A
 // callback runs where the completion is found (DMA interrupt on the RP, turn() on the SAM), from
 // a copy of itself, and may submit(), releaseHold() or reset(); what it submits starts after it.
+//
+// The polled path: a policy with `transferPolled()` (QueueHw.hpp) moves a SHORT request - wire time at most
+// `Timing::pollUpTo` - through the FIFOs itself when it would start at once anyway (bus idle, nothing queued, not
+// inside a callback, or the continuation of the hold it belongs to). That runs inside submit(), under the mask, and
+// the callback runs there too, before submit() returns: on a DMA master a short transfer costs ~10x its wire time in
+// DMA set-up and completion interrupt, more than the polling. A driver already has to expect that (the DMA can finish
+// before submit() returns); the masked time is the wire time plus the FIFO accesses.
 #include "../Bus/Callbacks.hpp"
 #include "../Bus/DeadBus.hpp"
 #include "../Bus/MaskDepth.hpp"
@@ -24,6 +31,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -88,7 +96,7 @@ namespace Kvasir { namespace SPI {
         std::uint16_t                                                               ticket{};
         bool                                                                        cancelled{};
         bool                                                                        abortable{true};
-        [[no_unique_address]] ::Kvasir::detail::IfFeature<Deadlines, TimePoint, 30> deadline{
+        [[no_unique_address]] ::Kvasir::Detail::IfFeature<Deadlines, TimePoint, 30> deadline{
           TimePoint::max()};
     };
 
@@ -109,6 +117,9 @@ namespace Kvasir { namespace SPI {
         static constexpr std::chrono::milliseconds holdTimeout{50};
         /// Failures in a row after which the block is re-initialised.
         static constexpr std::uint32_t deadBusFailures = 40;
+        /// A request whose wire time is at most this runs polled (a policy with `transferPolled()`, the comment at
+        /// the top); 0 = never. Interrupts stay masked for that long.
+        static constexpr std::chrono::microseconds pollUpTo{4};
     };
 
     /// Hw, the chip's half: the QueueHw concept (QueueHw.hpp, the contract written out there).
@@ -118,31 +129,37 @@ namespace Kvasir { namespace SPI {
              std::size_t CallbackCapacity,
              typename Timing = QueueCoreDefaults>
     struct QueueCore {
-        static constexpr std::size_t QueueDepth   = Depth;
-        static constexpr std::size_t CallbackSize = CallbackCapacity;
+        static constexpr std::size_t queueDepth   = Depth;
+        static constexpr std::size_t callbackSize = CallbackCapacity;
         using Setup                               = typename Hw::Setup;
         using tp                                  = typename Clock::time_point;
 
         /// `Timing::queueFeatures` (BusTypes.hpp), else its defaults (latency and the timeout snapshot).
-        static constexpr Bus::QueueFeatures Features
+        static constexpr Bus::QueueFeatures features
           = Bus::QueueFeatures{KVASIR_CONFIG_OR(Timing, queueFeatures, Bus::QueueFeatures{})};
 
-        static constexpr bool Tracked = Features.cancel || Features.deadlines;
+        static constexpr bool tracked = features.cancel || features.deadlines;
         using RequestT
-          = std::conditional_t<Tracked,
-                               TrackedRequest<Setup, CallbackSize, tp, Features.deadlines>,
-                               Request<Setup, CallbackSize>>;
+          = std::conditional_t<tracked,
+                               TrackedRequest<Setup, callbackSize, tp, features.deadlines>,
+                               Request<Setup, callbackSize>>;
         /// The I2C bus's results (BusTypes.hpp); an SPI transfer never ends `nack`.
-        using Result = std::conditional_t<Tracked, Bus::TrackedOutcome, Bus::Outcome>;
+        using Result = std::conditional_t<tracked, Bus::TrackedOutcome, Bus::Outcome>;
 
-        static constexpr auto TimeoutMargin = std::chrono::duration_cast<std::chrono::microseconds>(
+        static constexpr auto timeoutMargin = std::chrono::duration_cast<std::chrono::microseconds>(
           KVASIR_CONFIG_OR(Timing, timeoutMargin, QueueCoreDefaults::timeoutMargin));
-        static constexpr auto HoldTimeout = std::chrono::duration_cast<std::chrono::microseconds>(
+        static constexpr auto holdTimeout = std::chrono::duration_cast<std::chrono::microseconds>(
           KVASIR_CONFIG_OR(Timing,
                            holdTimeout,
                            std::chrono::microseconds{QueueCoreDefaults::holdTimeout}));
-        static constexpr std::uint32_t DeadBusFailures
+        static constexpr std::uint32_t deadBusFailures
           = KVASIR_CONFIG_OR(Timing, deadBusFailures, QueueCoreDefaults::deadBusFailures);
+        static constexpr auto pollUpTo = std::chrono::duration_cast<std::chrono::microseconds>(
+          KVASIR_CONFIG_OR(Timing, pollUpTo, QueueCoreDefaults::pollUpTo));
+        /// The polled path (the comment at the top) exists: the policy has it and pollUpTo is not 0.
+        static constexpr bool polls = requires(Transfer const& t) {
+            { Hw::transferPolled(t) } -> std::same_as<bool>;
+        } && pollUpTo.count() > 0;
 
         /// Taken before the abort.
         struct TimeoutSnapshot {
@@ -168,23 +185,23 @@ namespace Kvasir { namespace SPI {
 
         // -- the bus's own API ---------------------------------------------------------------
 
-        static constexpr bool          SupportsWide = KVASIR_CONFIG_OR(Hw, supportsWide, true);
-        static constexpr std::uint32_t MaxFrames
+        static constexpr bool          supportsWide = KVASIR_CONFIG_OR(Hw, supportsWide, true);
+        static constexpr std::uint32_t maxFrames
           = KVASIR_CONFIG_OR(Hw, maxFrames, std::numeric_limits<std::uint32_t>::max());
 
         /// A hold needs a `select`: a holder with no identity would adopt any device's request.
         static constexpr bool wellFormed(RequestT const& r) {
-            if(r.wide && !SupportsWide) { return false; }
+            if(r.wide && !supportsWide) { return false; }
             if(r.hold && r.lines.select == nullptr) { return false; }
             std::size_t const unit = r.wide ? 2U : 1U;
-            if(r.command.size() > MaxFrames) { return false; }
+            if(r.command.size() > maxFrames) { return false; }
             if(r.repeat != 0) {
-                return r.tx.size() == unit && r.rx.empty() && r.repeat <= MaxFrames;
+                return r.tx.size() == unit && r.rx.empty() && r.repeat <= maxFrames;
             }
             if(!r.tx.empty() && !r.rx.empty() && r.tx.size() != r.rx.size()) { return false; }
             auto const bytes = std::max(r.tx.size(), r.rx.size());
             if(bytes == 0) { return !r.command.empty(); }
-            return bytes % unit == 0 && bytes / unit <= MaxFrames;
+            return bytes % unit == 0 && bytes / unit <= maxFrames;
         }
 
         /// False (no callback) when full, a continuation already waits, or not wellFormed().
@@ -195,6 +212,16 @@ namespace Kvasir { namespace SPI {
                 return false;
             }
             mask_.lock();
+            if constexpr(polls) {
+                if(startsAtOnce_(req)) {
+                    auto const t = resolve_(req);
+                    if(shortEnough_(req, t)) {
+                        runPolled_(req, t);
+                        mask_.unlock();
+                        return true;
+                    }
+                }
+            }
             bool accepted = false;
             if(holding_ && req.lines.select == holder_.select) {
                 if(!haveContinuation_) {
@@ -213,7 +240,7 @@ namespace Kvasir { namespace SPI {
 
         /// submit(), with a ticket for cancel(); an invalid ticket (refused, no callback) when submit() would be false.
         static Bus::Ticket submitTracked(RequestT req)
-            requires(Tracked)
+            requires(tracked)
         {
             mask_.lock();
             req.ticket = Bus::nextTicket(ticketCounter_);
@@ -225,7 +252,7 @@ namespace Kvasir { namespace SPI {
         /// callback (cancelled) has run before this returns. tooLate: completed already, an unknown ticket, or on
         /// the wire with `abortable` false (it runs to its end).
         static Bus::Cancel cancel(Bus::Ticket t)
-            requires(Features.cancel)
+            requires(features.cancel)
         {
             if(!t.valid()) { return Bus::Cancel::tooLate; }
             mask_.lock();
@@ -278,16 +305,16 @@ namespace Kvasir { namespace SPI {
                   "spi{} {} transfers failed in a row with no success -- "
                   "re-initialising the block",
                   Hw::instance,
-                  DeadBusFailures);
+                  deadBusFailures);
                 reset();
                 return;
             }
 
             mask_.lock();
-            if constexpr(Features.deadlines) { expireDeadlines_(now); }
+            if constexpr(features.deadlines) { expireDeadlines_(now); }
             if(active_ && now > deadline_) {
                 ++x_.timeouts;
-                if constexpr(Features.timeoutSnapshot) { x_.lastTimeout = snapshot_(now); }
+                if constexpr(features.timeoutSnapshot) { x_.lastTimeout = snapshot_(now); }
                 KVASIR_LOG_LIMITED(x_.faultLog.note(Fault::timeout, now),
                                    UC_LOG_W,
                                    "spi{} transfer of {} frame(s) lost: {} us, {} expected",
@@ -305,7 +332,7 @@ namespace Kvasir { namespace SPI {
                                    "spi{} a device held the bus {} us with nothing to send -- "
                                    "released",
                                    Hw::instance,
-                                   static_cast<std::uint32_t>(HoldTimeout.count()));
+                                   static_cast<std::uint32_t>(holdTimeout.count()));
                 endHold_();
                 tryStart_();
             } else if(!active_) {
@@ -345,26 +372,26 @@ namespace Kvasir { namespace SPI {
         // -- counters ---------------------------------------------------------------------------
 
         static std::uint32_t timeouts()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.timeouts;
         }
 
         static std::uint32_t overruns()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.overruns;
         }
 
         static std::uint32_t holdTimeouts()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.holdTimeouts;
         }
 
         /// Failed without going on the wire.
         static std::uint32_t drainedRequests()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.drained;
         }
@@ -372,39 +399,39 @@ namespace Kvasir { namespace SPI {
         static std::uint32_t consecutiveFailures() { return x_.deadBus.consecutiveFailures(); }
 
         static std::uint32_t resuscitations()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.deadBus.resuscitations();
         }
 
         /// Completions that came after their transfer's timeout.
         static std::uint32_t staleCompletions()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.stale;
         }
 
         static std::uint32_t transfers()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.transfers;
         }
 
         /// Not wellFormed(): a driver bug.
         static std::uint32_t refused()
-            requires(Features.counters)
+            requires(features.counters)
         {
             return x_.refused;
         }
 
         static TimeoutSnapshot const& lastTimeout()
-            requires(Features.timeoutSnapshot)
+            requires(features.timeoutSnapshot)
         {
             return x_.lastTimeout;
         }
 
         static void logLastTimeout()
-            requires(Features.timeoutSnapshot)
+            requires(features.timeoutSnapshot)
         {
             [[maybe_unused]] auto const& t = x_.lastTimeout;
             UC_LOG_W(
@@ -421,7 +448,7 @@ namespace Kvasir { namespace SPI {
 
         /// Taken and cleared.
         static Latency takeLatency()
-            requires(Features.latency)
+            requires(features.latency)
         {
             mask_.lock();
             LatencyTicks const l = x_.latency;
@@ -441,7 +468,7 @@ namespace Kvasir { namespace SPI {
                 return;
             }
             auto const now = Clock::now();
-            if constexpr(Features.latency) {
+            if constexpr(features.latency) {
                 auto const late = now - startedAt_
                                 - std::chrono::duration_cast<typename Clock::duration>(expected_);
                 if(late.count() > 0) {
@@ -479,7 +506,7 @@ namespace Kvasir { namespace SPI {
         struct Entry {
             RequestT request{};
             [[no_unique_address]] std::
-              conditional_t<Features.latency, tp, ::Kvasir::detail::NoStamp> queuedAt{};
+              conditional_t<features.latency, tp, ::Kvasir::Detail::NoStamp> queuedAt{};
         };
 
         enum class Fault : std::uint8_t { timeout = 1, overrun, holdTimeout };
@@ -487,13 +514,13 @@ namespace Kvasir { namespace SPI {
         /// The queue's view of an entry (Bus/RequestQueue.hpp): its request.
         struct QueueSpec {
             using Result                    = QueueCore::Result;
-            static constexpr bool Tracked   = QueueCore::Tracked;
-            static constexpr bool Deadlines = Features.deadlines;
+            static constexpr bool tracked   = QueueCore::tracked;
+            static constexpr bool deadlines = features.deadlines;
 
             static RequestT& request(Entry& e) { return e.request; }
         };
 
-        inline static ::Kvasir::Bus::RequestQueue<Entry, QueueDepth, Clock, QueueSpec> queue_{};
+        inline static ::Kvasir::Bus::RequestQueue<Entry, queueDepth, Clock, QueueSpec> queue_{};
         inline static Entry                                                            current_{};
         inline static Entry                        continuation_{};
         inline static bool                         haveContinuation_{};
@@ -519,11 +546,11 @@ namespace Kvasir { namespace SPI {
         /// of ONE static object, next to a counter that is always there: a static member takes a
         /// byte even when empty, a [[no_unique_address]] member of a struct takes none.
         template<typename T>
-        using Counter = ::Kvasir::detail::StatCount<Features.counters, T>;
+        using Counter = ::Kvasir::Detail::StatCount<features.counters, T>;
 
         struct Extras {
             // logic: the streak; the resuscitations a counter (Bus/DeadBus.hpp)
-            ::Kvasir::Bus::DeadBusWatch<DeadBusFailures, Counter<std::uint32_t>> deadBus{};
+            ::Kvasir::Bus::DeadBusWatch<deadBusFailures, Counter<std::uint32_t>> deadBus{};
             [[no_unique_address]] Counter<std::uint32_t>                         timeouts{};
             [[no_unique_address]] Counter<std::uint32_t>                         overruns{};
             [[no_unique_address]] Counter<std::uint32_t>                         holdTimeouts{};
@@ -532,10 +559,10 @@ namespace Kvasir { namespace SPI {
             [[no_unique_address]] Counter<std::uint32_t>                         transfers{};
             [[no_unique_address]] Counter<std::uint32_t>                         refused{};
             [[no_unique_address]] std::
-              conditional_t<Features.latency, LatencyTicks, ::Kvasir::detail::NoStamp> latency{};
-            [[no_unique_address]] std::conditional_t<Features.timeoutSnapshot,
+              conditional_t<features.latency, LatencyTicks, ::Kvasir::Detail::NoStamp> latency{};
+            [[no_unique_address]] std::conditional_t<features.timeoutSnapshot,
                                                      TimeoutSnapshot,
-                                                     ::Kvasir::detail::NoStamp> lastTimeout{};
+                                                     ::Kvasir::Detail::NoStamp> lastTimeout{};
             [[no_unique_address]] Kvasir::FaultLog<Clock, Fault>                faultLog{};
         };
 
@@ -554,7 +581,7 @@ namespace Kvasir { namespace SPI {
 
         static Entry entryOf_(RequestT const& r) {
             Entry e{.request = r};
-            if constexpr(Features.latency) { e.queuedAt = Clock::now(); }
+            if constexpr(features.latency) { e.queuedAt = Clock::now(); }
             return e;
         }
 
@@ -582,7 +609,10 @@ namespace Kvasir { namespace SPI {
                             .wide        = false};
         }
 
-        static Transfer transferOf_(RequestT const& r) {
+        static Transfer transferOf_(RequestT const& r) { return resolve_(r); }
+
+        /// transferOf_()'s body; inlined into the polled path, which takes it once per request.
+        [[gnu::always_inline]] static Transfer resolve_(RequestT const& r) {
             auto const unit = r.wide ? 2U : 1U;
             Transfer   t{.wide = r.wide};
             if(r.repeat != 0) {
@@ -618,10 +648,109 @@ namespace Kvasir { namespace SPI {
             start_(continuation);
         }
 
+        /// Under the lock: `r` would start at once - what tryStart_() would pick next. A request with a deadline goes
+        /// through the queue (its expiry is the queue's).
+        [[gnu::always_inline]] static bool startsAtOnce_(RequestT const& r)
+            requires(polls)
+        {
+            if(active_ || resetting_ || inv_.inCallback()) { return false; }
+            if(holding_) {
+                if(haveContinuation_ || r.lines.select != holder_.select) { return false; }
+            } else if(!queue_.empty()) {
+                return false;
+            }
+            if constexpr(features.deadlines) {
+                if(r.deadline != tp::max()) { return false; }
+            }
+            return true;
+        }
+
+        /// The wire time of `command` + `t` at most pollUpTo. 64 frames a part keep bits x usPerBitQ10 in 32 bits
+        /// down to the slowest PL022 / SERCOM clock (~2.3 kHz: 444 000 per bit, x 1536 bits).
+        [[gnu::always_inline]] static bool shortEnough_(RequestT const& r,
+                                                        Transfer const& t)
+            requires(polls)
+        {
+            constexpr std::size_t partLimit = 64;
+            if(r.command.size() > partLimit || t.frames > partLimit) { return false; }
+            auto const bits
+              = static_cast<std::uint32_t>(r.command.size() * 8U + t.frames * (t.wide ? 16U : 8U));
+            return bits * r.setup.usPerBitQ10 <= pollUpToQ10;
+        }
+
+        static constexpr std::uint32_t pollUpToQ10 = [] {
+            static_assert(
+              pollUpTo <= std::chrono::milliseconds{1},
+              "pollUpTo above 1 ms: interrupts stay masked for the whole polled transfer");
+            return static_cast<std::uint32_t>(pollUpTo.count()) * 1024U;
+        }();
+
+        /// Under the lock, from submit(): `r` (resolved to `t`) through the policy's FIFOs, its callback, then what
+        /// that callback submitted (by DMA: tryStart_() runs no polled transfer, so a callback chain does not nest).
+        /// The steps of start_() + complete() + finish_() without the DMA, the clock and the interrupt; a plain ok
+        /// frame (the common case) is finished here, a hold or a failure by finish_().
+        [[gnu::always_inline]] static void runPolled_(RequestT const& r,
+                                                      Transfer const& t)
+            requires(polls)
+        {
+            bool const continuation = holding_;
+            if(!continuation && !(configured_ && r.setup == setup_)) {
+                Hw::configure(r.setup);
+                setup_      = r.setup;
+                configured_ = true;
+            }
+            if(r.lines.prepare != nullptr) { r.lines.prepare(); }
+            if(!continuation && r.lines.select != nullptr) { r.lines.select(); }
+            ++x_.transfers;
+            bool ok = true;
+            if(!r.command.empty()) {
+                ok = Hw::transferPolled(commandOf_(r));
+                if(ok && hasData_(r)) {
+                    if(r.lines.between != nullptr) { r.lines.between(); }
+                    ok = Hw::transferPolled(t);
+                }
+            } else {
+                ok = Hw::transferPolled(t);
+            }
+            if(ok && !r.hold) {
+                x_.deadBus.note(Result::ok, false);
+                if(r.lines.deselect != nullptr) { r.lines.deselect(); }
+                holding_ = false;
+                // in place: StaticFunction calls a copy of its captures, and `r` is the caller's
+                inv_.invoke(r.callback, Result::ok);
+            } else {
+                if(!ok) { lostPolled_(); }
+                current_.request
+                  = r;   // finish_() works on current_ (a hold keeps its lines from there)
+                finish_(ok ? Result::ok : Result::failed);
+            }
+            if(haveContinuation_ || !queue_.empty()) { tryStart_(); }
+        }
+
+        /// A polled transfer whose frames stopped moving (the policy gave up): counted and logged as a timeout,
+        /// the block aborted; the caller fails the request.
+        static void lostPolled_()
+            requires(polls)
+        {
+            auto const now = Clock::now();
+            ++x_.timeouts;
+            KVASIR_LOG_LIMITED(x_.faultLog.note(Fault::timeout, now),
+                               UC_LOG_W,
+                               "spi{} polled transfer stalled: no frame moved -- aborted",
+                               Hw::instance);
+            if constexpr(features.timeoutSnapshot) {
+                x_.lastTimeout
+                  = TimeoutSnapshot{.hw     = Hw::snapshot(),
+                                    .queued = static_cast<std::uint32_t>(queue_.size()),
+                                    .held   = holding_};
+            }
+            Hw::abort();
+        }
+
         /// Under the lock: the request on the wire past its deadline is stopped (timedOut), queued ones past theirs
         /// become tombstones with their callback (timedOut).
         static void expireDeadlines_(tp now)
-            requires(Features.deadlines)
+            requires(features.deadlines)
         {
             if(active_ && now > current_.request.deadline) {
                 Hw::abort();
@@ -642,7 +771,7 @@ namespace Kvasir { namespace SPI {
             auto const t   = inCommand_ ? commandOf_(r) : transferOf_(r);
             auto const now = Clock::now();
 
-            if constexpr(Features.latency) {
+            if constexpr(features.latency) {
                 auto const waited = now - current_.queuedAt;
                 if(waited.count() > 0) {
                     ::Kvasir::Bus::raiseMax(x_.latency.queueWait, ::Kvasir::Bus::ticks32(waited));
@@ -669,7 +798,7 @@ namespace Kvasir { namespace SPI {
             frames_    = t.frames;
             expected_  = wireTime(t.frames, t.wide, usPerBit);
             startedAt_ = now;
-            deadline_  = now + 2 * expected_ + TimeoutMargin;
+            deadline_  = now + 2 * expected_ + timeoutMargin;
             ++generation_;
             Hw::start(t, generation_, &complete);
         }
@@ -685,7 +814,7 @@ namespace Kvasir { namespace SPI {
                 if(r.hold) {
                     holding_      = true;
                     holder_       = r.lines;
-                    holdDeadline_ = Clock::now() + HoldTimeout;
+                    holdDeadline_ = Clock::now() + holdTimeout;
                 } else {
                     if(r.lines.deselect != nullptr) { r.lines.deselect(); }
                     holding_ = false;

@@ -37,7 +37,7 @@
 /// request deeper than the Bus needs.
 namespace Kvasir::I2C {
 
-namespace detail {
+namespace Detail {
     /// A MuxPort for every switch of a Bus, in the order Bus::Segments numbers them.
     template<typename BusT, typename Seq>
     struct ScanPorts;
@@ -47,7 +47,7 @@ namespace detail {
         using type = std::tuple<MuxPort<typename BusT::template SwitchDeviceAt<Ks>,
                                         typename BusT::template SwitchArbiterAt<Ks>::PolicyT>...>;
     };
-}   // namespace detail
+}   // namespace Detail
 
 template<typename BusT,
          typename Hints  = NoHints,
@@ -59,28 +59,28 @@ public:
     using Clock = typename BusT::ClockT;
     using Slot  = ProbeSlot<I2c, Clock, Probe, Config>;
 
-    static constexpr std::size_t Switches  = BusT::Switches;
-    static constexpr bool        HasSwitch = Switches != 0;
+    static constexpr std::size_t switches  = BusT::switches;
+    static constexpr bool        hasSwitch = switches != 0;
 
-    static_assert(Switches <= 32,
+    static_assert(switches <= 32,
                   "more switches than a scan keeps track of");
 
     static_assert(
       []<std::size_t... Ks>(std::index_sequence<Ks...>) {
           return ((BusT::template segmentOf<typename BusT::template SwitchDeviceAt<Ks>>() == 0)
                   && ... && true);
-      }(std::make_index_sequence<Switches>{}),
+      }(std::make_index_sequence<switches>{}),
       "BusScan sets switches that are in front of every part: a switch behind "
       "another switch's channel is not supported");
 
-    static_assert(detail::queueFits<I2c>(BusT::QueueDepth + 1),
+    static_assert(Detail::queueFits<I2c>(BusT::queueDepth + 1),
                   "a bus scan's probe needs a queue slot of its own beside the Bus's devices: "
                   "raise the bus behavior's QueueDepth");
 
     /// How long the switches may take to be claimed and set for a segment before the scan
     /// decides one that is not set is not there, and leaves its channels out
     /// (ScanDefaults::selectTimeout), until setSelectTimeout(ms) says otherwise.
-    static constexpr auto SelectTimeout = detail::selectTimeoutOf<Config>();
+    static constexpr auto selectTimeout = Detail::selectTimeoutOf<Config>();
 
     void setSelectTimeout(std::chrono::milliseconds t) { selectTimeout_ = t; }
 
@@ -96,7 +96,7 @@ public:
     /// The switches are the Bus's own and so are their arbiters (Bus::arbiter<K>()), which is
     /// what the gates are bound to unless the application bound them elsewhere.
     explicit BusScan(BusT& bus) : bus_{bus} {
-        if constexpr(HasSwitch) { bindOwn_(std::make_index_sequence<Switches>{}); }
+        if constexpr(hasSwitch) { bindOwn_(std::make_index_sequence<switches>{}); }
     }
 
     /// The switches are the Bus's own, and `arbiters` the ones the application bound their
@@ -104,9 +104,9 @@ public:
     template<typename... Arbiters>
     BusScan(BusT& bus,
             Arbiters&... arbiters)
-        requires(HasSwitch && sizeof...(Arbiters) == Switches)
+        requires(hasSwitch && sizeof...(Arbiters) == switches)
       : bus_{bus} {
-        bindPorts_(std::make_index_sequence<Switches>{}, arbiters...);
+        bindPorts_(std::make_index_sequence<switches>{}, arbiters...);
     }
 
     BusScan(BusScan const&)            = delete;
@@ -138,7 +138,7 @@ public:
     /// answer too.
     [[nodiscard]] bool found(std::size_t  segment,
                              std::uint8_t address) const {
-        return segment < BusT::Segments && found_[segment].contains(address);
+        return segment < BusT::segments && found_[segment].contains(address);
     }
 
     /// Devices that answered and that no part of the Bus owns, in the last scan.
@@ -149,7 +149,7 @@ public:
 
     /// True when any switch was missing in the last scan (its channels left out), or when the
     /// Bus has no switch at all and the front is all there is.
-    [[nodiscard]] bool switchless() const { return !HasSwitch || missing_ != 0; }
+    [[nodiscard]] bool switchless() const { return !hasSwitch || missing_ != 0; }
 
     /// The switches that were not there in the last scan, bit K for switch K.
     [[nodiscard]] std::uint32_t missingSwitches() const { return missing_; }
@@ -182,19 +182,19 @@ public:
 private:
     enum class State : std::uint8_t { idle, probe, wait };
 
-    using Ports = typename detail::ScanPorts<BusT, std::make_index_sequence<Switches>>::type;
+    using Ports = typename Detail::ScanPorts<BusT, std::make_index_sequence<switches>>::type;
 
     /// For each segment and address, 1 + the index of the part of the Bus that owns it there,
     /// or 0.
-    static constexpr auto Owners = [] {
-        std::array<std::array<std::uint8_t, 0x80>, BusT::Segments> owners{};
-        Engine::detail::forEach<typename BusT::Devices>([&](auto i) {
-            using D = typename Engine::detail::Nth<typename BusT::Devices>::template type<
+    static constexpr auto owners = [] {
+        std::array<std::array<std::uint8_t, 0x80>, BusT::segments> ownersHere{};
+        Engine::Detail::forEach<typename BusT::Devices>([&](auto i) {
+            using D = typename Engine::Detail::Nth<typename BusT::Devices>::template type<
               decltype(i)::value>;
-            owners[BusT::segmentOf(decltype(i)::value)][D::Address & 0x7FU]
+            ownersHere[BusT::segmentOf(decltype(i)::value)][D::address & 0x7FU]
               = static_cast<std::uint8_t>(decltype(i)::value + 1U);
         });
-        return owners;
+        return ownersHere;
     }();
 
     template<std::size_t... Ks>
@@ -218,7 +218,7 @@ private:
     /// f(K, port, switch) for every switch.
     template<typename F>
     void forPorts_(F&& f) {
-        forPorts_(f, std::make_index_sequence<Switches>{});
+        forPorts_(f, std::make_index_sequence<switches>{});
     }
 
     template<typename F,
@@ -239,7 +239,7 @@ private:
     }
 
     void beginSegment_() {
-        if(seek_(First)) {
+        if(seek_(first)) {
             state_ = State::probe;
         } else {
             endSegment_();
@@ -251,14 +251,14 @@ private:
         if(segment_ != 0) {
             // What answers in front of the switches answers on every channel too, and a part in
             // front of them is looked at there.
-            if(found(0, address) || Owners[0][address] != 0) { return false; }
+            if(found(0, address) || owners[0][address] != 0) { return false; }
         }
-        return owned_ == Owned::probe || Owners[segment_][address] == 0;
+        return owned_ == Owned::probe || owners[segment_][address] == 0;
     }
 
     /// The next address from `from` on that the segment wants; false when there is none.
     bool seek_(unsigned from) {
-        for(unsigned a = from; a <= Last; ++a) {
+        for(unsigned a = from; a <= last; ++a) {
             if(wanted_(static_cast<std::uint8_t>(a))) {
                 addr_ = static_cast<std::uint8_t>(a);
                 return true;
@@ -272,14 +272,14 @@ private:
     /// within SelectTimeout, is taken to be not there: the scan goes on without it and leaves
     /// its channels out.
     bool ready_() {
-        if constexpr(HasSwitch) {
+        if constexpr(hasSwitch) {
             std::uint32_t unready = 0;
             forPorts_([&](std::size_t k, auto& port, auto const&) {
                 if(missingAt_(k)) { return; }
                 using P             = std::remove_cvref_t<decltype(port)>;
                 auto const position = segment_ != 0 && BusT::switchOfSegment(segment_) == k
                                       ? BusT::channelOfSegment(segment_)
-                                      : P::Closed;
+                                      : P::closed;
                 if(!port.claim(position)) { unready |= std::uint32_t{1} << k; }
             });
             if(unready == 0) {
@@ -306,7 +306,7 @@ private:
                   "bus scan {}: the switch at {:#04x} was not set ({}), so its channels are "
                   "not scanned",
                   BusT::segmentName(segment_),
-                  std::remove_cvref_t<decltype(sw)>::Address,
+                  std::remove_cvref_t<decltype(sw)>::address,
                   sw.link());
             });
             if(skipped_(segment_)) { nextSegment_(); }
@@ -317,7 +317,7 @@ private:
     }
 
     void record_(typename Slot::Outcome outcome) {
-        auto const owner = Owners[segment_][addr_];
+        auto const owner = owners[segment_][addr_];
         switch(outcome) {
         case Slot::Outcome::waiting: return;
         case Slot::Outcome::ack:
@@ -363,8 +363,8 @@ private:
         bus_.visit(index, [&]([[maybe_unused]] auto const& d) {
             UC_LOG_D("bus scan {}: {:#04x} {} {}",
                      BusT::segmentName(segment_),
-                     std::remove_cvref_t<decltype(d)>::Address,
-                     std::remove_cvref_t<decltype(d)>::Chip::Name,
+                     std::remove_cvref_t<decltype(d)>::address,
+                     std::remove_cvref_t<decltype(d)>::Chip::name,
                      what);
         });
     }
@@ -373,15 +373,15 @@ private:
     /// themselves: a part that is not answering is a line (a Broadcast is not a part).
     void endSegment_() {
         if(owned_ == Owned::skip) {
-            for(std::size_t index = 0; index < BusT::Count; ++index) {
+            for(std::size_t index = 0; index < BusT::count; ++index) {
                 if(BusT::segmentOf(index) != segment_) { continue; }
                 bus_.visit(index, [&](auto const& d) {
                     using D = std::remove_cvref_t<decltype(d)>;
                     if(d.answering() || d.offline() || !BusT::template isPart<D>()) { return; }
                     UC_LOG_W("bus scan {}: {:#04x} {} {}",
                              BusT::segmentName(segment_),
-                             std::remove_cvref_t<decltype(d)>::Address,
-                             std::remove_cvref_t<decltype(d)>::Chip::Name,
+                             std::remove_cvref_t<decltype(d)>::address,
+                             std::remove_cvref_t<decltype(d)>::Chip::name,
                              d.link());
                 });
             }
@@ -392,8 +392,8 @@ private:
     /// On to the next segment whose switch is there; the scan ends after the last.
     void nextSegment_() {
         releasePorts_();
-        do { ++segment_; } while(segment_ < BusT::Segments && skipped_(segment_));
-        if(segment_ >= BusT::Segments) {
+        do { ++segment_; } while(segment_ < BusT::segments && skipped_(segment_));
+        if(segment_ >= BusT::segments) {
             finish_();
             return;
         }
@@ -421,9 +421,9 @@ private:
     BusT&                                  bus_;
     [[no_unique_address]] Ports            ports_{};
     Slot                                   slot_{};
-    std::array<AddressSet, BusT::Segments> found_{};
+    std::array<AddressSet, BusT::segments> found_{};
     typename Clock::time_point             askedAt_{};
-    std::chrono::milliseconds              selectTimeout_{SelectTimeout};
+    std::chrono::milliseconds              selectTimeout_{selectTimeout};
     std::size_t                            segment_{};
     std::size_t                            others_{};
     std::size_t                            faults_{};
@@ -432,7 +432,7 @@ private:
     std::uint32_t                          missing_{};
     State                                  state_{State::idle};
     Owned                                  owned_{Owned::skip};
-    std::uint8_t                           addr_{First};
+    std::uint8_t                           addr_{first};
     bool                                   asking_{};
 };
 

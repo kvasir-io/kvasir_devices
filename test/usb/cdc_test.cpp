@@ -19,10 +19,10 @@ struct Config : TestConfig {
 };
 
 // CdcAcm: interface 0 management (endpoint 1 IN, interrupt), interface 1 data (endpoint 2).
-constexpr std::size_t DataEp   = 2;
+constexpr std::size_t dataEp   = 2;
 using Acm                      = Kvasir::USB::CDC::Request;
-constexpr std::uint8_t DataIn  = 0x82;
-constexpr std::uint8_t DataOut = 0x02;
+constexpr std::uint8_t dataIn  = 0x82;
+constexpr std::uint8_t dataOut = 0x02;
 
 template<typename Device>
 std::vector<std::byte> drain() {
@@ -90,7 +90,7 @@ void run(char const* name) {
     testCase("SERIAL_STATE goes out on the notification endpoint");
     {
         using State = typename Device::SerialState;
-        check(Device::sendSerialState(State::Dcd | State::Dsr), "taken");
+        check(Device::sendSerialState(State::dcd | State::dsr), "taken");
         check(!Device::sendSerialState(0), "one at a time");
         auto const in = Fake::hostIn(1);
         check(in.handshake == Fake::Handshake::ack && in.packet.data.size() == 10, "10 bytes");
@@ -109,19 +109,19 @@ void run(char const* name) {
         open();
         auto const small = pattern(10);
         check(Device::send(small), "10 bytes");
-        auto r = Host::bulkIn(DataEp);
+        auto r = Host::bulkIn(dataEp);
         check(r.data == small && r.endedShort, "arrive as one short packet");
         check(!r.data1[0], "DATA0 first after SET_CONFIGURATION");
 
         auto const full = pattern(64, 1);
         check(Device::send(full), "64 bytes");
-        r = Host::bulkIn(DataEp);
+        r = Host::bulkIn(dataEp);
         check(r.data == full && r.endedShort, "arrive");
         checkEq(r.data1.size(), 2U, "as a full packet and a zero-length one");
 
         auto const big = pattern(200, 2);
         check(Device::send(big), "200 bytes");
-        r = Host::bulkIn(DataEp);
+        r = Host::bulkIn(dataEp);
         check(r.data == big && r.endedShort, "arrive");
         checkEq(r.data1.size(), 4U, "64 + 64 + 64 + 8");
         bool alternates = true;
@@ -131,13 +131,13 @@ void run(char const* name) {
         check(alternates, "with the data toggle alternating");
 
         check(Device::send({}), "an empty message");
-        r = Host::bulkIn(DataEp);
+        r = Host::bulkIn(dataEp);
         check(r.data.empty() && r.endedShort, "is a zero-length packet");
 
         check(Device::send(small) && Device::send(full) && Device::send(small), "three queued");
-        check(Host::bulkIn(DataEp).data == small, "first");
-        check(Host::bulkIn(DataEp).data == full, "second");
-        check(Host::bulkIn(DataEp).data == small, "third");
+        check(Host::bulkIn(dataEp).data == small, "first");
+        check(Host::bulkIn(dataEp).data == full, "second");
+        check(Host::bulkIn(dataEp).data == small, "third");
         check(!Device::send(pattern(513)), "a message larger than the send buffer is refused");
     }
 
@@ -145,14 +145,14 @@ void run(char const* name) {
     {
         open();
         auto const data = pattern(100, 3);
-        checkEq(Host::bulkOut(DataEp, data), 100U, "100 bytes taken");
+        checkEq(Host::bulkOut(dataEp, data), 100U, "100 bytes taken");
         check(drain<Device>() == data, "and read back");
 
         auto const        flood = pattern(64 * 8, 4);
-        std::size_t const taken = Host::bulkOut(DataEp, flood);
+        std::size_t const taken = Host::bulkOut(dataEp, flood);
         check(taken >= 128 && taken < flood.size(), "a 192-byte queue takes some, then NAKs");
         auto              got  = drain<Device>();
-        std::size_t const rest = Host::bulkOut(DataEp, std::span{flood}.subspan(taken));
+        std::size_t const rest = Host::bulkOut(dataEp, std::span{flood}.subspan(taken));
         check(rest > 0, "reading makes room, and the host's retry is taken");
         auto const more = drain<Device>();
         got.insert(got.end(), more.begin(), more.end());
@@ -165,16 +165,16 @@ void run(char const* name) {
         open();
         auto const msg = pattern(300, 5);
         check(Device::send(msg), "300 bytes queued");
-        auto const first = Fake::hostIn(DataEp);
+        auto const first = Fake::hostIn(dataEp);
         check(first.handshake == Fake::Handshake::ack, "the first packet");
         Host::pump();
-        check(Host::setHalt(DataIn).ok(), "SET_FEATURE(ENDPOINT_HALT)");
-        check(Fake::hostIn(DataEp).handshake == Fake::Handshake::stall, "reads STALL");
+        check(Host::setHalt(dataIn).ok(), "SET_FEATURE(ENDPOINT_HALT)");
+        check(Fake::hostIn(dataEp).handshake == Fake::Handshake::stall, "reads STALL");
         auto const st
-          = Host::controlIn(Host::makeSetup(fromEndpoint, Setup::Request::getStatus, 0, DataIn, 2));
+          = Host::controlIn(Host::makeSetup(fromEndpoint, Setup::Request::getStatus, 0, dataIn, 2));
         check(st.ok() && std::to_integer<int>(st.data[0]) == 1, "GET_STATUS says halted");
-        check(Host::clearHalt(DataIn).ok(), "CLEAR_FEATURE(ENDPOINT_HALT)");
-        auto const rest = Host::bulkIn(DataEp);
+        check(Host::clearHalt(dataIn).ok(), "CLEAR_FEATURE(ENDPOINT_HALT)");
+        auto const rest = Host::bulkIn(dataEp);
         check(!rest.data1.empty() && !rest.data1[0], "the toggle starts over at DATA0");
         std::vector<std::byte> all = first.packet.data;
         all.insert(all.end(), rest.data.begin(), rest.data.end());
@@ -185,11 +185,11 @@ void run(char const* name) {
     {
         open();
         auto const data = pattern(64, 6);
-        checkEq(Host::bulkOut(DataEp, data), 64U, "one packet taken");
-        check(Host::setHalt(DataOut).ok(), "halted");
-        check(Fake::hostOut(DataEp, data) == Fake::Handshake::stall, "writes STALL");
-        check(Host::clearHalt(DataOut).ok(), "cleared");
-        checkEq(Host::bulkOut(DataEp, data), 64U, "and taken again");
+        checkEq(Host::bulkOut(dataEp, data), 64U, "one packet taken");
+        check(Host::setHalt(dataOut).ok(), "halted");
+        check(Fake::hostOut(dataEp, data) == Fake::Handshake::stall, "writes STALL");
+        check(Host::clearHalt(dataOut).ok(), "cleared");
+        checkEq(Host::bulkOut(dataEp, data), 64U, "and taken again");
         checkEq(drain<Device>().size(), 128U, "both packets are in the queue");
     }
 
@@ -197,17 +197,17 @@ void run(char const* name) {
     {
         open();
         check(Device::send(pattern(300, 7)), "300 bytes queued");
-        check(Fake::hostIn(DataEp).handshake == Fake::Handshake::ack, "one packet goes");
+        check(Fake::hostIn(dataEp).handshake == Fake::Handshake::ack, "one packet goes");
         Host::pump();
-        checkEq(Host::bulkOut(DataEp, pattern(64, 8)), 64U, "one packet comes");
+        checkEq(Host::bulkOut(dataEp, pattern(64, 8)), 64U, "one packet comes");
         check(Host::setConfiguration(1).ok(), "SET_CONFIGURATION(1) again");
-        check(Host::bulkIn(DataEp).data.empty(), "the rest of the message is gone");
+        check(Host::bulkIn(dataEp).data.empty(), "the rest of the message is gone");
         check(drain<Device>().empty(), "and so is the received packet");
         auto const fresh = pattern(70, 9);
         check(Device::send(fresh), "a new message");
-        auto const r = Host::bulkIn(DataEp);
+        auto const r = Host::bulkIn(dataEp);
         check(r.data == fresh && !r.data1[0], "arrives whole, from DATA0");
-        checkEq(Host::bulkOut(DataEp, fresh), 70U, "and the OUT endpoint takes data again");
+        checkEq(Host::bulkOut(dataEp, fresh), 70U, "and the OUT endpoint takes data again");
         check(drain<Device>() == fresh, "which is what is read");
     }
 
@@ -215,7 +215,7 @@ void run(char const* name) {
     {
         open();
         check(Device::send(pattern(300, 10)), "300 bytes queued");
-        check(Fake::hostIn(DataEp).handshake == Fake::Handshake::ack, "one packet goes");
+        check(Fake::hostIn(dataEp).handshake == Fake::Handshake::ack, "one packet goes");
         Host::pump();
         Host::busReset();
         check(!Device::isConnected() && !Device::isSendReady(), "closed and unconfigured");
@@ -224,10 +224,10 @@ void run(char const* name) {
                 Host::makeSetup(classToInterface, Acm::setControlLineState, 0x0001, 0, 0))
                 .ok(),
               "opens again");
-        check(Host::bulkIn(DataEp).data.empty(), "nothing of the old message is left");
+        check(Host::bulkIn(dataEp).data.empty(), "nothing of the old message is left");
         auto const fresh = pattern(130, 11);
         check(Device::send(fresh), "a new message");
-        check(Host::bulkIn(DataEp).data == fresh, "arrives whole");
+        check(Host::bulkIn(dataEp).data == fresh, "arrives whole");
     }
 
     checkEq(Fake::violations, 0, "the device kept to the backend contract throughout");

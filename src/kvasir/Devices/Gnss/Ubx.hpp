@@ -301,22 +301,22 @@ namespace Ublox {
     using Units::MilliMetrePerSecond;
 
     /// UBX-ACK-ACK and -NAK (32.8): every CFG message is answered with one.
-    inline constexpr std::uint8_t AckClass = 0x05;
-    inline constexpr std::uint8_t AckNak   = 0x00;
-    inline constexpr std::uint8_t AckAck   = 0x01;
+    inline constexpr std::uint8_t ackClass = 0x05;
+    inline constexpr std::uint8_t ackNak   = 0x00;
+    inline constexpr std::uint8_t ackAck   = 0x01;
 
     /// The CFG class (32.10) and the ids used here: an ACK names the message it answers.
-    inline constexpr std::uint8_t CfgClass  = 0x06;
-    inline constexpr std::uint8_t CfgPrtId  = 0x00;
-    inline constexpr std::uint8_t CfgMsgId  = 0x01;
-    inline constexpr std::uint8_t CfgRateId = 0x08;
+    inline constexpr std::uint8_t cfgClass  = 0x06;
+    inline constexpr std::uint8_t cfgPrtId  = 0x00;
+    inline constexpr std::uint8_t cfgMsgId  = 0x01;
+    inline constexpr std::uint8_t cfgRateId = 0x08;
 
-    inline constexpr std::uint8_t NavPvtClass = 0x01;
-    inline constexpr std::uint8_t NavPvtId    = 0x07;
+    inline constexpr std::uint8_t navPvtClass = 0x01;
+    inline constexpr std::uint8_t navPvtId    = 0x07;
 
     /// UBX-CFG-PRT in/outProtoMask bits (32.10.25.5).
-    inline constexpr std::uint16_t ProtoUbx  = 0x0001;
-    inline constexpr std::uint16_t ProtoNmea = 0x0002;
+    inline constexpr std::uint16_t protoUbx  = 0x0001;
+    inline constexpr std::uint16_t protoNmea = 0x0002;
 
     /// UBX-CFG-PRT for the DDC port (32.10.25.5): port 0, no TX-ready, `address` as
     /// mode.slaveAddr, the protocols, no flags. 28 bytes.
@@ -326,8 +326,8 @@ namespace Ublox {
               std::uint16_t in,
               std::uint16_t out) {
         auto const mode = static_cast<std::uint8_t>(address << 1U);
-        return ubxFrame(CfgClass,
-                        CfgPrtId,
+        return ubxFrame(cfgClass,
+                        cfgPrtId,
                         std::array<std::uint8_t, 20>{0x00,
                                                      0x00,
                                                      0x00,
@@ -363,8 +363,8 @@ namespace Ublox {
                std::uint8_t  port = 1) {
         auto const b
           = [&](unsigned shift) { return static_cast<std::uint8_t>((baud >> shift) & 0xFFU); };
-        return ubxFrame(CfgClass,
-                        CfgPrtId,
+        return ubxFrame(cfgClass,
+                        cfgPrtId,
                         std::array<std::uint8_t, 20>{port,
                                                      0x00,
                                                      0x00,
@@ -389,8 +389,8 @@ namespace Ublox {
 
     // UART1 at 9600 baud, UBX in, UBX out: the frame u-center sends for that.
     static_assert(cfgPrtUart(9600,
-                             ProtoUbx,
-                             ProtoUbx)
+                             protoUbx,
+                             protoUbx)
                   == std::array<std::uint8_t,
                                 28>{0xB5,
                                     0x62,
@@ -428,7 +428,7 @@ namespace Ublox {
     cfgMsg(std::uint8_t cls,
            std::uint8_t id,
            std::uint8_t rate) {
-        return ubxFrame(CfgClass, CfgMsgId, std::array<std::uint8_t, 3>{cls, id, rate});
+        return ubxFrame(cfgClass, cfgMsgId, std::array<std::uint8_t, 3>{cls, id, rate});
     }
 
     /// UBX-CFG-MSG, the rates of one message on all six I/O ports at once (32.10.18.2; port 0 is
@@ -443,8 +443,8 @@ namespace Ublox {
                 std::array<std::uint8_t,
                            6> rates) {
         return ubxFrame(
-          CfgClass,
-          CfgMsgId,
+          cfgClass,
+          cfgMsgId,
           std::array<std::uint8_t,
                      8>{cls, id, rates[0], rates[1], rates[2], rates[3], rates[4], rates[5]});
     }
@@ -459,8 +459,8 @@ namespace Ublox {
         auto const ms = static_cast<std::uint16_t>(
           std::clamp(measRate, std::chrono::milliseconds{25}, std::chrono::milliseconds{65535})
             .count());
-        return ubxFrame(CfgClass,
-                        CfgRateId,
+        return ubxFrame(cfgClass,
+                        cfgRateId,
                         std::array<std::uint8_t, 6>{static_cast<std::uint8_t>(ms & 0xFFU),
                                                     static_cast<std::uint8_t>(ms >> 8U),
                                                     0x01,
@@ -471,8 +471,8 @@ namespace Ublox {
 
     // Two of the SAM-M8Q's bring-up frames at their defaults, worked by hand against 32.4.
     static_assert(cfgPrtDdc(0x42,
-                            ProtoUbx,
-                            ProtoUbx)
+                            protoUbx,
+                            protoUbx)
                   == std::array<std::uint8_t,
                                 28>{0xB5,
                                     0x62,
@@ -502,8 +502,8 @@ namespace Ublox {
                                     0x00,
                                     0xA0,
                                     0x96});
-    static_assert(cfgMsg(NavPvtClass,
-                         NavPvtId,
+    static_assert(cfgMsg(navPvtClass,
+                         navPvtId,
                          1)
                   == std::array<std::uint8_t,
                                 11>{0xB5,
@@ -612,7 +612,7 @@ namespace Ublox {
         }
     }   // namespace NavPvtImpl
 
-    inline constexpr std::size_t NavPvtBytes = 92;
+    inline constexpr std::size_t navPvtBytes = 92;
 
     /// A UBX-NAV-PVT payload (the framer's `payload`, without header and checksum). Offsets
     /// and scalings are 32.17.17.1's. The bit positions of `valid` (validDate 0, validTime 1,
@@ -623,7 +623,7 @@ namespace Ublox {
     [[nodiscard]] constexpr NavPvt decodeNavPvt(std::span<std::byte const> p) {
         using namespace NavPvtImpl;
         NavPvt n{};
-        if(p.size() < NavPvtBytes) { return n; }
+        if(p.size() < navPvtBytes) { return n; }
         n.iTow   = std::chrono::milliseconds{u4(p, 0)};
         n.date   = std::chrono::year_month_day{std::chrono::year{static_cast<int>(u2(p, 4))},
                                                std::chrono::month{u1(p, 6)},

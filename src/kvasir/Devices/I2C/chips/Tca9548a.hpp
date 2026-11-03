@@ -17,11 +17,11 @@ namespace Kvasir::I2C::Chips {
 /// the control byte (7.5.4). All channels start closed. 0x70..0x77 by A2..A0. The devices
 /// behind it are ordinary Devices on the same bus, gated by a MuxGate (../Mux.hpp).
 struct Tca9548a {
-    static constexpr std::string_view Name          = "TCA9548A";
-    static constexpr Address7         Address       = 0x70;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "TCA9548A";
+    static constexpr Address7         address       = 0x70;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr auto Addresses = addressRun<0x70, 8>();
+    static constexpr auto addresses = addressRun<0x70, 8>();
 
     /// The control byte. Read back every `VerifyInterval` (the part returns it on a bare
     /// read, 7.5.4) and written again when it differs: a switch that browned out comes up
@@ -29,10 +29,10 @@ struct Tca9548a {
     /// this every part behind it would be parked as absent and never come back.
     struct Channels {
         using Value                                 = std::uint8_t;
-        static constexpr std::size_t Bytes          = 1;
-        static constexpr Value       Initial        = 0;
-        static constexpr auto        VerifyDelay    = std::chrono::milliseconds{1};
-        static constexpr auto        VerifyInterval = std::chrono::milliseconds{500};
+        static constexpr std::size_t bytes          = 1;
+        static constexpr Value       initial        = 0;
+        static constexpr auto        verifyDelay    = std::chrono::milliseconds{1};
+        static constexpr auto        verifyInterval = std::chrono::milliseconds{500};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -42,7 +42,7 @@ struct Tca9548a {
     };
 
     struct Selected {
-        static constexpr std::array Steps{Engine::Step::receive({.count = 1, .offset = 0})};
+        static constexpr std::array steps{Engine::Step::receive({.count = 1, .offset = 0})};
         using Sample = std::uint8_t;
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) { return data.u8(0); }

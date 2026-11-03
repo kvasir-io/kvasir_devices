@@ -35,60 +35,60 @@ using Pca     = Pca9956bSegments<LedsDev>;
 // wrong about the wiring.
 
 constexpr Pca::LedOut ledOut(Sd::Digits<3> const& d) {
-    return Pca::ledOut(Sd::frame<Pca::Outputs>(Pca9956bBoard, d));
+    return Pca::ledOut(Sd::frame<Pca::outputs>(pca9956bBoard, d));
 }
 
 constexpr bool pairIs(Sd::Glyph    g,
                       std::uint8_t first,
                       std::uint8_t second) {
-    return ledOut({Sd::Blank, Sd::Blank, g}) == Pca::LedOut{first, second, 0, 0, 0, 0};
+    return ledOut({Sd::blank, Sd::blank, g}) == Pca::LedOut{first, second, 0, 0, 0, 0};
 }
 
-static_assert(pairIs(Sd::HexDigits[0],
+static_assert(pairIs(Sd::hexDigits[0],
                      0xFC,
                      0xFC),
               "0 is LEDOUT 0xFC 0xFC");
-static_assert(pairIs(Sd::HexDigits[1],
+static_assert(pairIs(Sd::hexDigits[1],
                      0xC0,
                      0x0C),
               "1 is LEDOUT 0xC0 0x0C");
-static_assert(pairIs(Sd::HexDigits[2],
+static_assert(pairIs(Sd::hexDigits[2],
                      0xF3,
                      0xF0),
               "2 is LEDOUT 0xF3 0xF0");
-static_assert(pairIs(Sd::HexDigits[3],
+static_assert(pairIs(Sd::hexDigits[3],
                      0xF3,
                      0x3C),
               "3 is LEDOUT 0xF3 0x3C");
-static_assert(pairIs(Sd::HexDigits[4],
+static_assert(pairIs(Sd::hexDigits[4],
                      0xCF,
                      0x0C),
               "4 is LEDOUT 0xCF 0x0C");
-static_assert(pairIs(Sd::HexDigits[5],
+static_assert(pairIs(Sd::hexDigits[5],
                      0x3F,
                      0x3C),
               "5 is LEDOUT 0x3F 0x3C");
-static_assert(pairIs(Sd::HexDigits[6],
+static_assert(pairIs(Sd::hexDigits[6],
                      0x3F,
                      0xFC),
               "6 is LEDOUT 0x3F 0xFC");
-static_assert(pairIs(Sd::HexDigits[7],
+static_assert(pairIs(Sd::hexDigits[7],
                      0xF0,
                      0x0C),
               "7 is LEDOUT 0xF0 0x0C");
-static_assert(pairIs(Sd::HexDigits[8],
+static_assert(pairIs(Sd::hexDigits[8],
                      0xFF,
                      0xFC),
               "8 is LEDOUT 0xFF 0xFC, the point dark");
-static_assert(pairIs(Sd::HexDigits[9],
+static_assert(pairIs(Sd::hexDigits[9],
                      0xFF,
                      0x3C),
               "9 is LEDOUT 0xFF 0x3C");
-static_assert(pairIs(Sd::Blank,
+static_assert(pairIs(Sd::blank,
                      0x00,
                      0x00),
               "a blank digit is dark");
-static_assert(pairIs(Sd::Seg::Dp,
+static_assert(pairIs(Sd::Seg::dp,
                      0x00,
                      0x03),
               "the point is channel 4, the low field of the digit's second byte: the +3");
@@ -140,78 +140,78 @@ static_assert(ledOut(Sd::number<3>(1000,
 
 // -- layouts --------------------------------------------------------------------------------
 
-constexpr auto LeftFirst = Sd::perDigit<3>({
+constexpr auto leftFirst = Sd::perDigit<3>({
   .pattern = {2, 3, 5, 6, 7, 1, 0, 4},
   .stride  = 8,
   .first   = Sd::FirstDigit::left,
   .active  = Sd::Active::high,
 });
-static_assert(Sd::frame<24>(LeftFirst,
-                            {Sd::HexDigits[1],
-                             Sd::Blank,
-                             Sd::Blank})
-                == Sd::frame<24>(Pca9956bBoard,
-                                 {Sd::Blank,
-                                  Sd::Blank,
-                                  Sd::HexDigits[1]}),
+static_assert(Sd::frame<24>(leftFirst,
+                            {Sd::hexDigits[1],
+                             Sd::blank,
+                             Sd::blank})
+                == Sd::frame<24>(pca9956bBoard,
+                                 {Sd::blank,
+                                  Sd::blank,
+                                  Sd::hexDigits[1]}),
               "the other digit order puts the leftmost digit on the first eight lines");
 
 /// One digit on a PCF8574, pin n segment n, the port sinking the segment current.
-constexpr auto SinkDigit = Sd::perDigit<1>({
+constexpr auto sinkDigit = Sd::perDigit<1>({
   .pattern = {0, 1, 2, 3, 4, 5, 6, 7},
   .first   = Sd::FirstDigit::left,
   .active  = Sd::Active::low,
 });
-static_assert(Sd::frame<8>(SinkDigit,
-                           {Sd::HexDigits[1]})
+static_assert(Sd::frame<8>(sinkDigit,
+                           {Sd::hexDigits[1]})
                   .to_ulong()
                 == 0xF9,
               "active low: b and c low, every other line high");
 
 /// Two digits on an MCP23017's ports, a glass without decimal points.
-constexpr auto NoPoints = Sd::perDigit<2>({
-  .pattern = {0, 1, 2, 3, 4, 5, 6, Sd::NotWired},
+constexpr auto noPoints = Sd::perDigit<2>({
+  .pattern = {0, 1, 2, 3, 4, 5, 6, Sd::notWired},
   .stride  = 8,
   .first   = Sd::FirstDigit::left,
   .active  = Sd::Active::high,
 });
-static_assert(Sd::usedLines<16>(NoPoints).to_ulong() == 0x7F7F,
+static_assert(Sd::usedLines<16>(noPoints).to_ulong() == 0x7F7F,
               "no line for the points");
-static_assert(Sd::frame<16>(NoPoints,
-                            {Sd::Seg::Dp,
-                             Sd::Seg::Dp})
+static_assert(Sd::frame<16>(noPoints,
+                            {Sd::Seg::dp,
+                             Sd::Seg::dp})
                 .none(),
               "a point with no line lights nothing");
 
 /// An irregular board, written out: a bar missing on the second digit, lines out of order.
-constexpr Sd::StaticLayout<2> Irregular{
-  .segment = {{{9, 8, 7, 6, 5, 4, 3, 2}, {0, 1, Sd::NotWired, 10, 11, 12, 13, 14}}},
+constexpr Sd::StaticLayout<2> irregular{
+  .segment = {{{9, 8, 7, 6, 5, 4, 3, 2}, {0, 1, Sd::notWired, 10, 11, 12, 13, 14}}},
   .active  = Sd::Active::high,
 };
-static_assert(Sd::frame<16>(Irregular,
-                            {Sd::Seg::A,
-                             Sd::Seg::A | Sd::Seg::C})
+static_assert(Sd::frame<16>(irregular,
+                            {Sd::Seg::a,
+                             Sd::Seg::a | Sd::Seg::c})
                   .to_ulong()
                 == ((1UL << 9U) | (1UL << 0U)),
               "the table as written, c of the second digit nowhere");
 
 /// Two digits scanned: segments on lines 0..7, digit selects on 8 and 9, pulled low to select.
-constexpr Sd::MultiplexedLayout<2> Scanned{
+constexpr Sd::MultiplexedLayout<2> scanned{
   .segment       = {0, 1, 2, 3, 4, 5, 6, 7},
   .select        = {8, 9},
   .segmentActive = Sd::Active::high,
   .selectActive  = Sd::Active::low,
 };
-static_assert(Sd::scanFrame<10>(Scanned,
-                                {Sd::HexDigits[1],
-                                 Sd::HexDigits[2]},
+static_assert(Sd::scanFrame<10>(scanned,
+                                {Sd::hexDigits[1],
+                                 Sd::hexDigits[2]},
                                 1)
                   .to_ulong()
-                == (Sd::HexDigits[2] | (1UL << 8U)),
+                == (Sd::hexDigits[2] | (1UL << 8U)),
               "digit 1 selected (line 9 low), digit 0 not (line 8 high)");
-static_assert(Sd::scanFrame<10>(Scanned,
-                                {Sd::HexDigits[8],
-                                 Sd::HexDigits[8]},
+static_assert(Sd::scanFrame<10>(scanned,
+                                {Sd::hexDigits[8],
+                                 Sd::hexDigits[8]},
                                 2)
                   .to_ulong()
                 == (3UL << 8U),
@@ -258,7 +258,7 @@ void pca9956b() {
     FakeBus::respond = zeros;
     LedsDev                  leds{};
     Pca9956bDisplay<LedsDev> digits{leds, Kvasir::Units::milliAmp(5), std::uint8_t{200}, 100ms};
-    static_assert(Pca9956bDisplay<LedsDev>::Count == 3);
+    static_assert(Pca9956bDisplay<LedsDev>::count == 3);
 
     run(digits, leds, 1s);
     check(leds.answering(), "brought up");
@@ -298,12 +298,12 @@ void pcf8574() {
     FakeBus::respond = zeros;
     using PortDev    = Dev<Chips::Pcf8574>;
     PortDev                             port{};
-    ExpanderDisplay<PortDev, SinkDigit> digit{port};
-    static_assert(ExpanderDisplay<PortDev, SinkDigit>::Outputs == 8);
+    ExpanderDisplay<PortDev, sinkDigit> digit{port};
+    static_assert(ExpanderDisplay<PortDev, sinkDigit>::outputs == 8);
 
     run(digit, port, 200ms);
     check(port.answering(), "brought up");
-    digit.setDigit(0, Sd::HexDigits[1]);
+    digit.setDigit(0, Sd::hexDigits[1]);
     run(digit, port, 50ms);
     check(hasWrite({0xF9}), "b and c pulled low");
     auto const n = FakeBus::log.size();
@@ -318,7 +318,7 @@ void mcp23017() {
     FakeBus::respond = zeros;
     using PortDev    = Dev<Chips::Mcp23017>;
     PortDev                            port{};
-    ExpanderDisplay<PortDev, NoPoints> digits{port};
+    ExpanderDisplay<PortDev, noPoints> digits{port};
 
     run(digits, port, 200ms);
     check(port.answering(), "brought up");
@@ -349,7 +349,7 @@ struct PinLog {
 };
 
 struct EightPins {
-    static constexpr std::size_t Count = 8;
+    static constexpr std::size_t count = 8;
 
     static void init() { PinLog::initialised = true; }
 
@@ -360,7 +360,7 @@ struct EightPins {
 };
 
 struct TenPins {
-    static constexpr std::size_t Count = 10;
+    static constexpr std::size_t count = 10;
 
     static void write(std::size_t line,
                       Sd::Level   l) {
@@ -368,7 +368,7 @@ struct TenPins {
     }
 };
 
-constexpr auto PinDigit = Sd::perDigit<1>({
+constexpr auto pinDigit = Sd::perDigit<1>({
   .pattern = {0, 1, 2, 3, 4, 5, 6, 7},
   .first   = Sd::FirstDigit::left,
   .active  = Sd::Active::high,
@@ -386,15 +386,15 @@ Sd::Glyph segmentsLit() {
 void gpioStatic() {
     I2cCase const testcase{"GPIO: one digit, static"};
     PinLog::reset();
-    Sd::GpioDisplay<EightPins, FakeClock, PinDigit> digit{};
+    Sd::GpioDisplay<EightPins, FakeClock, pinDigit> digit{};
     check(PinLog::initialised, "the pins set up");
     checkEq(PinLog::writes.size(), std::size_t{8}, "every line driven dark once");
 
     PinLog::writes.clear();
-    digit.setDigit(0, Sd::HexDigits[1]);
+    digit.setDigit(0, Sd::hexDigits[1]);
     check(digit.update(FakeClock::now()), "a new frame");
     checkEq(PinLog::writes.size(), std::size_t{2}, "only b and c written");
-    checkEq(segmentsLit(), Sd::HexDigits[1], "showing 1");
+    checkEq(segmentsLit(), Sd::hexDigits[1], "showing 1");
     PinLog::writes.clear();
     check(!digit.update(FakeClock::now()), "nothing new");
     check(PinLog::writes.empty(), "no pin touched");
@@ -403,14 +403,14 @@ void gpioStatic() {
 void gpioScanned() {
     I2cCase const testcase{"GPIO: two digits, multiplexed"};
     PinLog::reset();
-    using Display = Sd::GpioDisplay<TenPins, FakeClock, Scanned>;
-    static_assert(Display::Multiplexed && Display::DigitPeriod == 2ms);
-    static_assert(Sd::GpioDisplay<TenPins, FakeClock, Scanned, FastScan>::DigitPeriod == 500us);
+    using Display = Sd::GpioDisplay<TenPins, FakeClock, scanned>;
+    static_assert(Display::multiplexed && Display::digitPeriod == 2ms);
+    static_assert(Sd::GpioDisplay<TenPins, FakeClock, scanned, FastScan>::digitPeriod == 500us);
     Display digits{};
     check(PinLog::level[8] == Sd::Level::high && PinLog::level[9] == Sd::Level::high,
           "no digit selected at first");
 
-    digits.setDigits({Sd::HexDigits[1], Sd::HexDigits[2]});
+    digits.setDigits({Sd::hexDigits[1], Sd::hexDigits[2]});
     PinLog::writes.clear();
     bool ghost = false;
     for(int i = 0; i < 20; ++i) {
@@ -433,7 +433,7 @@ void gpioScanned() {
                 if(lv[s] == Sd::Level::high) { g |= 1U << s; }
             }
             std::size_t const pos = line - 8;
-            if(g != Sd::HexDigits[pos + 1]) { ghost = true; }
+            if(g != Sd::hexDigits[pos + 1]) { ghost = true; }
             if(lv[pos == 0 ? 9 : 8] == Sd::Level::low) { ghost = true; }
             ++(pos == 0 ? sel0 : sel1);
         }
@@ -445,7 +445,7 @@ void gpioScanned() {
     digits.blink(Sd::Blink::on);
     FakeClock::advance(2ms);
     digits.update(FakeClock::now());
-    checkEq(segmentsLit(), Sd::Blank, "blinks dark by a blank frame");
+    checkEq(segmentsLit(), Sd::blank, "blinks dark by a blank frame");
 }
 
 }   // namespace

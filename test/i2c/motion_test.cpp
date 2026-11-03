@@ -257,25 +257,25 @@ void iis2dulpx() {
     // at least ODR/8 at 12.5 Hz; the high-performance rates take what is asked
     static_assert(Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g2,
                                    Chips::Iis2dulpxDetail::Odr::ulp25,
-                                   Chips::Iis2dulpxDetail::Bandwidth::div8>::Ctrl5
+                                   Chips::Iis2dulpxDetail::Bandwidth::div8>::ctrl5
                     == 0x30
                   && Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g2,
-                                      Chips::Iis2dulpxDetail::Odr::lp6>::Ctrl5
+                                      Chips::Iis2dulpxDetail::Odr::lp6>::ctrl5
                        == 0x4C
                   && Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g2,
-                                      Chips::Iis2dulpxDetail::Odr::lp12_5,
-                                      Chips::Iis2dulpxDetail::Bandwidth::div4>::Ctrl5
+                                      Chips::Iis2dulpxDetail::Odr::lp12p5,
+                                      Chips::Iis2dulpxDetail::Bandwidth::div4>::ctrl5
                        == 0x58
                   && Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g2,
                                       Chips::Iis2dulpxDetail::Odr::hp6,
-                                      Chips::Iis2dulpxDetail::Bandwidth::div2>::Ctrl5
+                                      Chips::Iis2dulpxDetail::Bandwidth::div2>::ctrl5
                        == 0x40);
-    checkEq(Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g16>::AccelPerCount[3],
+    checkEq(Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g16>::accelPerCount[3],
             488,
             "0.488 mg/LSB at +-16 g");
-    check(Chips::Iis2dulpx<>::OutputPeriod == 10ms, "100 Hz is a 10 ms period");
+    check(Chips::Iis2dulpx<>::outputPeriod == 10ms, "100 Hz is a 10 ms period");
     check(Chips::Iis2dulpx<Chips::Iis2dulpxDetail::FullScale::g2,
-                           Chips::Iis2dulpxDetail::Odr::hp400>::OutputPeriod
+                           Chips::Iis2dulpxDetail::Odr::hp400>::outputPeriod
             == 3ms,
           "400 Hz rounds up to 3 ms");
     iu.set<Chips::Iis2dulpx<>::Config>(0x81);   // +-4 g
@@ -445,7 +445,7 @@ void bma456() {
           = Chips::Bma456<>::Motion::decode(Kvasir::Bytes{f}, Chips::Bma456<>::State{});
         return isOk(got) && equal(got.value.x, 250000) && !got.value.temperatureValid;
     }());
-    checkEq(Chips::Bma456<Chips::Bma456Detail::Range::g16>::CountsPerG,
+    checkEq(Chips::Bma456<Chips::Bma456Detail::Range::g16>::countsPerG,
             std::uint16_t{2048},
             "2048 LSB/g at +-16 g");
 }
@@ -717,7 +717,7 @@ static_assert(isUnchanged(Tmag::Field::decode(Kvasir::Bytes{tmagFrame(0x10)},
                                               tmagState(1))));
 
 // the period follows 25 us x (averages x (channels + T) + 1), rounded up to milliseconds
-static_assert(Tmag::ReadPeriod == 4ms
+static_assert(Tmag::readPeriod == 4ms
               && Chips::Tmag5273Detail::conversionTime(Tmag::AveragingCount::x32,
                                                        Tmag::ChannelSet::x)
                    == 1625us

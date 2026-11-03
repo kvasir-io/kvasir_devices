@@ -18,14 +18,14 @@ namespace Apds9960Detail {
     /// CONTROL AGAIN (1:0): 1x, 4x, 16x, 64x.
     enum class Gain : std::uint8_t { x1 = 0, x4 = 1, x16 = 2, x64 = 3 };
 
-    inline constexpr std::array<std::uint8_t, 4> GainValue{1, 4, 16, 64};
+    inline constexpr std::array<std::uint8_t, 4> gainValue{1, 4, 16, 64};
 
     /// One ATIME integration cycle.
-    inline constexpr std::chrono::microseconds CycleTime{2780};
+    inline constexpr std::chrono::microseconds cycleTime{2780};
 
     /// The nearest whole number of cycles to `t`; 0 or above 256 is out of range.
     [[nodiscard]] constexpr std::int64_t cyclesFor(std::chrono::microseconds t) {
-        return (t + CycleTime / 2) / CycleTime;
+        return (t + cycleTime / 2) / cycleTime;
     }
 }   // namespace Apds9960Detail
 
@@ -53,53 +53,53 @@ namespace Apds9960Detail {
 template<Apds9960Detail::Gain Gain = Apds9960Detail::Gain::x4,
          typename Timing           = Engine::DefaultTiming>
 struct Apds9960 {
-    static constexpr std::string_view Name = "APDS-9960";
+    static constexpr std::string_view name = "APDS-9960";
     /// Broadcom APDS-9960. APDS9960.md:1034..1041, ID register 0x92, "0xAB = APDS-9960".
     /// Configuration: ENABLE (0x80) PON, bit 0, and AEN, bit 1 (APDS9960.md:455..).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x92, 1, true, 0xFF, 0xAB},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"power-and-als", 0x80, 1, true, 0x03, 0x03},
     };
-    static constexpr Address7                Address = 0x39;
-    static constexpr std::array<Address7, 1> Addresses{0x39};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x39;
+    static constexpr std::array<Address7, 1> addresses{0x39};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::int64_t Cycles
+    static constexpr std::int64_t cycles
       = Apds9960Detail::cyclesFor(Kvasir::asDuration<std::chrono::microseconds>(
-        KVASIR_CONFIG_OR(Timing, integrationTime, 10 * Apds9960Detail::CycleTime)));
+        KVASIR_CONFIG_OR(Timing, integrationTime, 10 * Apds9960Detail::cycleTime)));
 
-    static_assert(Cycles >= 1,
+    static_assert(cycles >= 1,
                   "Timing::integrationTime is below half an ATIME cycle (1.39 ms)");
-    static_assert(Cycles <= 256,
+    static_assert(cycles <= 256,
                   "Timing::integrationTime is above 256 ATIME cycles (711.68 ms)");
 
     /// ATIME is 256 - cycles, so 0xFF is one cycle and 0x00 is the full 256.
-    static constexpr std::uint8_t Atime = static_cast<std::uint8_t>(256 - Cycles);
-    static constexpr std::uint8_t Control
+    static constexpr std::uint8_t atime = static_cast<std::uint8_t>(256 - cycles);
+    static constexpr std::uint8_t control
       = static_cast<std::uint8_t>(Gain);   // PGAIN 1x, LDRIVE 100 mA
     /// PON | AEN | PEN: powered, colour and proximity running.
-    static constexpr std::uint8_t Enable = 0x07;
+    static constexpr std::uint8_t enable = 0x07;
 
-    static constexpr std::array<std::uint8_t, 4> GainValue = Apds9960Detail::GainValue;
+    static constexpr std::array<std::uint8_t, 4> gainValue = Apds9960Detail::gainValue;
 
     /// The integration time the part runs: Cycles x 2.78 ms.
-    static constexpr std::chrono::microseconds IntegrationTime = Cycles * Apds9960Detail::CycleTime;
+    static constexpr std::chrono::microseconds integrationTime = cycles * Apds9960Detail::cycleTime;
 
     /// The same in whole milliseconds, rounded up, for the waits.
-    static constexpr auto IntegrationWait
-      = std::chrono::ceil<std::chrono::milliseconds>(IntegrationTime);
+    static constexpr auto integrationWait
+      = std::chrono::ceil<std::chrono::milliseconds>(integrationTime);
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = 0x81, .payload = {Atime}}),
-      Engine::Step::write({.reg = 0x8F, .payload = {Control}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = 0x81, .payload = {atime}}),
+      Engine::Step::write({.reg = 0x8F, .payload = {control}}),
       Engine::Step::write({.reg     = 0x80,
-                           .payload = {Enable},
-                           .delay   = IntegrationWait + std::chrono::milliseconds{10}}),
+                           .payload = {enable},
+                           .delay   = integrationWait + std::chrono::milliseconds{10}}),
     };
 
     struct State {
@@ -114,9 +114,9 @@ struct Apds9960 {
     }
 
     struct Colour {
-        static constexpr auto Period = IntegrationWait + std::chrono::milliseconds{50};
+        static constexpr auto period = integrationWait + std::chrono::milliseconds{50};
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x93, .count = 1, .offset = 0}),   // STATUS
           Engine::Step::read({.reg = 0x94, .count = 8, .offset = 1}),   // clear, red, green, blue
           Engine::Step::read({.reg = 0x9C, .count = 1, .offset = 9}),   // proximity
@@ -156,10 +156,10 @@ struct Apds9960 {
     };
 
     /// ENABLE, so the application can stop the engines or turn the gesture one on itself.
-    using Power = Engine::Groups::InitialByte<0x80, Enable>;
+    using Power = Engine::Groups::InitialByte<0x80, enable>;
 
     /// AGAIN, PGAIN and the LED drive strength.
-    using Gains = Engine::Groups::InitialByte<0x8F, Control>;
+    using Gains = Engine::Groups::InitialByte<0x8F, control>;
 
     using Reads  = Engine::List<Colour>;
     using Writes = Engine::List<Gains, Power>;

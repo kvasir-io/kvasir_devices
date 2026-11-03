@@ -163,14 +163,14 @@ void aled7709() {
     // DIMCFG: REG_PWMI | FDIM 001 (200 Hz) | linear | local = 1000 1001b
     check(writes() == std::vector<std::vector<std::uint8_t>>{{0x01, 0x00}, {0x14, 0x89}, {0x11, 0x0F}, {0x01, 0x81}},
           "standby, dimming, the four channels, then DEN with CLRF");
-    static_assert(Led::DimCfg == 0x89);
-    static_assert(Led::Address == 0x28
-                  && Chips::Aled7709<Chips::Aled7709Detail::Variant::b>::Address == 0x29);
+    static_assert(Led::dimCfg == 0x89);
+    static_assert(Led::address == 0x28
+                  && Chips::Aled7709<Chips::Aled7709Detail::Variant::b>::address == 0x29);
     // the data sheet's identity: version 1, any revision
-    static_assert(Led::Identity[0].matches(0x13) && Led::Identity[0].matches(0x14)
-                  && !Led::Identity[0].matches(0x23));
+    static_assert(Led::identity[0].matches(0x13) && Led::identity[0].matches(0x14)
+                  && !Led::identity[0].matches(0x23));
     // RISET 10 k: 1022 V / 10 k = 102.2 mA at gain 255
-    static_assert(equal(Led::MaxCurrent, Units::microAmp(102'200)));
+    static_assert(equal(Led::maxCurrent, Units::microAmp(102'200)));
     static_assert(
       Led::gainFor(Units::microAmp(102'200)) == 255 && Led::gainFor(Units::microAmp(51'100)) == 127
       && Led::gainFor(Units::microAmp(0)) == 0 && Led::gainFor(Units::microAmp(500'000)) == 255);
@@ -421,7 +421,7 @@ void ads1219() {
     check(hasWrite({0x06}) && hasWrite({0x20}), "RESET at bring-up, then RREG of the config");
     check(ad19.identified(), "the configuration reads 00h after the reset");
     static_assert(Chips::Ads1219<Chips::Ads1219Detail::Gain::x1,
-                                 Chips::Ads1219Detail::DataRate::sps20>::Sweep::Period
+                                 Chips::Ads1219Detail::DataRate::sps20>::Sweep::period
                     == 280ms,
                   "at 20 SPS four conversions take longer than 200 ms");
     check(hasWrite({0x40, 0x64}) && hasWrite({0x40, 0xC4}),
@@ -536,7 +536,7 @@ void mcp4018() {
 void ina228() {
     I2cCase const testcase{"INA228"};
     using I228 = Chips::Ina228<Units::microOhm(2000), Units::milliAmp(10000)>;
-    checkEq(I228::Calibration, std::uint16_t{500}, "SHUNT_CAL = 13107.2e6 x LSB x R");
+    checkEq(I228::calibration, std::uint16_t{500}, "SHUNT_CAL = 13107.2e6 x LSB x R");
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
@@ -599,7 +599,7 @@ void ina228() {
             && flags(0x0004).powerOverLimit() && !flags(0x0004).busUnderLimit()
             && !flags(0x0100).temperatureOverLimit();
     }());
-    check(Chips::Ina237<>::Name == std::string_view{"INA237"}, "the INA237 is the INA238 map");
+    check(Chips::Ina237<>::name == std::string_view{"INA237"}, "the INA237 is the INA238 map");
 }
 
 void ads1015() {
@@ -820,7 +820,7 @@ void ina238() {
     I2cCase const testcase{"INA238"};
     // 2 mOhm shunt, 10 A full scale: CURRENT_LSB 305175 nA, SHUNT_CAL 500
     using Ina = Chips::Ina238<Units::microOhm(2000), Units::milliAmp(10000)>;
-    checkEq(Ina::Calibration, std::uint16_t{500}, "SHUNT_CAL from the datasheet formula");
+    checkEq(Ina::calibration, std::uint16_t{500}, "SHUNT_CAL from the datasheet formula");
     RegisterModel<1, 2> in{0x40};
     in.set(0x04, {0x10, 0x00});   // 4096 x 5 uV = 20.48 mV
     in.set(0x05, {0x20, 0x00});   // 8192 x 3.125 mV = 25.6 V
@@ -905,7 +905,7 @@ void ad5665() {
     check(dacWrites.size() == 5 && dacWrites[1] == std::vector<std::uint8_t>{0x18, 0, 0}
             && dacWrites[4] == std::vector<std::uint8_t>{0x1B, 0, 0},
           "each zeroed with its own write-and-update command");
-    dd.set<Chips::Ad5665::Level>(Chips::Ad5665::C, 0x8000);
+    dd.set<Chips::Ad5665::Level>(Chips::Ad5665::c, 0x8000);
     check(runUntil(
             dd,
             [&] { return hasWrite({0x1A, 0x80, 0x00}); },
@@ -1471,14 +1471,14 @@ template<typename Chip,
 void memoryRoundTrip(char const* name) {
     I2cCase const           testcase{name};
     RegisterModel<RegBytes> m{0x50};
-    if constexpr(requires { Chip::UserAreaBytes; }) {
+    if constexpr(requires { Chip::userAreaBytes; }) {
         m.set(0xFA, {0x00, 0x04, 0xA3, 0x12, 0x34, 0x56});
     }
     FakeBus::respond = std::ref(m);
     Dev<Chip> mem{};
     check(runUntil(mem, [&] { return mem.answering(); }, 500ms), "up");
-    static_assert(Chip::WriteChunkBytes >= 4 && Chip::ReadChunkBytes >= 4
-                  && Chip::WritableBytes > 0x20);
+    static_assert(Chip::writeChunkBytes >= 4 && Chip::readChunkBytes >= 4
+                  && Chip::writableBytes > 0x20);
     typename Chip::Write::Value v{};
     v.address = 0x10;
     v.length  = 4;

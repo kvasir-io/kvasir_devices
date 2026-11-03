@@ -70,8 +70,8 @@ namespace TouchFakes {   // not "Touch": that is Kvasir::I2C::Touch, visible her
     };
 
     struct Cfg : Kvasir::I2C::Touch::Defaults {
-        static constexpr std::uint16_t Width  = 466;
-        static constexpr std::uint16_t Height = 466;
+        static constexpr std::uint16_t width  = 466;
+        static constexpr std::uint16_t height = 466;
     };
 
     struct FlippedCfg : Cfg {
@@ -80,8 +80,8 @@ namespace TouchFakes {   // not "Touch": that is Kvasir::I2C::Touch, visible her
     };
 
     struct SwappedCfg : Kvasir::I2C::Touch::Defaults {
-        static constexpr std::uint16_t Width  = 200;
-        static constexpr std::uint16_t Height = 100;
+        static constexpr std::uint16_t width  = 200;
+        static constexpr std::uint16_t height = 100;
         static constexpr auto          swapXY = Kvasir::I2C::Touch::Axes::swapped;
     };
 
@@ -158,8 +158,8 @@ void touch() {
     check(FakeBus::log.size() >= 3 && FakeBus::log[0].kind == Transaction::Kind::hold
             && FakeBus::log[1].kind == Transaction::Kind::release,
           "the reset line is pulsed before any transaction");
-    check(FakeBus::log[1].at - FakeBus::log[0].at >= TD::Cst9217::ResetLow, "held for ResetLow");
-    check(FakeBus::log[2].at - FakeBus::log[1].at >= TD::Cst9217::ResetSettle, "then ResetSettle");
+    check(FakeBus::log[1].at - FakeBus::log[0].at >= TD::Cst9217::resetLow, "held for ResetLow");
+    check(FakeBus::log[2].at - FakeBus::log[1].at >= TD::Cst9217::resetSettle, "then ResetSettle");
     check(FakeBus::log[2].address == 0x5A, "at 0x5A");
     check(hasWrite({0xD1, 0x01}), "the vendor's address-only init write");
     check(t9217.chipInfo().ok && t9217.chipInfo().chip == 0x9217, "identified");

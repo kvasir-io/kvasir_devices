@@ -26,16 +26,16 @@ namespace Kvasir::I2C::Chips {
 /// takes OUT_P_MSB..OUT_T_LSB (0x01..0x05): pressure a 20-bit Q18.2 in Pa (7.1.3),
 /// temperature a 12-bit Q8.4 in degC. Fixed address 0x60.
 struct Mpl3115a2 {
-    static constexpr std::string_view Name = "MPL3115A2";
+    static constexpr std::string_view name = "MPL3115A2";
     /// NXP MPL3115A2. MPL3115A2.md:670, :969: WHO_AM_I (0x0C) is 0xC4.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0C, 1, true, 0xFF, 0xC4},
     };
-    static constexpr Address7                Address = 0x60;
-    static constexpr std::array<Address7, 1> Addresses{0x60};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x60;
+    static constexpr std::array<Address7, 1> addresses{0x60};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg     = 0x26,
                            .payload = {0x04},
                            .delay   = std::chrono::milliseconds{50},
@@ -59,8 +59,8 @@ struct Mpl3115a2 {
     }
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
           Engine::Step::check(std::chrono::milliseconds{100}),
           Engine::Step::read({.reg = 0x01, .count = 5, .offset = 1})};

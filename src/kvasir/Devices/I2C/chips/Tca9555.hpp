@@ -21,19 +21,19 @@ namespace Kvasir::I2C::Chips {
 /// order Output, Direction, Polarity, so a replay after a reset never drives a pin with a stale
 /// latch. 0x20..0x27 by A2..A0.
 struct Tca9555 {
-    static constexpr std::string_view Name          = "TCA9555";
-    static constexpr Address7         Address       = 0x20;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "TCA9555";
+    static constexpr Address7         address       = 0x20;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x20, 8>();
+    static constexpr auto addresses = addressRun<0x20, 8>();
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{50};
+    static constexpr auto startupDelay = std::chrono::milliseconds{50};
 
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
     struct Pins {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {

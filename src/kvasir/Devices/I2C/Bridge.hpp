@@ -104,7 +104,7 @@ enum class BridgeState : std::uint8_t {
     closing,    ///< asked to go off: nothing new starts, the pin moves when the wire is free
 };
 
-namespace detail {
+namespace Detail {
     template<typename B>
     concept PinBridge = requires { B::drive(true); };
 
@@ -154,14 +154,14 @@ namespace detail {
         PartT*        part{nullptr};
         std::uint16_t bringUps{};
     };
-}   // namespace detail
+}   // namespace Detail
 
 /// What the gates of the parts behind a bridge see of it: no clock in it, so a gate needs to
 /// know the bridge and nothing else.
 template<typename B>
 class BridgeLink {
 public:
-    static constexpr bool Switched = detail::bridgeSwitched<B>;
+    static constexpr bool switched = Detail::bridgeSwitched<B>;
 
     [[nodiscard]] BridgeState state() const { return state_; }
 
@@ -170,7 +170,7 @@ public:
     /// Whether the parts behind it are offline: not active -- or, for a switched bridge, not
     /// enabled; one that is only switched away is a wait, as a channel of a switch is.
     [[nodiscard]] bool partsOffline() const {
-        if constexpr(Switched) {
+        if constexpr(switched) {
             return !enabled_;
         } else {
             return state_ != BridgeState::on;
@@ -194,7 +194,7 @@ public:
 
     /// A switched bridge that is enabled, off, and asked for: it waits for the wire.
     [[nodiscard]] bool waiting() const {
-        return Switched && enabled_ && requested_ && state_ == BridgeState::off;
+        return switched && enabled_ && requested_ && state_ == BridgeState::off;
     }
 
     /// A part in front wants the bridge off for a run of its own (BridgeFrontGate): asked every
@@ -236,27 +236,27 @@ private:
     bool          requested_{};
     bool          closeRequested_{};
     /// What the application or the sensed input wants of it: manual, active; switched, usable.
-    bool enabled_{detail::bridgeStart<B>() == BridgeStart::on};
+    bool enabled_{Detail::bridgeStart<B>() == BridgeStart::on};
 };
 
 /// One bridge at run time.
 template<typename Clock, typename B>
 class BridgeLine
   : public BridgeLink<B>
-  , public Kvasir::detail::ForwardClaims<B> {   // the bridge's pin claim becomes the line's
+  , public Kvasir::Detail::ForwardClaims<B> {   // the bridge's pin claim becomes the line's
     static_assert(
       requires { B::whileOff; },
       "a bridge description says what its parts go through while it is off: "
       "static constexpr auto whileOff = Kvasir::Engine::WhileOff::unpowered; (or "
       "::disconnected)");
-    static_assert(detail::DrivenBridge<B> != detail::SensedBridge<B>,
+    static_assert(Detail::DrivenBridge<B> != Detail::SensedBridge<B>,
                   "a bridge description has either drive(bool), for a bridge the firmware "
                   "switches, or active(), for one it only senses (Bridge.hpp)");
 
-    static_assert(!detail::bridgeSwitched<B> || detail::DrivenBridge<B>,
+    static_assert(!Detail::bridgeSwitched<B> || Detail::DrivenBridge<B>,
                   "BridgeMode::switched is for a bridge the firmware switches: drive(bool) or a "
                   "PartBridge");
-    static_assert(!detail::bridgeSwitched<B> || B::whileOff == Engine::WhileOff::disconnected,
+    static_assert(!Detail::bridgeSwitched<B> || B::whileOff == Engine::WhileOff::disconnected,
                   "BridgeMode::switched switches the bridge off between the transactions of its "
                   "parts: they have to keep their registers meanwhile (WhileOff::disconnected)");
 
@@ -264,17 +264,17 @@ public:
     using Bridge    = B;
     using TimePoint = typename Clock::time_point;
 
-    static constexpr bool Switched   = detail::bridgeSwitched<B>;
-    static constexpr bool Driven     = detail::DrivenBridge<B>;
-    static constexpr bool PartDriven = detail::PartDrivenBridge<B>;
-    static constexpr auto Settle     = detail::bridgeSettle<B>();
+    static constexpr bool switched   = Detail::bridgeSwitched<B>;
+    static constexpr bool driven     = Detail::DrivenBridge<B>;
+    static constexpr bool partDriven = Detail::PartDrivenBridge<B>;
+    static constexpr auto settle     = Detail::bridgeSettle<B>();
 
     /// Switch it on: the parts talk after `Settle`. Taken back by off() at any time. A
     /// switched bridge is enabled by it: from now on the engine switches it as its parts ask.
     void on()
-        requires Driven
+        requires driven
     {
-        if constexpr(Switched) {
+        if constexpr(switched) {
             if(!this->enabled()) { this->stepGeneration(); }   // the parts are back from offline
         }
         this->setEnabled(true);
@@ -282,7 +282,7 @@ public:
 
     /// Switch it off: the parts are offline from now on, the pin follows when the wire is free.
     void off()
-        requires Driven
+        requires driven
     {
         this->setEnabled(false);
         if(this->state() == BridgeState::on) { this->setState(BridgeState::closing); }
@@ -301,8 +301,8 @@ public:
 
     /// The device the bridge is switched through (a PartBridge). Called once, before the first
     /// turn(); a Bus does it.
-    void bindPart(typename detail::BridgePart<B>::PartT& part)
-        requires PartDriven
+    void bindPart(typename Detail::BridgePart<B>::PartT& part)
+        requires partDriven
     {
         part_.part = &part;
     }
@@ -315,7 +315,7 @@ public:
               bool contested = false) {
         auto const now = Clock::now();
         if(!started_) {
-            if constexpr(PartDriven) {
+            if constexpr(partDriven) {
                 // Not before the part's first bring-up: only then does its write group hold
                 // the description's Initial, and a modify() before that would start from a
                 // zero Value -- every other pin of the expander driven low.
@@ -325,18 +325,18 @@ public:
                 }
             }
             started_ = true;
-            if constexpr(Driven) {
+            if constexpr(driven) {
                 drive_(false);   // a defined level, and an output, before anything else
             }
         }
-        if constexpr(!Driven) { this->setEnabled(B::active()); }
-        if constexpr(PartDriven) { partTurn_(); }
+        if constexpr(!driven) { this->setEnabled(B::active()); }
+        if constexpr(partDriven) { partTurn_(); }
 
         // What the state machine follows. Manual: what is wanted of it. Switched: on for the
         // parts that ask, left on while nobody else wants the wire (switching costs a Settle),
         // off for another bridge of the group or a part in front that does.
         bool wanted = this->enabled();
-        if constexpr(Switched) {
+        if constexpr(switched) {
             bool const demand     = this->requested() || this->holders() != 0;
             bool const closeAsked = this->closeRequested() || this->closedHolders() != 0;
             this->clearRequest();
@@ -356,7 +356,7 @@ public:
         case BridgeState::off:
             if(wanted && mayStart) {
                 drive_(true);
-                until_ = now + Settle;
+                until_ = now + settle;
                 this->setState(BridgeState::settling);
             }
             break;
@@ -365,12 +365,12 @@ public:
                 drive_(false);
                 this->setState(BridgeState::off);
             } else if(!driven_()) {
-                until_ = now + Settle;   // Settle runs from the enable reaching the bridge
+                until_ = now + settle;   // Settle runs from the enable reaching the bridge
             } else if(now > until_) {
                 this->setState(BridgeState::on);
                 servedAt_ = now;
                 ++switchOns_;
-                if constexpr(!Switched) {
+                if constexpr(!switched) {
                     this->stepGeneration();
                     UC_LOG_D("bridge: on");
                 }
@@ -378,7 +378,7 @@ public:
             break;
         case BridgeState::on:
             if(wanted) { break; }
-            if constexpr(Driven) {
+            if constexpr(driven) {
                 this->setState(BridgeState::closing);
             } else {
                 this->setState(BridgeState::off);
@@ -390,11 +390,11 @@ public:
                 // Nothing was cut. The parts of a manual bridge went offline when the closing
                 // began, so they come back as from a real one: what it costs is a bring-up.
                 this->setState(BridgeState::on);
-                if constexpr(!Switched) { this->stepGeneration(); }
+                if constexpr(!switched) { this->stepGeneration(); }
             } else if(this->holders() == 0) {
                 drive_(false);
                 this->setState(BridgeState::off);
-                if constexpr(!Switched) { UC_LOG_D("bridge: off"); }
+                if constexpr(!switched) { UC_LOG_D("bridge: off"); }
             }
             break;
         }
@@ -402,9 +402,9 @@ public:
 
 private:
     void drive_([[maybe_unused]] bool active) {
-        if constexpr(PartDriven) {
+        if constexpr(partDriven) {
             if(part_.part != nullptr) { B::drive(*part_.part, active); }
-        } else if constexpr(Driven) {
+        } else if constexpr(driven) {
             B::drive(active);
         }
     }
@@ -412,7 +412,7 @@ private:
     /// The enable is where it was driven to: at once for a pin, for a part once the write is
     /// through and the part answers.
     [[nodiscard]] bool driven_() const {
-        if constexpr(PartDriven) {
+        if constexpr(partDriven) {
             return part_.part != nullptr && B::driven(*part_.part);
         } else {
             return true;
@@ -437,7 +437,7 @@ private:
         if(this->state() == BridgeState::on || this->state() == BridgeState::closing) {
             UC_LOG_W("bridge: the part it is switched through started over");
             if(this->enabled()) {
-                until_ = Clock::now() + Settle;
+                until_ = Clock::now() + settle;
                 this->setState(BridgeState::settling);
             } else {
                 this->setState(BridgeState::off);
@@ -450,10 +450,10 @@ private:
     TimePoint                                   until_{};
     TimePoint                                   servedAt_{TimePoint::min()};
     std::uint32_t                               switchOns_{};
-    [[no_unique_address]] detail::BridgePart<B> part_{};
+    [[no_unique_address]] Detail::BridgePart<B> part_{};
 };
 
-namespace detail {
+namespace Detail {
     /// What a gate on a switch says about it, for a BridgeGate around it to say as well.
     template<typename Inner>
     struct InnerSwitch {};
@@ -465,19 +465,19 @@ namespace detail {
         using Channels = typename Inner::Channels;
         using Arbiter  = typename Inner::Arbiter;
 
-        static constexpr std::uint8_t Mask = Inner::Mask;
+        static constexpr std::uint8_t mask = Inner::mask;
     };
-}   // namespace detail
+}   // namespace Detail
 
 /// Behind bridge `B`, as a gate. `Inner` is the gate the part would have without the bridge:
 /// NoGate, or the channel of a switch (Mux.hpp) when both are between the part and the
 /// controller. The bridge is asked first, so a part that is offline never takes a switch.
 template<typename B, typename Inner = Engine::NoGate>
-struct BridgeGate : detail::InnerSwitch<Inner> {
-    static constexpr bool Gated   = true;
-    static constexpr bool Bridged = true;
+struct BridgeGate : Detail::InnerSwitch<Inner> {
+    static constexpr bool gated   = true;
+    static constexpr bool bridged = true;
     /// In front of its switch when the inner gate says so (MuxFrontGate).
-    static constexpr bool Front = requires { requires static_cast<bool>(Inner::Front); };
+    static constexpr bool front = requires { requires static_cast<bool>(Inner::front); };
 
     using Bridge = B;
     using InnerT = Inner;
@@ -523,7 +523,7 @@ struct BridgeGate : detail::InnerSwitch<Inner> {
         // A switched bridge that is closing is still on, for the run that holds it: that run
         // goes on to its end (or its next wait), and only then does the bridge go.
         bool const finishing
-          = BridgeLink<B>::Switched && holding_ && line_->state() == BridgeState::closing;
+          = BridgeLink<B>::switched && holding_ && line_->state() == BridgeState::closing;
         if(!line_->active() && !finishing) {
             line_->request();   // a switched bridge comes for it; any other takes no notice
             return false;
@@ -561,15 +561,15 @@ private:
 ///                        BridgeFrontGate<ExtPort>>;
 template<typename... Bs>
 struct BridgeFrontGate {
-    static constexpr bool Gated = true;
-    static constexpr bool Front = true;
+    static constexpr bool gated = true;
+    static constexpr bool front = true;
 
     /// Whether `B` is one of the bridges this gate keeps off while its part talks.
     template<typename B>
-    static constexpr bool Closes = (std::is_same_v<B, Bs> || ...);
+    static constexpr bool closes = (std::is_same_v<B, Bs> || ...);
 
     template<typename B>
-        requires Closes<B>
+        requires closes<B>
     void bind(BridgeLink<B>& line) {
         std::get<BridgeLink<B>*>(lines_) = &line;
     }

@@ -27,41 +27,41 @@ template<MicroOhm Shunt      = Units::microOhm(2000),
          MicroAmp CurrentLsb = Units::microAmp(1000),
          typename Timing     = Engine::DefaultTiming>
 struct Ina226 {
-    static constexpr std::string_view Name = "INA226";
+    static constexpr std::string_view name = "INA226";
     /// TI INA226. INA226.md:874..883: Manufacturer ID (FEh) 5449h, Die ID (FFh) 2260h or 2261h.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
       Engine::RegisterCheck{         "die-id", 0xFF, 2, true, 0xFFFE, 0x2260},
     };
-    static constexpr Address7    Address       = 0x40;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x40;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x40, 16>();
+    static constexpr auto addresses = addressRun<0x40, 16>();
 
     static_assert(Shunt > Units::microOhm(0) && CurrentLsb > Units::microAmp(0),
                   "the shunt value and the current LSB are what the calibration is computed "
                   "from; neither may be zero");
-    static constexpr std::chrono::milliseconds ReadPeriod
+    static constexpr std::chrono::milliseconds readPeriod
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{100}));
-    static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
+    static_assert(readPeriod > std::chrono::milliseconds::zero(),
                   "Timing::period is how often Power is read; 0 never reads it");
 
     /// 0.00512 / (Current_LSB[A] * R[Ohm]) = 5.12e9 / (LSB[uA] * R[uOhm]).
-    static constexpr std::uint64_t CalibrationValue
+    static constexpr std::uint64_t calibrationValue
       = 5'120'000'000ULL
       / (static_cast<std::uint64_t>(Units::value(CurrentLsb)) * Units::value(Shunt));
 
-    static_assert(CalibrationValue >= 1 && CalibrationValue <= 0x7FFF,
+    static_assert(calibrationValue >= 1 && calibrationValue <= 0x7FFF,
                   "the INA226 calibration register is 15 bits: 0.00512 / (CurrentLsb * Shunt) "
                   "must fit -- raise CurrentLsb (or the shunt) until it does");
 
-    static constexpr std::uint16_t Calibration = static_cast<std::uint16_t>(CalibrationValue);
+    static constexpr std::uint16_t calibration = static_cast<std::uint16_t>(calibrationValue);
 
     static_assert(CurrentLsb <= Units::microAmp(65535),
                   "a full-scale current count times CurrentLsb is carried in 32 bits");
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x00, .payload = {0x41, 0x27}}),
     };
     // clang-format on
@@ -69,9 +69,9 @@ struct Ina226 {
     /// Calibration (05h). It resets to 0 -- current and power then read 0 -- when the part
     /// browns out or sees a general-call reset while the MCU keeps running, so it is read back
     /// every second and written again when it has been lost, as Linux ina2xx.c restores it.
-    struct ShuntCal : Engine::Groups::Word<0x05, Calibration> {
-        static constexpr std::chrono::milliseconds VerifyDelay{3};
-        static constexpr std::chrono::milliseconds VerifyInterval{1000};
+    struct ShuntCal : Engine::Groups::Word<0x05, calibration> {
+        static constexpr std::chrono::milliseconds verifyDelay{3};
+        static constexpr std::chrono::milliseconds verifyInterval{1000};
     };
 
     struct State {
@@ -88,8 +88,8 @@ struct Ina226 {
     }
 
     struct Power {
-        static constexpr auto       Period = ReadPeriod;
-        static constexpr std::array Steps{
+        static constexpr auto       period = readPeriod;
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
           Engine::Step::read({.reg = 0x02, .count = 2, .offset = 2}),
           Engine::Step::read({.reg = 0x03, .count = 2, .offset = 4}),

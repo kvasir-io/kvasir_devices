@@ -113,8 +113,8 @@ void oneCallbackEach() {
 }
 
 // QueueDepth (4 here) is what the queue holds: a request on the wire is not in it.
-static_assert(Core::QueueDepth == 4);
-static_assert(decltype(Core::queue_)::capacity() == Core::QueueDepth);
+static_assert(Core::queueDepth == 4);
+static_assert(decltype(Core::queue_)::capacity() == Core::queueDepth);
 
 void queueFull() {
     testCase("a full queue refuses, no callback");
@@ -133,7 +133,7 @@ void queueHoldsQueueDepth() {
     testCase("the queue holds exactly QueueDepth requests, and is empty after they ran");
     fresh();
     FakeRecovery::sdaHigh = false;   // nothing starts: every accepted request waits in the queue
-    for(int i = 1; i <= static_cast<int>(Core::QueueDepth); ++i) {
+    for(int i = 1; i <= static_cast<int>(Core::queueDepth); ++i) {
         check(Core::submit(read(i)), "fits");
     }
     checkEq(Hw::startCount(), 0, "none on the wire");
@@ -141,10 +141,10 @@ void queueHoldsQueueDepth() {
     checkEq(results.size(), 0U, "a refused request gets no callback");
     FakeRecovery::sdaHigh = true;
     Core::turn();
-    for(std::size_t i = 0; i != Core::QueueDepth; ++i) { Hw::raise(Wire::ok); }
-    checkEq(Hw::startCount(), static_cast<int>(Core::QueueDepth), "all QueueDepth started");
-    checkEq(count(Result::ok), static_cast<int>(Core::QueueDepth), "and completed, in order");
-    for(int i = 1; i <= static_cast<int>(Core::QueueDepth); ++i) {
+    for(std::size_t i = 0; i != Core::queueDepth; ++i) { Hw::raise(Wire::ok); }
+    checkEq(Hw::startCount(), static_cast<int>(Core::queueDepth), "all QueueDepth started");
+    checkEq(count(Result::ok), static_cast<int>(Core::queueDepth), "and completed, in order");
+    for(int i = 1; i <= static_cast<int>(Core::queueDepth); ++i) {
         check(Core::submit(read(i)), "the emptied queue takes QueueDepth again");
     }
     Core::reset();
@@ -301,7 +301,7 @@ void deadBus() {
     }
     checkEq(Core::consecutiveFailures(), 0U, "NAKs are answers");
     auto const fail40 = [] {
-        for(std::uint32_t i = 0; i < Core::DeadBusFailures; ++i) {
+        for(std::uint32_t i = 0; i < Core::deadBusFailures; ++i) {
             Core::submit(read(1));
             Hw::raise(Wire::fault);
         }
@@ -456,7 +456,7 @@ static_assert(std::is_same_v<Front::Result,
                                 Core::Latency>);
 static_assert(std::is_same_v<Front::State,
                              QueueState>);
-static_assert(Front::QueueDepth == Core::QueueDepth && Front::CallbackSize == Core::CallbackSize);
+static_assert(Front::queueDepth == Core::queueDepth && Front::callbackSize == Core::callbackSize);
 static_assert(std::is_same_v<Front::Extends,
                              Kvasir::Startup::Extend<Kvasir::Hook::MainLoop,
                                                      &Front::turn>>,
@@ -577,8 +577,8 @@ struct ShapeCfg {
 using TimedShape = Kvasir::I2C::QueuedShape<ShapeCfg<true>, FakeClock, 16, FakeTiming>;
 using OneShape   = Kvasir::I2C::QueuedShape<ShapeCfg<false>, FakeClock, 16, FakeTiming>;
 
-static_assert(TimedShape::Cancellable && !TimedShape::Deadlines && TimedShape::Tracked);
-static_assert(TimedShape::DefaultTiming == FakeTiming::ClockTiming{400'000},
+static_assert(TimedShape::cancellable && !TimedShape::deadlines && TimedShape::tracked);
+static_assert(TimedShape::defaultTiming == FakeTiming::ClockTiming{400'000},
               "a request's default: baudRate's");
 static_assert(TimedShape::timing(100'000) == FakeTiming::ClockTiming{100'000},
               "a slower device: its own clock");
@@ -591,7 +591,7 @@ static_assert(std::is_same_v<TimedShape::Request,
                                                                   false,
                                                                   true,
                                                                   FakeTiming::ClockTiming,
-                                                                  TimedShape::DefaultTiming>>);
+                                                                  TimedShape::defaultTiming>>);
 static_assert(std::is_same_v<decltype(OneShape::timing(400'000)),
                              std::false_type>,
               "one clock for every device: no timing in a request");
@@ -624,11 +624,11 @@ void timingCache() {
 namespace {
 struct LeanTag {};
 
-constexpr Kvasir::Bus::QueueFeatures LeanFeatures{.latency         = false,
+constexpr Kvasir::Bus::QueueFeatures leanFeatures{.latency         = false,
                                                   .counters        = false,
                                                   .timeoutSnapshot = false};
 
-using LeanHw    = FakeHw<false, LeanTag, LeanFeatures>;
+using LeanHw    = FakeHw<false, LeanTag, leanFeatures>;
 using LeanCore  = CoreOf<LeanHw>;
 using LeanFront = Kvasir::I2C::QueuedFront<LeanCore>;
 
@@ -682,7 +682,7 @@ void leanBus() {
           "the lost one failed at its timeout");
     checkEq(LeanHw::timeoutAborts, 1, "the block let go");
     checkEq(LeanCore::consecutiveFailures(), 1U, "the dead-bus streak still counts");
-    for(std::uint32_t i = 1; i < LeanCore::DeadBusFailures; ++i) {
+    for(std::uint32_t i = 1; i < LeanCore::deadBusFailures; ++i) {
         LeanCore::submit(lean());
         LeanHw::raise(Wire::fault);
     }

@@ -42,7 +42,7 @@ struct Pending {
     void complete(std::uint32_t         gen,
                   typename Port::Result r) {
         if(gen != generation_.load(std::memory_order_relaxed)) { return; }   // given up on
-        if constexpr(Port::Features.timestamps) { stamp_ = Clock::now(); }
+        if constexpr(Port::features.timestamps) { stamp_ = Clock::now(); }
         auto const outcome = r == Port::Result::ok   ? Outcome::ok
                            : r == Port::Result::nack ? Outcome::nack
                                                      : Outcome::failed;
@@ -68,7 +68,7 @@ struct Pending {
     /// read after the acquire-load.
     /// TimePoint{} on a port without timestamps (nothing reads it there: Device's Timed<G>).
     [[nodiscard]] TimePoint stamp() const {
-        if constexpr(Port::Features.timestamps) {
+        if constexpr(Port::features.timestamps) {
             return stamp_;
         } else {
             return TimePoint{};
@@ -80,7 +80,7 @@ private:
     std::atomic<Outcome>       result_{Outcome::failed};
     std::atomic<std::uint32_t> generation_{0};
     /// Nothing, and no clock read in the interrupt, on a port without timestamps.
-    [[no_unique_address]] std::conditional_t<Port::Features.timestamps, TimePoint, detail::NoStamp>
+    [[no_unique_address]] std::conditional_t<Port::features.timestamps, TimePoint, Detail::NoStamp>
       stamp_{};
 };
 

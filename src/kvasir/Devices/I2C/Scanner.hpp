@@ -26,7 +26,7 @@ namespace Kvasir::I2C {
 /// and returns whatever its pointer is at -- a status byte, the last reading -- and none of
 /// it changes the device. An empty slot NAKs and the controller aborts.
 struct AddressProbe {
-    static constexpr std::string_view Name = "read";
+    static constexpr std::string_view name = "read";
 
     template<typename Request>
     static void fill(Request&             req,
@@ -42,7 +42,7 @@ struct AddressProbe {
 /// side-effect free: it moves the device's register pointer.
 template<std::uint8_t Register = 0x00>
 struct RegisterProbe {
-    static constexpr std::string_view Name = "register read";
+    static constexpr std::string_view name = "register read";
 
     template<typename Request>
     static void fill(Request&             req,
@@ -72,7 +72,7 @@ struct ScanDefaults {
     static constexpr auto selectTimeout = std::chrono::milliseconds{500};
 };
 
-namespace detail {
+namespace Detail {
     template<typename Cfg>
     constexpr std::chrono::milliseconds probeTimeoutOf() {
         return Kvasir::asDuration(KVASIR_CONFIG_OR(Cfg, probeTimeout, ScanDefaults::probeTimeout));
@@ -83,13 +83,13 @@ namespace detail {
         return Kvasir::asDuration(
           KVASIR_CONFIG_OR(Cfg, selectTimeout, ScanDefaults::selectTimeout));
     }
-}   // namespace detail
+}   // namespace Detail
 
 /// The addresses a scan probes, the same for both scans (Scanner, BusScan): 0x00..0x07 and
 /// 0x78..0x7F are reserved by the I2C specification and never probed, whatever is asked for.
 struct ScanAddresses {
-    static constexpr std::uint8_t First = 0x08;
-    static constexpr std::uint8_t Last  = 0x77;
+    static constexpr std::uint8_t first = 0x08;
+    static constexpr std::uint8_t last  = 0x77;
 };
 
 /// A set of 7-bit addresses, one bit each: what a scan found, faulted on, is to probe or leaves
@@ -121,7 +121,7 @@ class ProbeSlot {
     /// The bus as Pending sees it: no time stamp, so no clock read in the interrupt.
     struct Port {
         using Result                                     = typename I2c::Result;
-        static constexpr Engine::EngineFeatures Features = {.timestamps = false};
+        static constexpr Engine::EngineFeatures features = {.timestamps = false};
     };
 
     using PendingT = Engine::Pending<Port, Clock>;
@@ -129,7 +129,7 @@ class ProbeSlot {
 public:
     /// How long one probe may be outstanding (ScanDefaults::probeTimeout), until
     /// setTimeout(ms) says otherwise.
-    static constexpr auto Timeout = detail::probeTimeoutOf<Config>();
+    static constexpr auto timeout = Detail::probeTimeoutOf<Config>();
 
     /// From now on, give up on a probe after `t`.
     void setTimeout(std::chrono::milliseconds t) { timeout_ = t; }
@@ -174,7 +174,7 @@ public:
 private:
     std::array<std::byte, 1>   tx_{};
     std::array<std::byte, 1>   rx_{};
-    std::chrono::milliseconds  timeout_{Timeout};
+    std::chrono::milliseconds  timeout_{timeout};
     typename Clock::time_point sentAt_{};
     PendingT                   pending_{};
 };
@@ -200,7 +200,7 @@ struct Scanner : ScanAddresses {
 
     /// How long one probe may be outstanding (ProbeSlot); one given up on is counted as a bus
     /// fault at that address.
-    static constexpr auto ProbeTimeout = Slot::Timeout;
+    static constexpr auto probeTimeout = Slot::timeout;
 
     /// Change it at run time, for the scans from now on.
     void setProbeTimeout(std::chrono::milliseconds t) { slot_.setTimeout(t); }
@@ -212,14 +212,14 @@ struct Scanner : ScanAddresses {
     }
 
     /// The whole non-reserved range.
-    void start() { start(First, Last); }
+    void start() { start(first, last); }
 
     /// One inclusive range, clamped to the non-reserved addresses.
     void start(std::uint8_t from,
                std::uint8_t to) {
         if(state_ != State::idle) { return; }
         clear_();
-        for(unsigned a = from < First ? First : from; a <= (to > Last ? Last : to); ++a) {
+        for(unsigned a = from < first ? first : from; a <= (to > last ? last : to); ++a) {
             if(!excluded_.contains(static_cast<std::uint8_t>(a))) {
                 pending_.insert(static_cast<std::uint8_t>(a));
             }
@@ -232,7 +232,7 @@ struct Scanner : ScanAddresses {
         if(state_ != State::idle) { return; }
         clear_();
         for(auto const a : addresses) {
-            if(a >= First && a <= Last && !excluded_.contains(a)) { pending_.insert(a); }
+            if(a >= first && a <= last && !excluded_.contains(a)) { pending_.insert(a); }
         }
         begin_();
     }
@@ -262,7 +262,7 @@ struct Scanner : ScanAddresses {
     /// Call f(address, hint) for every address that answered.
     template<typename F>
     void forEachFound(F&& f) const {
-        for(unsigned a = First; a <= Last; ++a) {
+        for(unsigned a = first; a <= last; ++a) {
             auto const address = static_cast<std::uint8_t>(a);
             if(found(address)) { f(address, hint(address)); }
         }
@@ -310,14 +310,14 @@ private:
     }
 
     void begin_() {
-        addr_ = First;
+        addr_ = first;
         if(!seek_()) { return; }   // nothing asked for
         state_ = State::probe;
     }
 
     /// Move addr_ to the next pending address; false when there are none left.
     bool seek_() {
-        for(unsigned a = addr_; a <= Last; ++a) {
+        for(unsigned a = addr_; a <= last; ++a) {
             if(pending_.contains(static_cast<std::uint8_t>(a))) {
                 addr_ = static_cast<std::uint8_t>(a);
                 return true;
@@ -333,7 +333,7 @@ private:
     }
 
     void advance_() {
-        if(addr_ == Last) {
+        if(addr_ == last) {
             finish_();
             return;
         }
@@ -352,7 +352,7 @@ private:
     }
 
     State         state_{State::idle};
-    std::uint8_t  addr_{First};
+    std::uint8_t  addr_{first};
     Slot          slot_{};
     AddressSet    excluded_{};
     AddressSet    pending_{};

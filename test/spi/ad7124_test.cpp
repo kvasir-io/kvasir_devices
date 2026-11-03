@@ -166,12 +166,12 @@ using Adc = A::Ad7124<Bus, FakeClock, Spi::Cs, TwoCells>;
 static_assert(Kvasir::Engine::WrapsDevice<Adc> && !Kvasir::Engine::DeviceLike<Adc>,
               "a DeviceSet member as a driver with its device inside (DeviceSet.hpp)");
 
-constexpr std::uint32_t ConfigWord = A::Ad7124Detail::configValue(TwoCells::polarity,
+constexpr std::uint32_t configWord = A::Ad7124Detail::configValue(TwoCells::polarity,
                                                                   TwoCells::referenceBuffers,
                                                                   TwoCells::inputBuffers,
                                                                   TwoCells::reference,
                                                                   TwoCells::gain);
-static_assert(ConfigWord == 0x0863,
+static_assert(configWord == 0x0863,
               "bipolar, input buffers, REFIN1, gain 8");
 
 void fresh() {
@@ -202,7 +202,7 @@ void bringUp() {
     check(runUntil(adc, [&] { return adc.answering(); }, 5s), "comes up");
     checkEq(adc.id(), 0x07, "ID 0x07");
     check(part.ignoredWrites.empty(), "nothing ignored: every write came after its calibration");
-    static_assert(Adc::Chip::ZeroScaleWait >= 338ms,
+    static_assert(Adc::Chip::zeroScaleWait >= 338ms,
                   "one settling period covers the model's 337.5 ms");
     std::vector<std::uint8_t> order;
     order.reserve(part.written.size());
@@ -212,7 +212,7 @@ void bringUp() {
     check(order == expect,
           "ERROR_EN, IO_CONTROL_1, CONFIG_0, FILTER_0, two channels, OFFSET_0, two calibrations, "
           "ADC_CONTROL");
-    checkEq(part.reg[0x19], ConfigWord, "CONFIG_0 as configValue() makes it");
+    checkEq(part.reg[0x19], configWord, "CONFIG_0 as configValue() makes it");
     check(((part.written[7].second >> 2U) & 0xFU) == 0x6
             && ((part.written[8].second >> 2U) & 0xFU) == 0x5,
           "full-scale then zero-scale");
@@ -260,7 +260,7 @@ void resetItself() {
             [&] { return adc.bringUps() == 2 && adc.answering(); },
             3s),
           "brought up again");
-    checkEq(part.reg[0x19], ConfigWord, "configured again");
+    checkEq(part.reg[0x19], configWord, "configured again");
 }
 
 void errorFlag() {
@@ -296,7 +296,7 @@ void wrongId() {
         Spi::BusScope<Bus> const otherScope{};
         check(runUntil(other, [&] { return other.answering(); }, 5s), "comes up");
         checkEq(other.id(), id, "the id as read");
-        checkEq(part.reg[0x19], ConfigWord, "configured");
+        checkEq(part.reg[0x19], configWord, "configured");
     }
 }
 

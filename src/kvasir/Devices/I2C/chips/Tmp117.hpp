@@ -31,7 +31,7 @@ namespace Tmp117Detail {
     /// 250 ms on; the averaging stretches the short ones: code 0 is 15.5 ms, 125 ms, 500 ms or
     /// 1 s and code 1 is 125 ms, 125 ms, 500 ms or 1 s for AVG 00, 01, 10 and 11.
     enum class Cycle : std::uint8_t {
-        ms15_5 = 0,
+        ms15p5 = 0,
         ms125  = 1,
         ms250  = 2,
         ms500  = 3,
@@ -100,25 +100,25 @@ namespace Tmp117Detail {
 /// configuration programmed into the EEPROM is written over at every bring-up; a board that
 /// relies on one leaves Config unset only by removing the Initial. 0x48..0x4B by ADD0.
 struct Tmp117 {
-    static constexpr std::string_view Name = "TMP117";
+    static constexpr std::string_view name = "TMP117";
     /// TI TMP117. TMP117.md:1292..1315, "Device ID Register (address = 0Fh) [reset = 0117h]": DID 117h
     /// in 11:0, the revision above it.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x0F, 2, true, 0x0FFF, 0x0117},
     };
-    static constexpr Address7    Address       = 0x48;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x48;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x48, 4>();
+    static constexpr auto addresses = addressRun<0x48, 4>();
 
     /// 1.5 ms to load the EEPROM into the register map after power-up; writes during that
     /// window are ignored, so the first thing done here is a read. The same load follows a
     /// general-call reset at run time, which StartupDelay does not cover, so the configuration
     /// register is read too and a part whose EEPROM_Busy (bit 12) is still set is not brought
     /// up yet: the Config write after the bring-up would be ignored (7.3.1, "Power Up").
-    static constexpr auto StartupDelay = std::chrono::milliseconds{5};
+    static constexpr auto startupDelay = std::chrono::milliseconds{5};
 
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0})};
 
     struct State : Engine::Groups::DeviceId {
         bool eepromBusy{};   ///< EEPROM_Busy when the bring-up read the configuration
@@ -145,8 +145,8 @@ struct Tmp117 {
     using AlertPin  = Tmp117Detail::AlertPin;
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 2})};
 
@@ -178,13 +178,13 @@ struct Tmp117 {
 
     struct Config {
         using Value                        = Tmp117Detail::Config;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
         /// The reset configuration (0x0220), put back after every bring-up.
         /// A one-shot mode starts a conversion with every write, so the same value again is a
         /// new command: every set goes out.
-        static constexpr bool  AlwaysWrite = true;
-        static constexpr Value Initial{Mode::continuous, Cycle::s1, Averaging::eight};
+        static constexpr bool  alwaysWrite = true;
+        static constexpr Value initial{Mode::continuous, Cycle::s1, Averaging::eight};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -209,8 +209,8 @@ struct Tmp117 {
     /// THIGH then TLOW, in the same format as the result register.
     struct Limits {
         using Value                        = MilliDegC;
-        static constexpr std::size_t Items = 2;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t items = 2;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
                                                            std::size_t          item,
@@ -225,7 +225,7 @@ struct Tmp117 {
     /// is EEPROM-backed, so the part keeps its trim until the application sets one.
     struct Offset {
         using Value                        = MilliDegC;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         offset,
                                                            std::span<std::byte> buffer) {
@@ -236,8 +236,8 @@ struct Tmp117 {
 
     /// Limits items, in register order. Note this is the opposite of the TMP1075's: on the
     /// TMP117 register 0x02 is the *high* limit and 0x03 the low one.
-    static constexpr std::size_t High = 0;
-    static constexpr std::size_t Low  = 1;
+    static constexpr std::size_t high = 0;
+    static constexpr std::size_t low  = 1;
 
     using Reads  = Engine::List<Temperature>;
     using Writes = Engine::List<Config, Limits, Offset>;
@@ -245,11 +245,11 @@ struct Tmp117 {
 
 /// Register-compatible with the TMP117; the tighter-accuracy part of the same family.
 struct Tmp119 : Tmp117 {
-    static constexpr std::string_view Name = "TMP119";
+    static constexpr std::string_view name = "TMP119";
     /// TI TMP119. TMP119.md:1551, "Device ID Register (address = 0Fh) [reset = 2117h]". The register
     /// map on :1196 says 0117h for the same register -- the TMP117's value, carried over: the real part
     /// reads 2117h.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x0F, 2, true, 0xFFFF, 0x2117},
     };
 };

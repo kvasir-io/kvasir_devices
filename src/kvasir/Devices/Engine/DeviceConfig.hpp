@@ -69,8 +69,8 @@ struct EngineDefaults {
 /// to know *which* switch it is on can keep a pointer to it and the switch need not be a
 /// global. This one is empty and `[[no_unique_address]]`, so an ungated device pays nothing.
 struct NoGate {
-    static constexpr bool Gated = false;
-    static constexpr bool Front = true;   // not behind a switch (Mux.hpp, MuxFrontGate)
+    static constexpr bool gated = false;
+    static constexpr bool front = true;   // not behind a switch (Mux.hpp, MuxFrontGate)
 
     bool claim() { return true; }
 
@@ -84,14 +84,14 @@ enum class WhileOff : std::uint8_t {
     disconnected,   ///< they stay powered and keep their registers: the engine carries on
 };
 
-namespace detail {
+namespace Detail {
     /// A gate that can say "not now, and for a reason": the part is behind a bridge
     /// (Bridge.hpp, BridgeGate). Besides claim() and release() it has `offline()`,
     /// `generation()` -- which steps every time the bridge becomes active -- and names the
     /// bridge, whose `WhileOff` the engine reads.
     template<typename G>
-    concept BridgedGate = requires { requires G::Bridged; };
-}   // namespace detail
+    concept BridgedGate = requires { requires G::bridged; };
+}   // namespace Detail
 
 /// What request<G>() hands back, for answer<G>() to be asked about. A value-initialised one
 /// is `none()`: false, and answer<G>() says `pending` for it -- so a caller can keep one

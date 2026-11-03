@@ -49,14 +49,14 @@ struct Hd44780Pcf8574 {
     static_assert(Lines == 2 || Lines == 4,
                   "16 x 2 or 20 x 4");
 
-    static constexpr std::size_t      ColumnCount   = Columns;
-    static constexpr std::size_t      LineCount     = Lines;
-    static constexpr std::string_view Name          = Columns == 16 ? "LCD1602" : "LCD2004";
-    static constexpr Address7         Address       = 0x27;
-    static constexpr std::size_t      RegisterBytes = 0;
-    static constexpr auto             StartupDelay  = std::chrono::milliseconds{50};
+    static constexpr std::size_t      columnCount   = Columns;
+    static constexpr std::size_t      lineCount     = Lines;
+    static constexpr std::string_view name          = Columns == 16 ? "LCD1602" : "LCD2004";
+    static constexpr Address7         address       = 0x27;
+    static constexpr std::size_t      registerBytes = 0;
+    static constexpr auto             startupDelay  = std::chrono::milliseconds{50};
 
-    static constexpr std::array<Address7, 16> Addresses{0x20,
+    static constexpr std::array<Address7, 16> addresses{0x20,
                                                         0x21,
                                                         0x22,
                                                         0x23,
@@ -73,13 +73,13 @@ struct Hd44780Pcf8574 {
                                                         0x3E,
                                                         0x3F};
 
-    static constexpr std::uint8_t Rs           = 0x01;
-    static constexpr std::uint8_t Enable       = 0x04;
-    static constexpr std::uint8_t BacklightBit = 0x08;
+    static constexpr std::uint8_t rs           = 0x01;
+    static constexpr std::uint8_t enable       = 0x04;
+    static constexpr std::uint8_t backlightBit = 0x08;
 
     /// The port byte's backlight bit for a flag.
     [[nodiscard]] static constexpr std::uint8_t light(Backlight backlight) {
-        return backlight == Backlight::on ? BacklightBit : std::uint8_t{0};
+        return backlight == Backlight::on ? backlightBit : std::uint8_t{0};
     }
 
     /// The four port states that send one byte (mode: 0 command, Rs data).
@@ -87,13 +87,13 @@ struct Hd44780Pcf8574 {
                                               4>
     nibbles(std::uint8_t v,
             std::uint8_t mode,
-            std::uint8_t lit = BacklightBit) {
+            std::uint8_t lit = backlightBit) {
         auto const hi = static_cast<std::uint8_t>((v & 0xF0U) | mode | lit);
         auto const lo
           = static_cast<std::uint8_t>(((static_cast<unsigned>(v) << 4) & 0xF0U) | mode | lit);
-        return {static_cast<std::uint8_t>(hi | Enable),
+        return {static_cast<std::uint8_t>(hi | enable),
                 hi,
-                static_cast<std::uint8_t>(lo | Enable),
+                static_cast<std::uint8_t>(lo | enable),
                 lo};
     }
 
@@ -109,19 +109,19 @@ struct Hd44780Pcf8574 {
     }
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       // A single high nibble, three times, then the switch to 4-bit: E pulsed once each.
-      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
-                                         static_cast<std::uint8_t>(0x30 | BacklightBit)},
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | backlightBit | enable),
+                                         static_cast<std::uint8_t>(0x30 | backlightBit)},
                              .delay   = std::chrono::milliseconds{5}}),
-      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
-                                         static_cast<std::uint8_t>(0x30 | BacklightBit)},
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | backlightBit | enable),
+                                         static_cast<std::uint8_t>(0x30 | backlightBit)},
                              .delay   = std::chrono::milliseconds{1}}),
-      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | BacklightBit | Enable),
-                                         static_cast<std::uint8_t>(0x30 | BacklightBit)},
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x30 | backlightBit | enable),
+                                         static_cast<std::uint8_t>(0x30 | backlightBit)},
                              .delay   = std::chrono::milliseconds{1}}),
-      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x20 | BacklightBit | Enable),
-                                         static_cast<std::uint8_t>(0x20 | BacklightBit)},
+      Engine::Step::command({.payload = {static_cast<std::uint8_t>(0x20 | backlightBit | enable),
+                                         static_cast<std::uint8_t>(0x20 | backlightBit)},
                              .delay   = std::chrono::milliseconds{1}}),
       command(0x28, std::chrono::milliseconds{0}),   // function set: 4-bit, two lines, 5 x 8
       command(0x08, std::chrono::milliseconds{0}),   // display off
@@ -148,7 +148,7 @@ struct Hd44780Pcf8574 {
         constexpr bool operator==(Text const&) const = default;
     };
 
-    static constexpr std::array<std::uint8_t, 4> RowAddress{
+    static constexpr std::array<std::uint8_t, 4> rowAddress{
       0x00,
       0x40,
       static_cast<std::uint8_t>(Columns),
@@ -156,21 +156,21 @@ struct Hd44780Pcf8574 {
 
     struct Line {
         using Value                        = Text;
-        static constexpr std::size_t Items = Lines;
-        static constexpr std::size_t Bytes = 4 + 4 * Columns;
+        static constexpr std::size_t items = Lines;
+        static constexpr std::size_t bytes = 4 + 4 * Columns;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::size_t          item,
                                                            std::span<std::byte> buffer) {
             auto const lit  = light(value.backlight);
-            auto const addr = nibbles(static_cast<std::uint8_t>(0x80U | RowAddress[item]), 0, lit);
+            auto const addr = nibbles(static_cast<std::uint8_t>(0x80U | rowAddress[item]), 0, lit);
             for(std::size_t i = 0; i < 4; ++i) { buffer[i] = std::byte{addr[i]}; }
             for(std::size_t c = 0; c < Columns; ++c) {
-                auto const n = nibbles(static_cast<std::uint8_t>(value.chars[c]), Rs, lit);
+                auto const n = nibbles(static_cast<std::uint8_t>(value.chars[c]), rs, lit);
                 for(std::size_t i = 0; i < 4; ++i) { buffer[4 + 4 * c + i] = std::byte{n[i]}; }
             }
             return Engine::Step::commandBuffer(
-              {.offset = 0, .count = static_cast<std::uint8_t>(Bytes)});
+              {.offset = 0, .count = static_cast<std::uint8_t>(bytes)});
         }
     };
 
@@ -184,13 +184,13 @@ struct Hd44780Pcf8574 {
 
     struct Control {
         using Value                        = Display;
-        static constexpr std::size_t Bytes = 4;
+        static constexpr std::size_t bytes = 4;
 
         static constexpr Value on{0x0C, Backlight::on};       ///< display on, cursor off
         static constexpr Value off{0x08, Backlight::on};      ///< display off (RAM kept)
         static constexpr Value cursor{0x0E, Backlight::on};   ///< display on, underline cursor
         static constexpr Value blink{0x0F, Backlight::on};    ///< display on, blinking cursor
-        static constexpr Value Initial = on;
+        static constexpr Value initial = on;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

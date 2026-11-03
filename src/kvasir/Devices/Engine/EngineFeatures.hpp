@@ -48,7 +48,7 @@ struct EngineFeatures {
     bool rest = true;
     /// A device driven on its own (Device::turn(), not a Bus or a DeviceSet) calls its
     /// chip's hooks directly, as a device set of one (SetOps.hpp), instead of through its
-    /// table (Device::EngineOps). Direct calls stamp the whole engine once per chip type;
+    /// table (Device::engineOps). Direct calls stamp the whole engine once per chip type;
     /// through the table it is one engine per port, whatever the chips. Off by default: a
     /// firmware with a dozen chip types paid ~30 KB for the copies. On only pays for a bus
     /// with one or two chip types, where the table's loads and indirect calls are all it saves.
@@ -58,7 +58,7 @@ struct EngineFeatures {
 };
 
 /// Every feature on: what a test fake is, so that the tests of each feature run on it.
-inline constexpr EngineFeatures AllEngineFeatures{.switchable    = true,
+inline constexpr EngineFeatures allEngineFeatures{.switchable    = true,
                                                   .presence      = true,
                                                   .inFlightNet   = true,
                                                   .timestamps    = true,
@@ -71,25 +71,25 @@ inline constexpr EngineFeatures AllEngineFeatures{.switchable    = true,
 /// A bus driver with the engine features @p F: everything of `Bus`, one member more.
 template<typename Bus, EngineFeatures F>
 struct WithFeatures : Bus {
-    static constexpr EngineFeatures Features = F;
+    static constexpr EngineFeatures features = F;
 };
 
-namespace detail {
+namespace Detail {
     // The "empty when off" helpers are bus-neutral (../Features.hpp); the engine takes them in here.
-    using ::Kvasir::detail::Absent;
-    using ::Kvasir::detail::IfFeature;
-    using ::Kvasir::detail::NoCount;
-    using ::Kvasir::detail::NoStamp;
-    using ::Kvasir::detail::StatCount;
+    using ::Kvasir::Detail::Absent;
+    using ::Kvasir::Detail::IfFeature;
+    using ::Kvasir::Detail::NoCount;
+    using ::Kvasir::Detail::NoStamp;
+    using ::Kvasir::Detail::StatCount;
 
     template<typename Bus>
     consteval EngineFeatures featuresOf() {
-        if constexpr(requires { Bus::Features; }) {
-            return Bus::Features;
+        if constexpr(requires { Bus::features; }) {
+            return Bus::features;
         } else {
             return EngineFeatures{};
         }
     }
-}   // namespace detail
+}   // namespace Detail
 
 }   // namespace Kvasir::Engine

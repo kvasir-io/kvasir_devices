@@ -137,9 +137,9 @@ template<typename Policy = ShareChannel>
 struct BasicMuxArbiter {
     using PolicyT = Policy;
 
-    static constexpr std::uint8_t NoHolder = 0xFF;
+    static constexpr std::uint8_t noHolder = 0xFF;
 
-    std::uint8_t  holder{NoHolder};   ///< the channel the switch belongs to
+    std::uint8_t  holder{noHolder};   ///< the channel the switch belongs to
     std::uint8_t  holders{};          ///< parts of that channel holding it now
     std::uint8_t  waiting{};          ///< a bit per channel refused since it last got it
     std::uint32_t stint{};            ///< steps at every grant: a hold from before it is over
@@ -181,7 +181,7 @@ public:
     using Arbiter  = BasicMuxArbiter<Policy>;
 
     /// Every channel shut. It has no row in the arbiter's per-channel statistics.
-    static constexpr std::uint8_t Closed = 8;
+    static constexpr std::uint8_t closed = 8;
 
     static_assert(MuxPolicy<Policy,
                             Arbiter>,
@@ -226,13 +226,13 @@ public:
         if(holding_ && position != position_) { release(); }
         auto const mask = maskOf_(position);
         if(!holds_()) {
-            if(arbiter_->holder == Arbiter::NoHolder) {
+            if(arbiter_->holder == Arbiter::noHolder) {
                 refused_            = false;
                 arbiter_->holder    = position;
                 arbiter_->holders   = 1;
                 arbiter_->waiting   = static_cast<std::uint8_t>(arbiter_->waiting & ~mask);
                 arbiter_->grantedAt = sinceEpoch_();
-                if(position < Closed) { ++arbiter_->grants[position]; }
+                if(position < closed) { ++arbiter_->grants[position]; }
                 ++arbiter_->stint;
                 hold_(position);
                 // A switch already at this position -- the write done and not owed again after
@@ -253,7 +253,7 @@ public:
             } else {
                 arbiter_->waiting = static_cast<std::uint8_t>(arbiter_->waiting | mask);
                 // One wait, however many turns it is asked again before it ends.
-                if(!refused_ && position < Closed && arbiter_->holder < Closed) {
+                if(!refused_ && position < closed && arbiter_->holder < closed) {
                     ++arbiter_->waited[position][arbiter_->holder];
                 }
                 refused_   = true;
@@ -283,17 +283,17 @@ public:
         holding_ = false;
         --arbiter_->holders;
         if(arbiter_->holders == 0 || Policy::freesOnRelease(*arbiter_, position_)) {
-            if(position_ < Closed) {
+            if(position_ < closed) {
                 arbiter_->held[position_] += sinceEpoch_() - arbiter_->grantedAt;
             }
-            arbiter_->holder  = Arbiter::NoHolder;
+            arbiter_->holder  = Arbiter::noHolder;
             arbiter_->holders = 0;
         }
     }
 
 private:
     [[nodiscard]] static constexpr std::uint8_t maskOf_(std::uint8_t position) {
-        return position < Closed ? static_cast<std::uint8_t>(1U << position) : std::uint8_t{0};
+        return position < closed ? static_cast<std::uint8_t>(1U << position) : std::uint8_t{0};
     }
 
     /// This client got the switch in the arbiter's current stint and has not let go. A policy
@@ -334,8 +334,8 @@ private:
 /// devices on the *same* channel to still be caught.
 template<std::uint8_t Channel>
 struct ChannelPosition {
-    static constexpr bool         Front = false;
-    static constexpr std::uint8_t Mask  = static_cast<std::uint8_t>(1U << Channel);
+    static constexpr bool         front = false;
+    static constexpr std::uint8_t mask  = static_cast<std::uint8_t>(1U << Channel);
 
     static_assert(Channel < 8,
                   "a TCA9548A has eight channels");
@@ -357,12 +357,12 @@ struct ChannelPosition {
 
 /// The switch closed (MuxPort::Closed): no channel open while the part talks.
 struct FrontPosition {
-    static constexpr bool         Front = true;
-    static constexpr std::uint8_t Mask  = 0;
+    static constexpr bool         front = true;
+    static constexpr std::uint8_t mask  = 0;
 
     template<typename Port>
     [[nodiscard]] static constexpr std::uint8_t position() {
-        return Port::Closed;
+        return Port::closed;
     }
 };
 
@@ -370,14 +370,14 @@ struct FrontPosition {
 /// MuxGate (behind the switch, on one channel) and MuxFrontGate (in front of it, the switch closed).
 template<typename MuxDevice, typename Position, typename Policy = ShareChannel>
 struct SwitchGate {
-    static constexpr bool Gated = true;
-    static constexpr bool Front = Position::Front;
+    static constexpr bool gated = true;
+    static constexpr bool front = Position::front;
 
     using Mux      = MuxDevice;
     using Channels = typename Mux::Chip::Channels;
     using Arbiter  = BasicMuxArbiter<Policy>;
 
-    static constexpr std::uint8_t Mask = Position::Mask;
+    static constexpr std::uint8_t mask = Position::mask;
 
     /// Say which switch this gate is on, and which arbiter it shares with the other
     /// gates of that switch. Called once, before the device is handled.

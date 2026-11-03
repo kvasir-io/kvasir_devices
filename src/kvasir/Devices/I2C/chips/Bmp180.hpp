@@ -28,22 +28,22 @@ namespace Bmp180Detail {
 /// 15.0 degC and 69964 Pa. `Bmp180<>` is oss 1 (x2).
 template<Bmp180Detail::Oversampling Oss = Bmp180Detail::Oversampling::x2>
 struct Bmp180 {
-    static constexpr std::string_view Name = "BMP180";
+    static constexpr std::string_view name = "BMP180";
     /// Bosch BME280, BMP280, BMP180: the id register 0xD0 reads 0x60 (BME280.md:1106), 0x58
     /// (BMP280.md:989) and 0x55 (BMP180.md:421).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x55},
     };
-    static constexpr Address7                Address = 0x77;
-    static constexpr std::array<Address7, 1> Addresses{0x77};
-    static constexpr std::size_t             RegisterBytes = 1;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{10};
+    static constexpr Address7                address = 0x77;
+    static constexpr std::array<Address7, 1> addresses{0x77};
+    static constexpr std::size_t             registerBytes = 1;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{10};
 
     using Oversampling = Bmp180Detail::Oversampling;
 
-    static constexpr unsigned OssBits = static_cast<unsigned>(Oss);
+    static constexpr unsigned ossBits = static_cast<unsigned>(Oss);
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::read({.reg = 0xAA, .count = 22, .offset = 0}),
     };
 
@@ -84,20 +84,20 @@ struct Bmp180 {
     }
 
     /// Table 8's maximum conversion times, 4.5, 7.5, 13.5 and 25.5 ms, plus a millisecond each.
-    static constexpr std::chrono::milliseconds PressureWait{OssBits == 0   ? 6
-                                                            : OssBits == 1 ? 9
-                                                            : OssBits == 2 ? 15
+    static constexpr std::chrono::milliseconds pressureWait{ossBits == 0   ? 6
+                                                            : ossBits == 1 ? 9
+                                                            : ossBits == 2 ? 15
                                                                            : 27};
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::write(
             {.reg = 0xF4, .payload = {0x2E}, .delay = std::chrono::milliseconds{6}}),
           Engine::Step::read({.reg = 0xF6, .count = 2, .offset = 0}),
           Engine::Step::write({.reg     = 0xF4,
-                               .payload = {static_cast<std::uint8_t>(0x34U | (OssBits << 6))},
-                               .delay   = PressureWait}),
+                               .payload = {static_cast<std::uint8_t>(0x34U | (ossBits << 6))},
+                               .delay   = pressureWait}),
           Engine::Step::read({.reg = 0xF6, .count = 3, .offset = 2}),
         };
 
@@ -112,7 +112,7 @@ struct Bmp180 {
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
                                                                       State const& c) {
             std::int32_t const ut = data.be16(0);
-            std::int32_t const up = static_cast<std::int32_t>(data.be24(2) >> (8 - OssBits));
+            std::int32_t const up = static_cast<std::int32_t>(data.be24(2) >> (8 - ossBits));
 
             // temperature
             std::int32_t x1
@@ -129,7 +129,7 @@ struct Bmp180 {
             x2                    = (c.ac2 * b6) >> 11;
             std::int32_t       x3 = x1 + x2;
             std::int32_t const b3
-              = (((static_cast<std::int32_t>(c.ac1) * 4 + x3) << OssBits) + 2) >> 2;
+              = (((static_cast<std::int32_t>(c.ac1) * 4 + x3) << ossBits) + 2) >> 2;
             x1 = (c.ac3 * b6) >> 13;
             x2 = (c.b1 * ((b6 * b6) >> 12)) >> 16;
             x3 = ((x1 + x2) + 2) >> 2;
@@ -138,7 +138,7 @@ struct Bmp180 {
             if(b4 == 0) { return Engine::Outcome<Sample>::reject(); }
             std::uint32_t const b7
               = (static_cast<std::uint32_t>(up) - static_cast<std::uint32_t>(b3))
-              * (50000U >> OssBits);
+              * (50000U >> ossBits);
             std::int32_t p  = b7 < 0x80000000U ? static_cast<std::int32_t>((b7 * 2) / b4)
                                                : static_cast<std::int32_t>((b7 / b4) * 2);
             x1              = (p >> 8) * (p >> 8);

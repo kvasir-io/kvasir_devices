@@ -38,7 +38,7 @@
 #include <span>
 #include <string_view>
 
-namespace Kvasir::Engine::detail {
+namespace Kvasir::Engine::Detail {
 
 /// What became of an on-demand read (`Device::request<G>()` and `answer<G>()`): what a run of
 /// the group did for the requests it took on.
@@ -65,7 +65,7 @@ template<typename Req, typename Res, EngineFeatures F = EngineFeatures{}>
 struct BusPort {
     using Request                            = Req;
     using Result                             = Res;
-    static constexpr EngineFeatures Features = F;
+    static constexpr EngineFeatures features = F;
 };
 
 template<typename Bus>
@@ -110,10 +110,10 @@ struct EngineState {
     bool afterDelay_{false};
     bool inFlight_{false};
     /// The last bring-up failed: back off before the next (EngineFeatures::faultBackoff).
-    [[no_unique_address]] IfFeature<Port::Features.faultBackoff, bool, 20> initFailed_{};
+    [[no_unique_address]] IfFeature<Port::features.faultBackoff, bool, 20> initFailed_{};
     /// Back-offs since the last script that completed (or the last ACK, BackoffReset::anyAck): each pause twice
     /// the last (faultBackoff, doubling up to faultBackoffLongest), saturating.
-    [[no_unique_address]] IfFeature<Port::Features.faultBackoff, std::uint8_t, 24> faultStreak_{};
+    [[no_unique_address]] IfFeature<Port::features.faultBackoff, std::uint8_t, 24> faultStreak_{};
     bool unidentifiedLogged_{false};
     bool oracleFailed_{false};   ///< this bring-up: an Identity register did not match
 
@@ -130,18 +130,18 @@ struct EngineState {
 
     TimePoint waitUntil_{};
     /// Nothing but the running script until then, after a fault (EngineFeatures::faultBackoff).
-    [[no_unique_address]] std::conditional_t<Port::Features.faultBackoff, TimePoint, NoStamp>
+    [[no_unique_address]] std::conditional_t<Port::features.faultBackoff, TimePoint, NoStamp>
       holdUntil_{};
     /// When the request on the wire was submitted: the in-flight net measures from it
     /// (EngineFeatures::inFlightNet; nothing without it).
-    [[no_unique_address]] std::conditional_t<Port::Features.inFlightNet, TimePoint, NoStamp>
+    [[no_unique_address]] std::conditional_t<Port::features.inFlightNet, TimePoint, NoStamp>
       submittedAt_{};
 
     /// Statistics (EngineFeatures::stats), with turns_: nothing without them.
-    [[no_unique_address]] StatCount<Port::Features.stats> errors_{};
+    [[no_unique_address]] StatCount<Port::features.stats> errors_{};
     std::uint16_t                                         bringUps_{};
     /// Bring-ups setup() turned down.
-    [[no_unique_address]] StatCount<Port::Features.stats, std::uint16_t> unidentified_{};
+    [[no_unique_address]] StatCount<Port::features.stats, std::uint16_t> unidentified_{};
 
     /// The handshake with the bus: the callback handed to it, and what came back.
     PendingT pending_{};
@@ -149,30 +149,30 @@ struct EngineState {
     /// This device's own table (DeviceOps), set by its constructor.
     DeviceOps<Port, Clock> const* dev_{};
     /// Full turns run: what the device costs the loop.
-    [[no_unique_address]] StatCount<Port::Features.stats> turns_{};
+    [[no_unique_address]] StatCount<Port::features.stats> turns_{};
 
     /// Whether the part is there (Presence.hpp), and why it is offline, if it is.
     /// Nothing for a feature the port leaves out (EngineFeatures): NoPresence answers
     /// "present", NoOfflineReasons "online".
     [[no_unique_address]] std::
-      conditional_t<Port::Features.presence, Presence<Clock>, NoPresence<Clock>> presence_{};
+      conditional_t<Port::features.presence, Presence<Clock>, NoPresence<Clock>> presence_{};
     [[no_unique_address]] std::
-      conditional_t<Port::Features.switchable, OfflineReasons, NoOfflineReasons> offline_{};
+      conditional_t<Port::features.switchable, OfflineReasons, NoOfflineReasons> offline_{};
 
     /// Resting (Engine::turn): turns before `quietUntil_` are skipped unless `doorbell_`
     /// rang (request, set, period, restart) or the bridge or Config::enabled() changed. The two
     /// flags sit in front of the time point, in the tail of `offline_`'s word: 144 bytes, not 152.
     /// Nothing of the three without resting turns (EngineFeatures::rest).
-    [[no_unique_address]] IfFeature<Port::Features.rest, bool, 21>              resting_{};
-    [[no_unique_address]] IfFeature<Port::Features.rest, std::atomic<bool>, 22> doorbell_{};
-    [[no_unique_address]] IfFeature<Port::Features.rest, TimePoint, 23>         quietUntil_{};
+    [[no_unique_address]] IfFeature<Port::features.rest, bool, 21>              resting_{};
+    [[no_unique_address]] IfFeature<Port::features.rest, std::atomic<bool>, 22> doorbell_{};
+    [[no_unique_address]] IfFeature<Port::features.rest, TimePoint, 23>         quietUntil_{};
 
     /// The request on the wire has been out no longer than the device's in-flight timeout:
     /// always, without the in-flight net (whose timeout is then not in the table either).
     template<typename Ops>
     [[nodiscard]] bool withinInFlightNet(TimePoint  now,
                                          Ops const& d) const {
-        if constexpr(Port::Features.inFlightNet) {
+        if constexpr(Port::features.inFlightNet) {
             return now - submittedAt_ <= std::chrono::milliseconds{d.knobs.inFlightTimeoutMs};
         } else {
             return true;
@@ -181,7 +181,7 @@ struct EngineState {
 
     /// Stamps a submit for the in-flight net; nothing without it (no clock read either).
     void stampSubmit() {
-        if constexpr(Port::Features.inFlightNet) { submittedAt_ = Clock::now(); }
+        if constexpr(Port::features.inFlightNet) { submittedAt_ = Clock::now(); }
     }
 
     /// `*DeviceOps::enabledGeneration` now, 0 without one. Read fresh every time (the
@@ -351,7 +351,7 @@ struct ReadGroupInfo {
 /// per call site per group. The fields come from the one hook list (Hooks.hpp).
 template<typename Port, typename Clock>
 struct Ops {
-    using ReadSlotBaseT = ReadSlotBase<Clock, Port::Features>;
+    using ReadSlotBaseT = ReadSlotBase<Clock, Port::features>;
 
     using State     = EngineState<Port, Clock>;
     using TimePoint = typename Clock::time_point;
@@ -385,25 +385,25 @@ struct DeviceKnobs {
     bool (*claimGate)(State&){};
     void (*releaseGate)(State&){};
     // A field of a feature the port leaves out (EngineFeatures) is Absent: no bytes.
-    static constexpr bool Switchable = Port::Features.switchable;
+    static constexpr bool switchable = Port::features.switchable;
 
     /// Behind a bridge (Bridge.hpp): its generation (steps on every activation); whether it is
     /// off now is DeviceOps::gateOffline, read every turn.
-    [[no_unique_address]] IfFeature<Switchable, std::uint32_t (*)(State const&), 5>
+    [[no_unique_address]] IfFeature<switchable, std::uint32_t (*)(State const&), 5>
       gateGeneration{};
     /// A chip with a reset line of its own.
     void (*resetHold)(){};
     void (*resetRelease)(){};
 
-    [[no_unique_address]] IfFeature<Port::Features.presence, PresenceKnobs, 6> presence{};
+    [[no_unique_address]] IfFeature<Port::features.presence, PresenceKnobs, 6> presence{};
     /// How long a failed write, read-back or bring-up waits before it is tried again.
-    [[no_unique_address]] IfFeature<Port::Features.faultBackoff, std::uint32_t, 12>
+    [[no_unique_address]] IfFeature<Port::features.faultBackoff, std::uint32_t, 12>
       faultBackoffMs{};
     /// The ceiling the pause doubles up to while the faults go on.
-    [[no_unique_address]] IfFeature<Port::Features.faultBackoff, std::uint32_t, 13>
+    [[no_unique_address]] IfFeature<Port::features.faultBackoff, std::uint32_t, 13>
       faultBackoffLongestMs{};
     /// A request the bus never answered: the net under its "exactly one callback".
-    [[no_unique_address]] IfFeature<Port::Features.inFlightNet, std::uint32_t, 7>
+    [[no_unique_address]] IfFeature<Port::features.inFlightNet, std::uint32_t, 7>
                   inFlightTimeoutMs{};
     std::uint32_t unidentifiedRetryMs{};
     /// Failures in a row past the bring-up that configure the chip again from the start.
@@ -412,10 +412,10 @@ struct DeviceKnobs {
     /// and how often a read-back mismatch rewrites a register.
     std::uint8_t maxRetries{};
     /// WhileOff::unpowered: brought up from the start after an offline spell.
-    [[no_unique_address]] IfFeature<Switchable, bool, 8> bridgeUnpowered{};
-    [[no_unique_address]] IfFeature<Switchable, bool, 9> disabledUnpowered{};
+    [[no_unique_address]] IfFeature<switchable, bool, 8> bridgeUnpowered{};
+    [[no_unique_address]] IfFeature<switchable, bool, 9> disabledUnpowered{};
     /// BackoffReset::anyAck: every ACK starts the fault pause over, not only a completed script.
-    [[no_unique_address]] IfFeature<Port::Features.faultBackoff, bool, 14> faultBackoffOnAck{};
+    [[no_unique_address]] IfFeature<Port::features.faultBackoff, bool, 14> faultBackoffOnAck{};
 };
 
 /// The one object for knobs @p K: devices with equal knobs refer to the same one.
@@ -428,7 +428,7 @@ inline constexpr DeviceKnobs<Port, Clock> deviceKnobs = K;
 template<typename Port, typename Clock>
 struct DeviceOps {
     using State                      = EngineState<Port, Clock>;
-    static constexpr bool Switchable = Port::Features.switchable;
+    static constexpr bool switchable = Port::features.switchable;
 
     /// The bus the part is on.
     bool (*submit)(typename Port::Request const&){};
@@ -436,20 +436,20 @@ struct DeviceOps {
     /// Config::enabled(), called with `enabledArg` (one function can serve many devices): a value
     /// the application gives its function to tell the devices apart -- an index, a key packed
     /// into a word. A value, never a pointer.
-    [[no_unique_address]] IfFeature<Switchable, bool (*)(std::uint32_t), 1> enabled{};
-    [[no_unique_address]] IfFeature<Switchable, std::uint32_t, 2>           enabledArg{};
+    [[no_unique_address]] IfFeature<switchable, bool (*)(std::uint32_t), 1> enabled{};
+    [[no_unique_address]] IfFeature<switchable, std::uint32_t, 2>           enabledArg{};
     /// Optional: a counter the application steps whenever what `enabled` answers may have
     /// changed - AFTER the change, from an interrupt on this core too. While it has not moved,
     /// the engine takes the last answer (`offline_.disabled`) instead of calling `enabled` -
     /// which it otherwise does every loop turn, resting or not.
-    [[no_unique_address]] IfFeature<Switchable, std::atomic<std::uint32_t> const*, 3>
+    [[no_unique_address]] IfFeature<switchable, std::atomic<std::uint32_t> const*, 3>
       enabledGeneration{};
     /// Behind a bridge (Bridge.hpp): off now.
-    [[no_unique_address]] IfFeature<Switchable, bool (*)(State const&), 4> gateOffline{};
+    [[no_unique_address]] IfFeature<switchable, bool (*)(State const&), 4> gateOffline{};
     std::uint8_t                                                           address{};
 
     [[nodiscard]] constexpr bool isSwitchable() const {
-        if constexpr(Switchable) {
+        if constexpr(switchable) {
             return enabled != nullptr || gateOffline != nullptr;
         } else {
             return false;
@@ -466,14 +466,14 @@ struct Engine {
     using TimePoint = typename Clock::time_point;
     using PendingT  = Pending<Port, Clock>;
 
-    static constexpr EngineFeatures Features = Port::Features;
+    static constexpr EngineFeatures features = Port::features;
 
     /// The bus bounds a request end to end (queueFeatures.deadlines: a `deadline` on the engine's clock): the engine's
     /// in-flight net is replaced by it outright. The engine stamps the deadline from the
     /// device's in-flight timeout, and the bus guarantees the callback by then - queued: timedOut without going
     /// out; on the wire: stopped - so the request is never forgotten while the bus still holds its buffer.
-    static constexpr bool BusDeadline = [] {
-        if constexpr(Features.inFlightNet && requires(typename Port::Request& r) { r.deadline; }) {
+    static constexpr bool busDeadline = [] {
+        if constexpr(features.inFlightNet && requires(typename Port::Request& r) { r.deadline; }) {
             return std::is_same_v<
               std::remove_cvref_t<decltype(std::declval<typename Port::Request&>().deadline)>,
               TimePoint>;
@@ -488,14 +488,14 @@ struct Engine {
       requires(typename Port::Request r) {
           r.prefixBytes;
           r.prefix[1];
-      } && Port::Request::MaxPrefix >= 2,
+      } && Port::Request::maxPrefix >= 2,
       "the port's Request needs prefix / prefixBytes with MaxPrefix >= 2 (the queued I2C "
       "drivers' I2CRequest, SPI's TransportRequest, FakeBusRequest): the engine sends the "
       "register as the prefix instead of copying it in front of the payload");
 
     /// `ops` is a device set's compile-time dispatch (SetOps) rather than a chip's table (Ops).
     template<typename O>
-    static constexpr bool IsSetOps = requires { O::IsSetOps; };
+    static constexpr bool isSetOps = requires { O::isSetOps; };
 
     // The chip's constants, from either kind of `ops`: the run-time table (Ops, one per chip,
     // read through a pointer), or a device set's compile-time dispatch (SetOps, a static
@@ -503,7 +503,7 @@ struct Engine {
 #define KVASIR_ENGINE_CONSTANT(name, Type)                            \
     template<typename O>                                              \
     [[nodiscard]] static Type name##_(O const& ops, State const& e) { \
-        if constexpr(IsSetOps<O>) {                                   \
+        if constexpr(isSetOps<O>) {                                   \
             return O::name(e);                                        \
         } else {                                                      \
             static_cast<void>(e);                                     \
@@ -521,8 +521,8 @@ struct Engine {
     /// them itself. The table and SelfOps say nothing and keep the run-time check.
     template<typename O>
     static constexpr bool noVerify = [] {
-        if constexpr(requires { O::VerifyNeeded; }) {
-            return !O::VerifyNeeded;
+        if constexpr(requires { O::verifyNeeded; }) {
+            return !O::verifyNeeded;
         } else {
             return false;
         }
@@ -530,8 +530,8 @@ struct Engine {
 
     template<typename O>
     static constexpr bool noInitial = [] {
-        if constexpr(requires { O::InitialNeeded; }) {
-            return !O::InitialNeeded;
+        if constexpr(requires { O::initialNeeded; }) {
+            return !O::initialNeeded;
         } else {
             return false;
         }
@@ -560,7 +560,7 @@ struct Engine {
         }
     }
 
-    using ReadSlotBaseT = ReadSlotBase<Clock, Port::Features>;
+    using ReadSlotBaseT = ReadSlotBase<Clock, Port::features>;
 
     /// A duration from one of the table's millisecond counts.
     [[nodiscard]] static constexpr std::chrono::milliseconds ms(std::uint32_t count) {
@@ -571,8 +571,8 @@ struct Engine {
     /// engine's path for it is left out, not only skipped.
     template<typename O>
     static consteval bool anyGate_() {
-        if constexpr(requires { O::Flags; }) {
-            return O::Flags.anyGate;
+        if constexpr(requires { O::flags; }) {
+            return O::flags.anyGate;
         } else {
             return true;   // the table: the gate is looked at at run time
         }
@@ -580,22 +580,22 @@ struct Engine {
 
     template<typename O>
     static consteval bool anyReset_() {
-        if constexpr(requires { O::Flags; }) {
-            return O::Flags.anyReset;
+        if constexpr(requires { O::flags; }) {
+            return O::flags.anyReset;
         } else {
             return true;
         }
     }
 
     template<typename O>
-    static constexpr bool AnyGate = anyGate_<O>();
+    static constexpr bool anyGate = anyGate_<O>();
     template<typename O>
-    static constexpr bool AnyReset = anyReset_<O>();
+    static constexpr bool anyReset = anyReset_<O>();
 
     template<typename O>
     [[nodiscard]] static bool claimGate(State& e,
                                         O const&) {
-        if constexpr(AnyGate<O>) {
+        if constexpr(anyGate<O>) {
             return claimGate(e);
         } else {
             return true;
@@ -605,7 +605,7 @@ struct Engine {
     template<typename O>
     static void releaseGate(State& e,
                             O const&) {
-        if constexpr(AnyGate<O>) { releaseGate(e); }
+        if constexpr(anyGate<O>) { releaseGate(e); }
     }
 
     /// A run is over -- finished, failed, rejected, or abandoned by a reset. Every exit from
@@ -663,7 +663,7 @@ struct Engine {
         e.phase_ = Phase::reset;
         e.up_    = false;
         e.acked_ = false;
-        if constexpr(Features.faultBackoff) { e.initFailed_ = false; }
+        if constexpr(features.faultBackoff) { e.initFailed_ = false; }
         ops.forgetSamples(e);
     }
 
@@ -733,7 +733,7 @@ struct Engine {
         if(gi.dynamicPeriod) {
             std::chrono::milliseconds p{};
             bool                      set = false;
-            if constexpr(Features.runtimePeriod) {
+            if constexpr(features.runtimePeriod) {
                 if(s.periodSet) {
                     p   = s.period;
                     set = true;
@@ -813,7 +813,7 @@ struct Engine {
                        O const&  ops,
                        TimePoint now) {
         // a script that went through: the fault pause starts over
-        if constexpr(Features.faultBackoff) { e.faultStreak_ = 0; }
+        if constexpr(features.faultBackoff) { e.faultStreak_ = 0; }
         switch(e.running_) {
         case Running::init:   finishInit(e, ops, now); break;
         case Running::read:   finishRead(e, ops, now); break;
@@ -1104,7 +1104,7 @@ struct Engine {
     static void turn(State&    e,
                      O const&  ops,
                      TimePoint now) {
-        if constexpr(Features.rest) {
+        if constexpr(features.rest) {
             if(e.resting_ && now < e.quietUntil_ && !e.doorbell_.load(std::memory_order_acquire)
                && settled(e))
             {
@@ -1115,12 +1115,12 @@ struct Engine {
         }
         ++e.turns_;
         turnOnce(e, ops, now);
-        if constexpr(Features.rest) { rest(e, ops); }
+        if constexpr(features.rest) { rest(e, ops); }
     }
 
     /// switchSettled() where the port has switchable devices; nothing to settle elsewhere.
     [[nodiscard]] static bool settled(State& e) {
-        if constexpr(Features.switchable) {
+        if constexpr(features.switchable) {
             return switchSettled(e);
         } else {
             return true;
@@ -1154,7 +1154,7 @@ struct Engine {
             e.quietUntil_ = until;
             e.resting_    = true;
         };
-        if constexpr(Features.switchable) {
+        if constexpr(features.switchable) {
             if(e.dev_->isSwitchable() && e.offline_.offline()) {
                 quiet(TimePoint::max());   // until switchSettled() says otherwise
                 return;
@@ -1200,7 +1200,7 @@ struct Engine {
             }
         }
         if(auto const v = verifyDue_(ops, e); v < due) { due = v; }
-        if constexpr(Features.faultBackoff) {
+        if constexpr(features.faultBackoff) {
             if(due < e.holdUntil_) { due = e.holdUntil_; }
         }
         quiet(due);
@@ -1211,7 +1211,7 @@ struct Engine {
     static void turnOnce(State&    e,
                          O const&  ops,
                          TimePoint now) {
-        if constexpr(Features.switchable) {
+        if constexpr(features.switchable) {
             if(e.dev_->isSwitchable() && !offlineTurn(e, ops, now)) { return; }
         }
         switch(e.presence_.step(now, e.dev_->address, e.dev_->knobs.presence)) {
@@ -1224,7 +1224,7 @@ struct Engine {
             break;
         case PresenceTurn::talk: break;
         }
-        if constexpr(Features.inFlightNet && !BusDeadline) {
+        if constexpr(features.inFlightNet && !busDeadline) {
             if(e.inFlight_ && !e.withinInFlightNet(now, *e.dev_)) {
                 logNoBusAnswer(name_(ops, e), e.dev_->address, ms(e.dev_->knobs.inFlightTimeoutMs));
                 e.inFlight_ = false;
@@ -1248,11 +1248,11 @@ struct Engine {
                 // A bring-up that failed is not tried again on the very next turn: a chip
                 // with no startupDelay on a faulting bus would otherwise be asked every turn.
                 auto backoff = std::chrono::milliseconds{0};
-                if constexpr(Features.faultBackoff) {
+                if constexpr(features.faultBackoff) {
                     if(e.initFailed_) { backoff = faultPause(e); }
                     e.initFailed_ = false;
                 }
-                if(auto const hold = AnyReset<O> ? e.dev_->knobs.resetHold : nullptr) {
+                if(auto const hold = anyReset<O> ? e.dev_->knobs.resetHold : nullptr) {
                     hold();
                     e.waitUntil_ = now + ms(resetLowMs_(ops, e)) + backoff;
                     e.phase_     = Phase::resetHeld;
@@ -1264,7 +1264,7 @@ struct Engine {
             break;
         case Phase::resetHeld:
             if(now > e.waitUntil_) {
-                if constexpr(AnyReset<O>) { e.dev_->knobs.resetRelease(); }
+                if constexpr(anyReset<O>) { e.dev_->knobs.resetRelease(); }
                 e.waitUntil_ = now + ms(resetSettleMs_(ops, e)) + ms(startupDelayMs_(ops, e));
                 e.phase_     = Phase::settle;
             }
@@ -1294,7 +1294,7 @@ struct Engine {
     static void schedule(State&    e,
                          O const&  ops,
                          TimePoint now) {
-        if constexpr(Features.faultBackoff) {
+        if constexpr(features.faultBackoff) {
             if(now < e.holdUntil_) { return; }
         }
         if(startWrite(e, ops, now)) { return; }
@@ -1329,7 +1329,7 @@ struct Engine {
             e.consecutiveFailures_ = 0;
             ops.wakeReset(e);
             e.presence_.ack(now, e.dev_->address);
-            if constexpr(Features.faultBackoff) {
+            if constexpr(features.faultBackoff) {
                 if(e.dev_->knobs.faultBackoffOnAck) { e.faultStreak_ = 0; }
             }
             if(!e.acked_) {
@@ -1412,7 +1412,7 @@ struct Engine {
     /// script (a bring-up, a write, a read-back, a read) goes through, never past faultBackoffLongest. The first
     /// script that completes starts it over, and with BackoffReset::anyAck every ACK.
     static std::chrono::milliseconds faultPause(State& e)
-        requires(Features.faultBackoff)
+        requires(features.faultBackoff)
     {
         auto const longest = ms(e.dev_->knobs.faultBackoffLongestMs);
         auto       pause   = ms(e.dev_->knobs.faultBackoffMs);
@@ -1426,7 +1426,7 @@ struct Engine {
     /// Nothing but the running script for the fault pause (EngineFeatures::faultBackoff).
     static void backOff(State&    e,
                         TimePoint now) {
-        if constexpr(Features.faultBackoff) { e.holdUntil_ = now + faultPause(e); }
+        if constexpr(features.faultBackoff) { e.holdUntil_ = now + faultPause(e); }
     }
 
     /// A transaction failed: what that means for the run it was part of, and for the device.
@@ -1443,7 +1443,7 @@ struct Engine {
             // Start over from the reset, after faultBackoff; Presence parks the device after
             // enough NAKs and the first Init step becomes its probe.
             e.phase_ = Phase::reset;
-            if constexpr(Features.faultBackoff) { e.initFailed_ = true; }
+            if constexpr(features.faultBackoff) { e.initFailed_ = true; }
             break;
         case Running::read:
             {
@@ -1528,7 +1528,7 @@ struct Engine {
         // Stamped before the submit: a one-byte write can complete in the interrupt before
         // submit() returns, and the net must not measure from after that.
         e.stampSubmit();
-        if constexpr(BusDeadline) {
+        if constexpr(busDeadline) {
             req.deadline
               = Clock::now() + std::chrono::milliseconds{e.dev_->knobs.inFlightTimeoutMs};
         }
@@ -1634,4 +1634,4 @@ public:
     }
 };
 
-}   // namespace Kvasir::Engine::detail
+}   // namespace Kvasir::Engine::Detail

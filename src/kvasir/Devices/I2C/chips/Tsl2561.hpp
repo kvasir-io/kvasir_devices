@@ -15,29 +15,29 @@ namespace Kvasir::I2C::Chips {
 
 namespace Tsl2561Detail {
     /// TIMING INTEG (1:0): 13.7, 101 or 402 ms. 3 is manual and not used here.
-    enum class Integration : std::uint8_t { ms13_7 = 0, ms101 = 1, ms402 = 2 };
+    enum class Integration : std::uint8_t { ms13p7 = 0, ms101 = 1, ms402 = 2 };
 
     /// TIMING GAIN (bit 4): 1x or 16x.
     enum class Gain : std::uint8_t { x1 = 0, x16 = 1 };
 
-    inline constexpr std::array<std::chrono::milliseconds, 3> IntegrationTimes{
+    inline constexpr std::array<std::chrono::milliseconds, 3> integrationTimes{
       std::chrono::milliseconds{14},
       std::chrono::milliseconds{101},
       std::chrono::milliseconds{402}};
 
     /// The datasheet's CH_SCALE per integration time (x 2^10): 322/11, 322/81 and 1.
-    inline constexpr std::array<std::uint32_t, 3> ChScale{0x7517, 0x0FE7, 1U << 10};
+    inline constexpr std::array<std::uint32_t, 3> chScale{0x7517, 0x0FE7, 1U << 10};
 
     /// The full-scale count per integration time (Operating Characteristics, note 6: one count
     /// per two oscillator periods less a 2-count offset): 5047 at 13.7 ms, 37177 at 101 ms,
     /// and the 16-bit register's 65535 at 402 ms.
-    inline constexpr std::array<std::uint16_t, 3> Saturation{5047, 37177, 65535};
+    inline constexpr std::array<std::uint16_t, 3> saturation{5047, 37177, 65535};
 
     /// {K, B, M} per ratio band, in the datasheet's fixed point (RATIO_SCALE 9, LUX_SCALE 14).
     using Bands = std::array<std::array<std::uint32_t, 3>, 8>;
 
     /// The T, FN and CL packages.
-    inline constexpr Bands BandsT{
+    inline constexpr Bands bandsT{
       {
        {0x0040, 0x01F2, 0x01BE},
        {0x0080, 0x0214, 0x02D1},
@@ -53,7 +53,7 @@ namespace Tsl2561Detail {
     /// The CS package: the datasheet calculation's second coefficient set. Its header comment
     /// gives B6C as 0.00157 and its #define as 0.0157 (0x0101); 0x0101 is the one the code
     /// uses, and Linux tsl2563.c has the same.
-    inline constexpr Bands BandsCs{
+    inline constexpr Bands bandsCs{
       {
        {0x0043, 0x0204, 0x01AD},
        {0x0085, 0x0228, 0x02C1},
@@ -83,51 +83,51 @@ namespace Tsl2561Detail {
 template<Tsl2561Detail::Gain        Gain            = Tsl2561Detail::Gain::x1,
          Tsl2561Detail::Integration IntegrationTime = Tsl2561Detail::Integration::ms402>
 struct Tsl2561X {
-    static constexpr std::string_view        Name    = "TSL2561";
-    static constexpr Address7                Address = 0x39;
-    static constexpr std::array<Address7, 3> Addresses{0x29, 0x39, 0x49};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "TSL2561";
+    static constexpr Address7                address = 0x39;
+    static constexpr std::array<Address7, 3> addresses{0x29, 0x39, 0x49};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::uint8_t Cmd  = 0x80;
-    static constexpr std::uint8_t Word = 0xA0;
+    static constexpr std::uint8_t cmd  = 0x80;
+    static constexpr std::uint8_t word = 0xA0;
 
-    static constexpr std::uint8_t GainCode        = static_cast<std::uint8_t>(Gain);
-    static constexpr std::uint8_t IntegrationCode = static_cast<std::uint8_t>(IntegrationTime);
-    static constexpr std::uint8_t Timing
-      = static_cast<std::uint8_t>((GainCode << 4) | IntegrationCode);
-    static constexpr std::chrono::milliseconds Integrating
-      = Tsl2561Detail::IntegrationTimes[IntegrationCode];
+    static constexpr std::uint8_t gainCode        = static_cast<std::uint8_t>(Gain);
+    static constexpr std::uint8_t integrationCode = static_cast<std::uint8_t>(IntegrationTime);
+    static constexpr std::uint8_t timing
+      = static_cast<std::uint8_t>((gainCode << 4) | integrationCode);
+    static constexpr std::chrono::milliseconds integrating
+      = Tsl2561Detail::integrationTimes[integrationCode];
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = Cmd | 0x00, .payload = {0x03}}),
-      Engine::Step::read({.reg = Cmd | 0x0A, .count = 1, .offset = 0}),
-      Engine::Step::write({.reg     = Cmd | 0x01,
-                           .payload = {Timing},
-                           .delay   = Integrating + std::chrono::milliseconds{10}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = cmd | 0x00, .payload = {0x03}}),
+      Engine::Step::read({.reg = cmd | 0x0A, .count = 1, .offset = 0}),
+      Engine::Step::write({.reg     = cmd | 0x01,
+                           .payload = {timing},
+                           .delay   = integrating + std::chrono::milliseconds{10}}),
     };
 
     struct State {
         std::uint8_t deviceId{};
         bool         csPackage{};   ///< ID part number 0x0 or 0x1: the CS coefficients apply
-        std::uint8_t gain{GainCode};
-        std::uint8_t integration{IntegrationCode};
+        std::uint8_t gain{gainCode};
+        std::uint8_t integration{integrationCode};
     };
 
     [[nodiscard]] static constexpr bool setup(Bytes  data,
                                               State& state) {
         state.deviceId    = data.u8(0);
-        state.gain        = GainCode;
-        state.integration = IntegrationCode;
+        state.gain        = gainCode;
+        state.integration = integrationCode;
         auto const part   = static_cast<std::uint8_t>(state.deviceId >> 4);
         state.csPackage   = part == 0x0 || part == 0x1;
         return part == 0x0 || part == 0x1 || part == 0x4 || part == 0x5;
     }
 
     struct Light {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{
-          Engine::Step::read({.reg = Word | 0x0C, .count = 2, .offset = 0}),
-          Engine::Step::read({.reg = Word | 0x0E, .count = 2, .offset = 2})};
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = word | 0x0C, .count = 2, .offset = 0}),
+          Engine::Step::read({.reg = word | 0x0E, .count = 2, .offset = 2})};
 
         struct Sample {
             std::uint16_t full{};          ///< channel 0: visible + infrared
@@ -138,7 +138,7 @@ struct Tsl2561X {
 
             /// A channel at the clipping level of its integration time.
             [[nodiscard]] constexpr bool saturated() const {
-                auto const limit = Tsl2561Detail::Saturation[integration % 3];
+                auto const limit = Tsl2561Detail::saturation[integration % 3];
                 return full >= limit || infrared >= limit;
             }
 
@@ -146,13 +146,13 @@ struct Tsl2561X {
             /// integration time's channel scale and x16 for 1x gain.
             [[nodiscard]] constexpr MilliLux lux() const {
                 if(saturated()) { return Units::milliLux(0); }
-                std::uint32_t chScale = Tsl2561Detail::ChScale[integration % 3];
+                std::uint32_t chScale = Tsl2561Detail::chScale[integration % 3];
                 if(gain == 0) { chScale <<= 4; }
                 auto const ch0 = (std::uint64_t{full} * chScale) >> 10;
                 auto const ch1 = (std::uint64_t{infrared} * chScale) >> 10;
                 if(ch0 == 0) { return Units::milliLux(0); }
                 auto const  ratio = (((ch1 << 10) / ch0) + 1) >> 1;
-                auto const& bands = csPackage ? Tsl2561Detail::BandsCs : Tsl2561Detail::BandsT;
+                auto const& bands = csPackage ? Tsl2561Detail::bandsCs : Tsl2561Detail::bandsT;
                 std::size_t band  = 0;
                 while(band + 1 < bands.size() && ratio > bands[band][0]) { ++band; }
                 auto const plus  = ch0 * bands[band][1];
@@ -171,8 +171,8 @@ struct Tsl2561X {
     /// TIMING: GAIN in bit 4 and INTEG in 1:0, changeable at run time.
     struct TimingSetting {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Timing;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = timing;
 
         /// The write is followed by two integration cycles at the new setting, the part's other
         /// groups off the wire meanwhile (Linux tsl2563.c waits the same): the ADC results
@@ -182,10 +182,10 @@ struct Tsl2561X {
                                                            std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
             return Engine::Step::writeBuffer(
-              {.reg    = Cmd | 0x01,
+              {.reg    = cmd | 0x01,
                .offset = 0,
                .count  = 1,
-               .delay  = 2 * Tsl2561Detail::IntegrationTimes[(value & 0x03U) % 3]
+               .delay  = 2 * Tsl2561Detail::integrationTimes[(value & 0x03U) % 3]
                        + std::chrono::milliseconds{10}});
         }
 

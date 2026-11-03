@@ -39,26 +39,26 @@ namespace Pa1010dDetail {
 
 template<typename Timing = Engine::DefaultTiming>
 struct Pa1010d {
-    static constexpr std::string_view          Name    = "PA1010D";
-    static constexpr Address7                  Address = 0x10;
-    static constexpr std::array<Address7, 1>   Addresses{0x10};
-    static constexpr std::size_t               RegisterBytes = 0;
-    static constexpr std::chrono::milliseconds StartupDelay
+    static constexpr std::string_view          name    = "PA1010D";
+    static constexpr Address7                  address = 0x10;
+    static constexpr std::array<Address7, 1>   addresses{0x10};
+    static constexpr std::size_t               registerBytes = 0;
+    static constexpr std::chrono::milliseconds startupDelay
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
-    static constexpr std::size_t ChunkBytes = 32;
+    static constexpr std::size_t chunkBytes = 32;
 
     struct Stream {
-        static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{Engine::Step::receive({.count = ChunkBytes})};
+        static constexpr auto       period = std::chrono::milliseconds{50};
+        static constexpr std::array steps{Engine::Step::receive({.count = chunkBytes})};
 
         struct Sample {
-            std::array<char, ChunkBytes> chars{};
+            std::array<char, chunkBytes> chars{};
         };
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
             Sample sample{};
-            for(std::size_t i = 0; i < ChunkBytes; ++i) {
+            for(std::size_t i = 0; i < chunkBytes; ++i) {
                 sample.chars[i] = static_cast<char>(data.u8(i));
             }
             return sample;
@@ -70,9 +70,9 @@ struct Pa1010d {
     /// A PMTK sentence is a command, not a state: the same one again is asking again.
     struct Command {
         using Value                              = Pmtk;
-        static constexpr std::size_t Bytes       = 80;
-        static constexpr bool        AlwaysWrite = true;
-        static constexpr Value Initial = Pmtk::of("PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+        static constexpr std::size_t bytes       = 80;
+        static constexpr bool        alwaysWrite = true;
+        static constexpr Value initial = Pmtk::of("PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

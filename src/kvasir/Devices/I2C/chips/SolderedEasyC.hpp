@@ -23,20 +23,20 @@ namespace Kvasir::I2C::Chips {
 /// returns the 10-bit ADC reading as two little-endian bytes, 0..1023.
 template<Address7 Addr = 0x30>
 struct SolderedSlider {
-    static constexpr std::string_view Name          = "easyC slider";
-    static constexpr Address7         Address       = Addr;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "easyC slider";
+    static constexpr Address7         address       = Addr;
+    static constexpr std::size_t      registerBytes = 1;
 
     /// The jumpers set the address; only the one this instance is built for is known here.
-    static constexpr std::array<Address7, 1> Addresses{Addr};
+    static constexpr std::array<Address7, 1> addresses{Addr};
 
-    static constexpr std::uint16_t FullScale = 1023;
+    static constexpr std::uint16_t fullScale = 1023;
 
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
     struct Position {
-        static constexpr auto       Period = std::chrono::milliseconds{50};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{50};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {
@@ -44,7 +44,7 @@ struct SolderedSlider {
 
             /// The travel, 0..100 % of full scale.
             [[nodiscard]] constexpr Percent percent() const {
-                return Units::percent(static_cast<std::uint32_t>(raw) * 100U / FullScale);
+                return Units::percent(static_cast<std::uint32_t>(raw) * 100U / fullScale);
             }
         };
 
@@ -66,12 +66,12 @@ struct SolderedSlider {
 /// has not been looked at yet.
 template<Address7 Addr = 0x30>
 struct SolderedRotary {
-    static constexpr std::string_view Name          = "easyC rotary";
-    static constexpr Address7         Address       = Addr;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "easyC rotary";
+    static constexpr Address7         address       = Addr;
+    static constexpr std::size_t      registerBytes = 0;
 
     /// The jumpers set the address; only the one this instance is built for is known here.
-    static constexpr std::array<Address7, 1> Addresses{Addr};
+    static constexpr std::array<Address7, 1> addresses{Addr};
 
     enum class Event : std::uint8_t {
         idle         = 0,
@@ -83,11 +83,11 @@ struct SolderedRotary {
         clockwise    = 6,
     };
 
-    static constexpr std::array Init{Engine::Step::receive({.count = 5, .offset = 0})};
+    static constexpr std::array init{Engine::Step::receive({.count = 5, .offset = 0})};
 
     struct Motion {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 5, .offset = 0})};
+        static constexpr auto       period = std::chrono::milliseconds{20};
+        static constexpr std::array steps{Engine::Step::receive({.count = 5, .offset = 0})};
 
         struct Sample {
             std::int32_t count{};
@@ -113,9 +113,9 @@ struct SolderedRotary {
     /// Writes 0xAA, the byte the library's resetCounter() sends, whatever the Value.
     struct Reset {
         using Value                        = std::uint8_t;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
         /// A one-shot command, not a state to restore after a reset.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&,
                                                            std::span<std::byte> buffer) {

@@ -36,7 +36,7 @@ struct SdModel {
     int busyBytes{3};
 
     /// CRC16-CCITT, table-driven: independent of the driver's bitwise one.
-    static constexpr std::array<std::uint16_t, 256> Crc16Table = [] {
+    static constexpr std::array<std::uint16_t, 256> crc16Table = [] {
         std::array<std::uint16_t, 256> t{};
         for(std::uint32_t n = 0; n < 256; ++n) {
             std::uint32_t c = n << 8U;
@@ -51,7 +51,7 @@ struct SdModel {
     static constexpr std::uint16_t crc16(std::span<std::uint8_t const> d) {
         std::uint16_t crc = 0;
         for(auto const b : d) {
-            crc = static_cast<std::uint16_t>((crc << 8U) ^ Crc16Table[((crc >> 8U) ^ b) & 0xFFU]);
+            crc = static_cast<std::uint16_t>((crc << 8U) ^ crc16Table[((crc >> 8U) ^ b) & 0xFFU]);
         }
         return crc;
     }

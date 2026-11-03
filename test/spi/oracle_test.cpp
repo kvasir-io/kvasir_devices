@@ -62,18 +62,18 @@ struct IdentityPart {
     static std::optional<std::pair<bool,
                                    unsigned>>
     decode(std::uint8_t c) {
-        for(auto const& id : Chip::Identity) {
-            if(Kvasir::SPI::detail::readCommand<Chip>(static_cast<std::uint8_t>(id.reg)) == c) {
+        for(auto const& id : Chip::identity) {
+            if(Kvasir::SPI::Detail::readCommand<Chip>(static_cast<std::uint8_t>(id.reg)) == c) {
                 return std::pair{true, unsigned{id.reg}};
             }
         }
         for(unsigned r = 0; r < 256U; ++r) {
-            if(Kvasir::SPI::detail::readCommand<Chip>(static_cast<std::uint8_t>(r)) == c) {
+            if(Kvasir::SPI::Detail::readCommand<Chip>(static_cast<std::uint8_t>(r)) == c) {
                 return std::pair{true, r};
             }
         }
         for(unsigned r = 0; r < 256U; ++r) {
-            if(Kvasir::SPI::detail::writeCommand<Chip>(static_cast<std::uint8_t>(r)) == c) {
+            if(Kvasir::SPI::Detail::writeCommand<Chip>(static_cast<std::uint8_t>(r)) == c) {
                 return std::pair{false, r};
             }
         }
@@ -81,10 +81,10 @@ struct IdentityPart {
     }
 
     [[nodiscard]] std::uint8_t valueByte() const {
-        for(auto const& c : Chip::Identity) {
+        for(auto const& c : Chip::identity) {
             if(c.reg != reg) { continue; }
             auto value = c.expect;
-            if(says == Says::also && c.also != RegisterCheck::None) { value = c.also; }
+            if(says == Says::also && c.also != RegisterCheck::none) { value = c.also; }
             if(says == Says::wrong) { value = c.expect ^ c.mask; }
             auto const shift = c.bigEndian ? 8U * (c.width - 1U - byteInReg) : 8U * byteInReg;
             return static_cast<std::uint8_t>((value >> shift) & 0xFFU);
@@ -103,7 +103,7 @@ struct IdentityPart {
             reading      = d && d->first;
             reg          = d ? d->second : 0U;
             byteInReg    = 0;
-            dummy        = Kvasir::SPI::detail::dummyBytes<Chip>();
+            dummy        = Kvasir::SPI::Detail::dummyBytes<Chip>();
             if(!reading) { ++writes; }
             return 0xFF;
         }
@@ -114,7 +114,7 @@ struct IdentityPart {
         }
         auto const  b     = valueByte();
         std::size_t width = 1;
-        for(auto const& c : Chip::Identity) {
+        for(auto const& c : Chip::identity) {
             if(c.reg == reg) { width = c.width; }
         }
         if(++byteInReg >= width) {
@@ -127,8 +127,8 @@ struct IdentityPart {
 
 template<typename Chip>
 constexpr bool hasAlso() {
-    for(auto const& c : Chip::Identity) {
-        if(c.also != RegisterCheck::None) { return true; }
+    for(auto const& c : Chip::identity) {
+        if(c.also != RegisterCheck::none) { return true; }
     }
     return false;
 }
@@ -154,8 +154,8 @@ std::size_t withIdentity{};
 template<typename Chip>
 void identityFromTheDataSheet() {
     using D = Kvasir::SPI::Device<Bus, FakeClock, Chip, Spi::Cs>;
-    std::string const name{Chip::Name};
-    if constexpr(D::HasIdentity) {
+    std::string const name{Chip::name};
+    if constexpr(D::hasIdentity) {
         ++withIdentity;
         using Part = IdentityPart<Chip>;
 
@@ -166,12 +166,12 @@ void identityFromTheDataSheet() {
             Kvasir::SPI::Device<Bus, FakeClock, Spy<Chip>, Spi::Cs> d{};
             check(runUntil(d, [&] { return d.identityMatched(); }, 2s), name + what);
             checkEq(Seen<Chip>::ids.size(),
-                    Chip::Identity.size(),
+                    Chip::identity.size(),
                     name + ": identified() is handed every value");
-            for(std::size_t i = 0; i < Chip::Identity.size() && i < Seen<Chip>::ids.size(); ++i) {
-                auto const& c = Chip::Identity[i];
+            for(std::size_t i = 0; i < Chip::identity.size() && i < Seen<Chip>::ids.size(); ++i) {
+                auto const& c = Chip::identity[i];
                 auto const  wanted
-                  = says == Part::Says::also && c.also != RegisterCheck::None ? c.also : c.expect;
+                  = says == Part::Says::also && c.also != RegisterCheck::none ? c.also : c.expect;
                 checkEq(Seen<Chip>::ids[i] & c.mask,
                         wanted,
                         name + ": identified() is handed what was read");
@@ -198,7 +198,7 @@ void identityFromTheDataSheet() {
     } else {
         // No identity register: the description judges its Init's read-back, or is write-only and says so.
         constexpr bool judges    = requires { &Chip::setup; };
-        constexpr bool writeOnly = requires { Chip::WriteOnly; };
+        constexpr bool writeOnly = requires { Chip::writeOnly; };
         check(judges || writeOnly, name + ": no Identity, and no setup() that judges a read-back");
     }
 }

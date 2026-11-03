@@ -18,7 +18,7 @@ namespace Descriptors {
              bool         Bidirectional,
              std::uint8_t Protocol>
     consteval auto makeInterfaceDescriptorArrays() {
-        constexpr USB::Descriptors::Interface InterfaceDescriptor{
+        constexpr USB::Descriptors::Interface interfaceDescriptor{
           .bInterfaceNumber{InterfaceID},
           .bAlternateSetting{0},
           .bNumEndpoints{Bidirectional ? std::uint8_t{2} : std::uint8_t{1}},
@@ -26,21 +26,21 @@ namespace Descriptors {
           .bInterfaceSubClass{0},
           .bInterfaceProtocol{Protocol}};
 
-        constexpr auto DataInEndpointDescriptor
-          = USB::Descriptors::endpoint(EndpointDirection::In,
+        constexpr auto dataInEndpointDescriptor
+          = USB::Descriptors::endpoint(EndpointDirection::in,
                                        DataEndpointID,
-                                       EndpointTransferType::Bulk);
-        constexpr auto DataOutEndpointDescriptor
-          = USB::Descriptors::endpoint(EndpointDirection::Out,
+                                       EndpointTransferType::bulk);
+        constexpr auto dataOutEndpointDescriptor
+          = USB::Descriptors::endpoint(EndpointDirection::out,
                                        DataEndpointID,
-                                       EndpointTransferType::Bulk);
+                                       EndpointTransferType::bulk);
 
         if constexpr(Bidirectional) {
-            return USB::Descriptors::generateArray(InterfaceDescriptor,
-                                                   DataOutEndpointDescriptor,
-                                                   DataInEndpointDescriptor);
+            return USB::Descriptors::generateArray(interfaceDescriptor,
+                                                   dataOutEndpointDescriptor,
+                                                   dataInEndpointDescriptor);
         } else {
-            return USB::Descriptors::generateArray(InterfaceDescriptor, DataInEndpointDescriptor);
+            return USB::Descriptors::generateArray(interfaceDescriptor, dataInEndpointDescriptor);
         }
     }
 }   // namespace Descriptors
@@ -80,22 +80,22 @@ private:
                        Bidirectional,
                        Protocol>;
 
-    static constexpr std::size_t DataEndpointNumber = FirstEndpointNumber;
-    static constexpr std::size_t InterfaceCount     = 1;
-    static constexpr std::size_t EndpointCount      = 1;
+    static constexpr std::size_t dataEndpointNumber = FirstEndpointNumber;
+    static constexpr std::size_t interfaceCount     = 1;
+    static constexpr std::size_t endpointCount      = 1;
 
-    static constexpr auto InterfaceDescriptor
+    static constexpr auto interfaceDescriptor
       = Descriptors::makeInterfaceDescriptorArrays<FirstInterfaceNumber,
-                                                   DataEndpointNumber,
+                                                   dataEndpointNumber,
                                                    Bidirectional,
                                                    Protocol>();
 
-    using DataEndpointHandler = Kvasir::USB::detail::BulkDataAdapter<Clock,
+    using DataEndpointHandler = Kvasir::USB::Detail::BulkDataAdapter<Clock,
                                                                      Config,
                                                                      Derived,
                                                                      Self,
                                                                      FirstInterfaceNumber,
-                                                                     DataEndpointNumber,
+                                                                     dataEndpointNumber,
                                                                      Framed,
                                                                      Bidirectional>;
 
@@ -103,7 +103,7 @@ private:
     static void setupEndpointsCallback() { DataEndpointHandler::setupEndpointsCallback(); }
 
     static bool setupPacketRequestCallback(SetupPacket const& pkt) {
-        return detail::handleSetInterface<Derived>(pkt,
+        return Detail::handleSetInterface<Derived>(pkt,
                                                    FirstInterfaceNumber,
                                                    DataEndpointHandler::restart)
             || DataEndpointHandler::setupPacketRequestCallback(pkt);
@@ -186,8 +186,8 @@ template<template<typename, typename> class BackendT,
 using Bulk = Device<BackendT,
                     Clock,
                     Config,
-                    DeviceClass::Miscellaneous,
-                    DeviceClass::CommonClass,
+                    DeviceClass::miscellaneous,
+                    DeviceClass::commonClass,
                     0,   // FirstInterfaceNumber
                     1,   // FirstEndpointNumber
                     SimpleBulk::Mixin,

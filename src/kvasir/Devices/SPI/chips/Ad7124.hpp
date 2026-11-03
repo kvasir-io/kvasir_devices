@@ -42,18 +42,18 @@ namespace Kvasir { namespace SPI {
             return static_cast<std::uint8_t>(std::to_underlying(reg) + offset);
         }
 
-        inline constexpr std::uint8_t ReadBit = 0x40;
+        inline constexpr std::uint8_t readBit = 0x40;
 
         // STATUS register bits.
-        inline constexpr std::uint8_t NotReady    = 0x80;   // RDY: 0 once a conversion is ready
-        inline constexpr std::uint8_t ErrorFlag   = 0x40;
-        inline constexpr std::uint8_t PorFlag     = 0x10;   // cleared by reading STATUS
-        inline constexpr std::uint8_t ChannelMask = 0x0F;   // CH_ACTIVE: the channel just converted
+        inline constexpr std::uint8_t notReady    = 0x80;   // RDY: 0 once a conversion is ready
+        inline constexpr std::uint8_t errorFlag   = 0x40;
+        inline constexpr std::uint8_t porFlag     = 0x10;   // cleared by reading STATUS
+        inline constexpr std::uint8_t channelMask = 0x0F;   // CH_ACTIVE: the channel just converted
 
         // ERROR_EN / ERROR register bits (the two share a layout).
-        inline constexpr std::uint32_t SpiCrcErr    = 0x000004;   // SPI_CRC_ERR(_EN), bit 2
-        inline constexpr std::uint32_t SpiIgnoreErr = 0x000040;   // SPI_IGNORE_ERR(_EN), bit 6
-        inline constexpr std::uint32_t RefDetErr    = 0x000800;   // REF_DET_ERR(_EN), bit 11
+        inline constexpr std::uint32_t spiCrcErr    = 0x000004;   // SPI_CRC_ERR(_EN), bit 2
+        inline constexpr std::uint32_t spiIgnoreErr = 0x000040;   // SPI_IGNORE_ERR(_EN), bit 6
+        inline constexpr std::uint32_t refDetErr    = 0x000800;   // REF_DET_ERR(_EN), bit 11
 
     }   // namespace Ad7124Detail
 
@@ -75,7 +75,7 @@ namespace Kvasir { namespace SPI {
     namespace Ad7124Detail {
         /// The reset default (SPI_IGNORE_ERR_EN) plus the reference detect and, with `crc`, the SPI CRC.
         [[nodiscard]] constexpr std::uint32_t errorEnValue(Ad7124Crc crc) {
-            return SpiIgnoreErr | RefDetErr | (crc == Ad7124Crc::on ? SpiCrcErr : 0U);
+            return spiIgnoreErr | refDetErr | (crc == Ad7124Crc::on ? spiCrcErr : 0U);
         }
 
         /// Datasheet "CRC Checksum": CRC-8/0x07, init 0, no reflection, over the communications byte
@@ -118,13 +118,13 @@ namespace Kvasir { namespace SPI {
         sps27    = 2,   // 27.27 SPS, 47 dB rejection of 50/60 Hz
         sps25    = 3,   // 25 SPS, 62 dB
         sps20    = 5,   // 20 SPS, 86 dB
-        sps16_67 = 6,   // 16.67 SPS, 92 dB
+        sps16p67 = 6,   // 16.67 SPS, 92 dB
     };
 
     /// ADC_CONTROL POWER_MODE[1:0].
     enum class Ad7124Power : std::uint8_t { low = 0, mid = 1, full = 2 };
 
-    enum class Ad7124Model : std::uint8_t { any, ad7124_4, ad7124_8 };
+    enum class Ad7124Model : std::uint8_t { any, ad7124Four, ad7124Eight };
 
     /// 0..15 are AIN0..AIN15 (AIN0..AIN7 on the -4); internal: temperature 16, AVSS 17, reference
     /// 18, DGND 19.
@@ -201,9 +201,9 @@ namespace Kvasir { namespace SPI {
             // A silicon revision of 0 is what a floating or shorted MISO reads as, not a part.
             if((id & 0x0FU) == 0) { return false; }
             switch(model) {
-            case Ad7124Model::any:      return device <= 1;
-            case Ad7124Model::ad7124_4: return device == 0;
-            case Ad7124Model::ad7124_8: return device == 1;
+            case Ad7124Model::any:         return device <= 1;
+            case Ad7124Model::ad7124Four:  return device == 0;
+            case Ad7124Model::ad7124Eight: return device == 1;
             }
             return false;
         }
@@ -214,7 +214,7 @@ namespace Kvasir { namespace SPI {
                                                             N> const& channels) {
             auto const valid = [model](std::uint8_t in) {
                 if(in > 31) { return false; }
-                return model != Ad7124Model::ad7124_4 || in <= 7 || in >= 16;
+                return model != Ad7124Model::ad7124Four || in <= 7 || in >= 16;
             };
             for(auto const& c : channels) {
                 if(!valid(c.positive) || !valid(c.negative)) { return false; }
@@ -249,7 +249,7 @@ namespace Kvasir { namespace SPI {
                       == 0x09E3);
         static_assert(filterValue(Ad7124Filter::postFilter,
                                   Ad7124Reject60Hz::off,
-                                  Ad7124PostFilter::sps16_67,
+                                  Ad7124PostFilter::sps16p67,
                                   1)
                       == 0xEC0001);
         static_assert(adcControlValue(Ad7124Power::full,
@@ -277,17 +277,17 @@ namespace Kvasir { namespace SPI {
                                 0x04)
                       && idMatches(Ad7124Model::any,
                                    0x16)
-                      && !idMatches(Ad7124Model::ad7124_4,
+                      && !idMatches(Ad7124Model::ad7124Four,
                                     0x14)
                       && !idMatches(Ad7124Model::any,
                                     0x00)
                       && !idMatches(Ad7124Model::any,
                                     0xFF));
-        static_assert(inputsValid(Ad7124Model::ad7124_4,
+        static_assert(inputsValid(Ad7124Model::ad7124Four,
                                   std::array<Ad7124Channel,
                                              1>{{{7,
                                                   16}}})
-                      && !inputsValid(Ad7124Model::ad7124_4,
+                      && !inputsValid(Ad7124Model::ad7124Four,
                                       std::array<Ad7124Channel,
                                                  1>{{{8,
                                                       0}}}));
@@ -378,42 +378,42 @@ namespace Kvasir { namespace SPI {
         struct Ad7124 {
             using Reg = Ad7124Detail::Reg;
 
-            static constexpr std::string_view Name     = "AD7124";
-            static constexpr Hal::ClockMode   Mode     = Hal::ClockMode::mode3;
-            static constexpr Units::Hertz     MaxClock = Units::hertz(5'000'000);
+            static constexpr std::string_view name     = "AD7124";
+            static constexpr Hal::ClockMode   mode     = Hal::ClockMode::mode3;
+            static constexpr Units::Hertz     maxClock = Units::hertz(5'000'000);
 
             static constexpr std::uint8_t readCommand(std::uint8_t reg) {
-                return static_cast<std::uint8_t>((reg & 0x3FU) | Ad7124Detail::ReadBit);
+                return static_cast<std::uint8_t>((reg & 0x3FU) | Ad7124Detail::readBit);
             }
 
             static constexpr std::uint8_t writeCommand(std::uint8_t reg) {
                 return static_cast<std::uint8_t>(reg & 0x3FU);
             }
 
-            static constexpr std::size_t RegisterBytes = 1;
-            static constexpr std::size_t ChannelCount  = Config::channels.size();
-            static constexpr bool        Calibrates    = Config::gain != Ad7124Gain::x1;
-            static constexpr auto        StartupDelay  = Config::startupDelay;
+            static constexpr std::size_t registerBytes = 1;
+            static constexpr std::size_t channelCount  = Config::channels.size();
+            static constexpr bool        calibrates    = Config::gain != Ad7124Gain::x1;
+            static constexpr auto        startupDelay  = Config::startupDelay;
 
             /// Calibrations run in mid power at most (full-scale in full power is not supported); zero-scale
             /// takes one settling period (:4249), full-scale four (:2756). The engine runs no Step::check in
             /// Init, so each is waited out at the clock's slowest instead of polling RDY (:2754). Too short a
             /// wait makes the part ignore the next ADC_CONTROL write (SPI_IGNORE_ERR, :3662, :4440).
-            static constexpr Ad7124Power CalibrationPower
+            static constexpr Ad7124Power calibrationPower
               = Config::power == Ad7124Power::full ? Ad7124Power::mid : Config::power;
-            static constexpr auto ZeroScaleWait
-              = Ad7124Detail::settling(Config::filter, Config::filterSelect, CalibrationPower);
-            static constexpr auto FullScaleWait = 4 * ZeroScaleWait;
+            static constexpr auto zeroScaleWait
+              = Ad7124Detail::settling(Config::filter, Config::filterSelect, calibrationPower);
+            static constexpr auto fullScaleWait = 4 * zeroScaleWait;
 
-            static constexpr std::size_t InitSteps
-              = 4 + 4 + ChannelCount + (Calibrates ? 3 : 0) + 2;
+            static constexpr std::size_t initSteps
+              = 4 + 4 + channelCount + (calibrates ? 3 : 0) + 2;
 
             /// The serial reset first - 64 ones bring an out-of-step interface back (:2714), which answers
             /// nothing before, so the ID is read here rather than by the engine's Identity. STATUS is read to
             /// clear POR_FLAG (:4181); ERROR last, for setup() to see whether a write was ignored.
-            static constexpr auto Init = [] {
+            static constexpr auto init = [] {
                 using namespace Ad7124Detail;
-                std::array<Engine::Step, InitSteps> s{};
+                std::array<Engine::Step, initSteps> s{};
                 std::size_t                         i = 0;
                 s[i]       = Engine::Step::command({.payload = {}, .delay = Config::resetSettle});
                 s[i].count = 8;
@@ -438,24 +438,24 @@ namespace Kvasir { namespace SPI {
                                                Config::reject60Hz,
                                                Config::postFilter,
                                                Config::filterSelect));
-                for(std::size_t c = 0; c < ChannelCount; ++c) {
+                for(std::size_t c = 0; c < channelCount; ++c) {
                     s[i++]
                       = writeStep(address(Reg::channel0, c), 2, channelValue(Config::channels[c]));
                 }
-                if constexpr(Calibrates) {
+                if constexpr(calibrates) {
                     s[i++] = writeStep(address(Reg::offset0), 3, 0x800000);
                     s[i++] = writeStep(address(Reg::adcControl),
                                        2,
                                        adcControlCalibration(Config::power,
                                                              Config::reference,
                                                              CalibrationMode::internalFullScale),
-                                       FullScaleWait);
+                                       fullScaleWait);
                     s[i++] = writeStep(address(Reg::adcControl),
                                        2,
                                        adcControlCalibration(Config::power,
                                                              Config::reference,
                                                              CalibrationMode::internalZeroScale),
-                                       ZeroScaleWait);
+                                       zeroScaleWait);
                 }
                 s[i++] = writeStep(address(Reg::adcControl),
                                    2,
@@ -476,12 +476,12 @@ namespace Kvasir { namespace SPI {
                 auto const id = data.u8(0);
                 state.id      = id;
                 return Ad7124Detail::idMatches(Config::model, id)
-                    && (data.be24(2) & Ad7124Detail::SpiIgnoreErr) == 0;
+                    && (data.be24(2) & Ad7124Detail::spiIgnoreErr) == 0;
             }
 
             struct Conversion {
-                static constexpr auto       Period = Config::pollPeriod;
-                static constexpr std::array Steps{
+                static constexpr auto       period = Config::pollPeriod;
+                static constexpr std::array steps{
                   Engine::Step::read(
                     {.reg = Ad7124Detail::address(Reg::status), .count = 1, .offset = 0}),
                   Engine::Step::stopUnless(),
@@ -496,29 +496,29 @@ namespace Kvasir { namespace SPI {
                 };
 
                 [[nodiscard]] static constexpr bool ready(Bytes data) {
-                    return (data.u8(0) & Ad7124Detail::NotReady) == 0
-                        && (data.u8(0) & Ad7124Detail::PorFlag) == 0;
+                    return (data.u8(0) & Ad7124Detail::notReady) == 0
+                        && (data.u8(0) & Ad7124Detail::porFlag) == 0;
                 }
 
                 [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
                     auto const status = data.u8(0);
-                    if((status & Ad7124Detail::PorFlag)
+                    if((status & Ad7124Detail::porFlag)
                        != 0) {   // the driver sees it and starts over
                         return Engine::Outcome<Sample>::ok(Sample{.status = status});
                     }
-                    if((status & Ad7124Detail::NotReady) != 0) {
+                    if((status & Ad7124Detail::notReady) != 0) {
                         return Engine::Outcome<Sample>::unchanged();
                     }
                     return Engine::Outcome<Sample>::ok(
                       Sample{.status = status,
                              .code   = data.be24(1),
                              .channel
-                             = static_cast<std::uint8_t>(data.u8(4) & Ad7124Detail::ChannelMask)});
+                             = static_cast<std::uint8_t>(data.u8(4) & Ad7124Detail::channelMask)});
                 }
             };
 
             struct Errors {
-                static constexpr std::array Steps{Engine::Step::read(
+                static constexpr std::array steps{Engine::Step::read(
                   {.reg = Ad7124Detail::address(Reg::error), .count = 3, .offset = 0})};
 
                 struct Sample {
@@ -546,9 +546,9 @@ namespace Kvasir { namespace SPI {
         static_assert(std::derived_from<Config,
                                         Ad7124Defaults>,
                       "derive the ADC config from Kvasir::SPI::Ad7124Defaults");
-        static constexpr std::string_view Name         = "AD7124";
-        static constexpr std::size_t      ChannelCount = Config::channels.size();
-        static_assert(ChannelCount >= 1 && ChannelCount <= 16,
+        static constexpr std::string_view name         = "AD7124";
+        static constexpr std::size_t      channelCount = Config::channels.size();
+        static_assert(channelCount >= 1 && channelCount <= 16,
                       "the AD7124 sequences 1 to 16 channels");
         static_assert(Ad7124Detail::inputsValid(Config::model,
                                                 Config::channels),
@@ -600,16 +600,16 @@ namespace Kvasir { namespace SPI {
             }
             if(device_.template fresh<typename Chip::Conversion>(seenConversion_)) {
                 auto const& s = device_.template latest<typename Chip::Conversion>();
-                if((s.status & Ad7124Detail::PorFlag) != 0) {
+                if((s.status & Ad7124Detail::porFlag) != 0) {
                     UC_LOG_W("ad7124: the part reset itself, configuring it again");
                     valid_ = false;
                     device_.restart();
                     return;
                 }
-                if((s.status & Ad7124Detail::ErrorFlag) != 0) {
+                if((s.status & Ad7124Detail::errorFlag) != 0) {
                     errorTicket_ = device_.template request<typename Chip::Errors>();
                 }
-                if(s.channel < ChannelCount) {
+                if(s.channel < channelCount) {
                     if(pending_) { ++missed_; }
                     pending_
                       = Conversion{s.channel, Ad7124Detail::toSigned(s.code, Config::polarity)};

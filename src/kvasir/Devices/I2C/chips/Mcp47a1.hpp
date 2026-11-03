@@ -27,25 +27,25 @@ namespace Kvasir::I2C::Chips {
 /// its own pin: the scale is right when the board ties VREF to the supply.
 template<MilliVolt Supply = Units::milliVolt(3300)>
 struct Mcp47a1 {
-    static constexpr std::string_view Name          = "MCP47A1";
-    static constexpr Address7         Address       = 0x2E;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "MCP47A1";
+    static constexpr Address7         address       = 0x2E;
+    static constexpr std::size_t      registerBytes = 1;
 
     /// By ordering option; there is no address pin.
-    static constexpr std::array<Address7, 2> Addresses{0x2E, 0x3E};
+    static constexpr std::array<Address7, 2> addresses{0x2E, 0x3E};
 
     /// 65 positions: codes 0..64, 64 being VREF.
-    static constexpr std::uint8_t Taps      = 65;
-    static constexpr std::uint8_t FullScale = Taps - 1;
+    static constexpr std::uint8_t taps      = 65;
+    static constexpr std::uint8_t fullScale = taps - 1;
     /// `Taps` under the name generic potentiometer views read. A read group's `Steps` is its
     /// script, so a chip-level number of that name misleads; prefer `Taps`.
-    static constexpr std::uint8_t Steps = Taps;
+    static constexpr std::uint8_t steps = taps;
 
     /// The code at or below a wanted output, for callers that think in volts: `Supply` is 64.
     [[nodiscard]] static constexpr std::uint8_t codeFor(MilliVolt output) {
         auto const mV = Units::value(output);
-        auto const c  = mV <= 0 ? 0 : mV * FullScale / Units::value(Supply);
-        return static_cast<std::uint8_t>(c >= FullScale ? FullScale : c);
+        auto const c  = mV <= 0 ? 0 : mV * fullScale / Units::value(Supply);
+        return static_cast<std::uint8_t>(c >= fullScale ? fullScale : c);
     }
 
     /// The output level, 0..64; more is full scale. No Initial: the part powers up at mid-scale and forcing it
@@ -53,11 +53,11 @@ struct Mcp47a1 {
     /// reset.
     struct Level {
         using Value                        = std::uint8_t;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            buffer[0] = static_cast<std::byte>(value >= FullScale ? FullScale : value);
+            buffer[0] = static_cast<std::byte>(value >= fullScale ? fullScale : value);
             return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
         }
     };

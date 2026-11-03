@@ -29,7 +29,7 @@ struct NoTiming {
 
 struct OneClockBus : Kvasir::Test::FakeBus {
     using Shape = Kvasir::I2C::QueuedShape<OneClockCfg, Kvasir::Test::FakeClock, 16, NoTiming>;
-    static constexpr std::uint32_t BaudRate = Shape::BaudRate;
+    static constexpr std::uint32_t baudRate = Shape::baudRate;
 
     static consteval auto timing(std::uint32_t hz) { return Shape::timing(hz); }
 };

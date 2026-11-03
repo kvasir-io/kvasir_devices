@@ -27,7 +27,7 @@ namespace Tsl2591Detail {
         ms600 = 5
     };
 
-    inline constexpr std::array<std::uint16_t, 4> GainValue{1, 25, 428, 9876};
+    inline constexpr std::array<std::uint16_t, 4> gainValue{1, 25, 428, 9876};
 
     [[nodiscard]] constexpr std::chrono::milliseconds integrationTime(std::uint8_t integration) {
         return std::chrono::milliseconds{100U * ((integration & 0x07U) + 1U)};
@@ -60,46 +60,46 @@ namespace Tsl2591Detail {
 template<Tsl2591Detail::Gain        Gain            = Tsl2591Detail::Gain::medium,
          Tsl2591Detail::Integration IntegrationTime = Tsl2591Detail::Integration::ms100>
 struct Tsl2591 {
-    static constexpr std::string_view Name = "TSL2591";
+    static constexpr std::string_view name = "TSL2591";
     /// ams TSL2591. TSL2591.md:488..494, ID register 0x12 = 0x50. The part is addressed through its
     /// command register: 0xA0 (CMD, normal operation) | 0x12.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0xA0 | 0x12, 1, true, 0xFF, 0x50},
     };
-    static constexpr Address7                Address = 0x29;
-    static constexpr std::array<Address7, 1> Addresses{0x29};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x29;
+    static constexpr std::array<Address7, 1> addresses{0x29};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// A register address on the wire: COMMAND bit set, normal transaction.
     [[nodiscard]] static constexpr std::uint16_t cmd(std::uint8_t reg) {
         return static_cast<std::uint16_t>(0xA0U | reg);
     }
 
-    static constexpr std::uint8_t GainCode        = static_cast<std::uint8_t>(Gain);
-    static constexpr std::uint8_t IntegrationCode = static_cast<std::uint8_t>(IntegrationTime);
-    static constexpr std::uint8_t Config
-      = static_cast<std::uint8_t>((GainCode << 4) | IntegrationCode);
+    static constexpr std::uint8_t gainCode        = static_cast<std::uint8_t>(Gain);
+    static constexpr std::uint8_t integrationCode = static_cast<std::uint8_t>(IntegrationTime);
+    static constexpr std::uint8_t config
+      = static_cast<std::uint8_t>((gainCode << 4) | integrationCode);
 
     /// 1x, 25x, 428x, 9876x (the datasheet's typical values).
-    static constexpr std::array<std::uint16_t, 4> GainValue = Tsl2591Detail::GainValue;
-    static constexpr std::uint16_t                AGain     = GainValue[GainCode];
-    static constexpr auto Atime = Tsl2591Detail::integrationTime(IntegrationCode);
+    static constexpr std::array<std::uint16_t, 4> gainValue = Tsl2591Detail::gainValue;
+    static constexpr std::uint16_t                aGain     = gainValue[gainCode];
+    static constexpr auto atime = Tsl2591Detail::integrationTime(integrationCode);
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = cmd(0x01), .payload = {Config}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = cmd(0x01), .payload = {config}}),
       Engine::Step::write(
         {.reg     = cmd(0x00),
          .payload = {0x03},
          .delay
-         = Atime + std::chrono::milliseconds{20}}),   // PON | AEN, then the first integration
+         = atime + std::chrono::milliseconds{20}}),   // PON | AEN, then the first integration
     };
 
     struct State {
         std::uint8_t deviceId{};
-        std::uint8_t gain{GainCode};                 ///< AGAIN as CONFIG holds it now
-        std::uint8_t integration{IntegrationCode};   ///< ATIME
+        std::uint8_t gain{gainCode};                 ///< AGAIN as CONFIG holds it now
+        std::uint8_t integration{integrationCode};   ///< ATIME
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs: the
@@ -107,12 +107,12 @@ struct Tsl2591 {
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
         state.deviceId    = static_cast<std::uint8_t>(ids[0]);
-        state.gain        = GainCode;   // what the Init script wrote
-        state.integration = IntegrationCode;
+        state.gain        = gainCode;   // what the Init script wrote
+        state.integration = integrationCode;
     }
 
     struct Light {
-        static constexpr auto Period = std::chrono::milliseconds{500};
+        static constexpr auto period = std::chrono::milliseconds{500};
 
         /// A new result every integration time; never faster than the part converts.
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
@@ -121,7 +121,7 @@ struct Tsl2591 {
         }
 
         /// STATUS, then CH0 and CH1 (each 16-bit little endian) in one burst.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = cmd(0x13), .count = 5, .offset = 0})};
 
         struct Sample {
@@ -146,7 +146,7 @@ struct Tsl2591 {
                 auto const den
                   = static_cast<std::uint64_t>(full)
                   * static_cast<std::uint64_t>(Tsl2591Detail::integrationTime(integration).count())
-                  * Tsl2591Detail::GainValue[gain & 0x03U];
+                  * Tsl2591Detail::gainValue[gain & 0x03U];
                 return Units::milliLux(v * v * 408ULL * 1000ULL / den);
             }
         };
@@ -167,8 +167,8 @@ struct Tsl2591 {
     /// AVALID).
     struct Configuration {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Config;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = config;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -191,8 +191,8 @@ struct Tsl2591 {
     /// ENABLE: PON alone powers the oscillator, PON | AEN also runs the ALS.
     struct Enable {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = 0x03;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = 0x03;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

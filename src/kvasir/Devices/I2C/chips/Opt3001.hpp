@@ -57,39 +57,39 @@ template<Opt3001Detail::ConversionTime CT = Opt3001Detail::ConversionTime::ms800
 struct Opt3001 {
     using ConversionTime = Opt3001Detail::ConversionTime;
 
-    static constexpr std::string_view Name = "OPT3001";
+    static constexpr std::string_view name = "OPT3001";
     /// SBOS681C Table 14 "The manufacturer ID reads 5449h", Table 15 "The device ID reads 3001h"
     /// (7.6.1.1.5/6, md l.1196, l.1222). The engine reads both before anything is written: a part
     /// with another identity at the address gets nothing.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"manufacturer-id", 0x7E, 2, true, 0xFFFF, 0x5449},
       Engine::RegisterCheck{      "device-id", 0x7F, 2, true, 0xFFFF, 0x3001},
     };
-    static constexpr Address7    Address       = 0x44;
-    static constexpr auto        Addresses     = addressRun<0x44, 4>();
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x44;
+    static constexpr auto        addresses     = addressRun<0x44, 4>();
+    static constexpr std::size_t registerBytes = 1;
 
     /// Power-on to the first transaction. The part is ready well inside this; the figure is
     /// what a power-gated sensor -- the enable pin as the Device's Reset line -- needs for
     /// its rail to come up and settle.
-    static constexpr auto StartupDelay = std::chrono::milliseconds{20};
+    static constexpr auto startupDelay = std::chrono::milliseconds{20};
 
     /// Held low long enough for the rail to actually fall, when the "reset" is a power gate.
-    static constexpr auto ResetLow    = std::chrono::milliseconds{10};
-    static constexpr auto ResetSettle = std::chrono::milliseconds{10};
+    static constexpr auto resetLow    = std::chrono::milliseconds{10};
+    static constexpr auto resetSettle = std::chrono::milliseconds{10};
 
     /// RN 1100b automatic full-scale, CT as given, M 11b continuous (Table 10, md l.993-1042).
     /// Below bit 9 the reset state (C810h): L (bit 4) 1, POL, ME and FC 0; bits 8:5 are
     /// read-only flags.
-    static constexpr std::uint16_t LatchedWindow = 0x0010U;
-    static constexpr std::uint16_t Conf          = static_cast<std::uint16_t>(
-      0xC000U | (static_cast<std::uint16_t>(CT) << 11U) | (0x3U << 9U) | LatchedWindow);
+    static constexpr std::uint16_t latchedWindow = 0x0010U;
+    static constexpr std::uint16_t conf          = static_cast<std::uint16_t>(
+      0xC000U | (static_cast<std::uint16_t>(CT) << 11U) | (0x3U << 9U) | latchedWindow);
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
         {.reg     = 0x01,
-         .payload = {static_cast<std::uint8_t>(Conf >> 8), static_cast<std::uint8_t>(Conf & 0xFF)},
+         .payload = {static_cast<std::uint8_t>(conf >> 8), static_cast<std::uint8_t>(conf & 0xFF)},
          .delay   = Opt3001Detail::conversionTime(CT)}),
     };
     // clang-format on
@@ -107,8 +107,8 @@ struct Opt3001 {
     }
 
     struct Light {
-        static constexpr auto       Period = Opt3001Detail::readPeriod(CT);
-        static constexpr std::array Steps{
+        static constexpr auto       period = Opt3001Detail::readPeriod(CT);
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0})};
 
         struct Sample {

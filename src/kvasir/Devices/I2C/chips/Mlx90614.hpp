@@ -28,14 +28,14 @@ namespace Kvasir::I2C::Chips {
 /// factory one only.
 template<Address7 Addr = 0x5A>
 struct Mlx90614 {
-    static constexpr std::string_view        Name    = "MLX90614";
-    static constexpr Address7                Address = Addr;
-    static constexpr std::array<Address7, 1> Addresses{Addr};
-    static constexpr std::size_t             RegisterBytes = 1;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{250};
+    static constexpr std::string_view        name    = "MLX90614";
+    static constexpr Address7                address = Addr;
+    static constexpr std::array<Address7, 1> addresses{Addr};
+    static constexpr std::size_t             registerBytes = 1;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{250};
 
-    static constexpr std::uint16_t MinObject  = 0x27AD;
-    static constexpr std::uint16_t MinAmbient = 0x2D89;
+    static constexpr std::uint16_t minObject  = 0x27AD;
+    static constexpr std::uint16_t minAmbient = 0x2D89;
 
     [[nodiscard]] static constexpr bool pecOk(Bytes        data,
                                               std::size_t  i,
@@ -49,8 +49,8 @@ struct Mlx90614 {
     }
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{200};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{200};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x06, .count = 3, .offset = 0}),
           Engine::Step::read({.reg = 0x07, .count = 3, .offset = 3})};
 
@@ -72,7 +72,7 @@ struct Mlx90614 {
             if((ta & 0x8000U) != 0 || (to & 0x8000U) != 0) {
                 return Engine::Outcome<Sample>::reject();
             }
-            if(ta < MinAmbient || to < MinObject) { return Engine::Outcome<Sample>::reject(); }
+            if(ta < minAmbient || to < minObject) { return Engine::Outcome<Sample>::reject(); }
             return Engine::Outcome<Sample>::ok({centi(ta), centi(to)});
         }
     };

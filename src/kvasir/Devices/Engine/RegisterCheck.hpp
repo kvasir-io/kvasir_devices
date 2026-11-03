@@ -23,7 +23,7 @@ namespace Kvasir::Engine {
 /// bring-up leaves in the part; the engine does not read it, a hardware test
 /// does -- off the real part, past the driver.
 struct RegisterCheck {
-    static constexpr std::uint32_t None = 0xFFFF'FFFFU;
+    static constexpr std::uint32_t none = 0xFFFF'FFFFU;
 
     std::string_view name;          ///< the data sheet's name for it
     std::uint16_t    reg;           ///< the register's address
@@ -31,11 +31,11 @@ struct RegisterCheck {
     bool             bigEndian;     ///< how a multi-byte value comes off the wire
     std::uint32_t    mask;          ///< the bits that are predictable
     std::uint32_t    expect;        ///< what they must be
-    std::uint32_t    also{None};    ///< a second value that is as good: a family's other part
+    std::uint32_t    also{none};    ///< a second value that is as good: a family's other part
     std::uint8_t     regBytes{1};   ///< bytes of register address (2: VL53L1X)
 
     [[nodiscard]] constexpr bool matches(std::uint32_t value) const {
-        return (value & mask) == expect || (also != None && (value & mask) == also);
+        return (value & mask) == expect || (also != none && (value & mask) == also);
     }
 
     /// `width` bytes as they came off the wire, as one value.

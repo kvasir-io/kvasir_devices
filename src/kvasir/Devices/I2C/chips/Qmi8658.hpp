@@ -121,24 +121,24 @@ template<Qmi8658Detail::AccelRange Acc  = Qmi8658Detail::AccelRange::g8,
          Qmi8658Detail::GyroRange  Gyro = Qmi8658Detail::GyroRange::dps1024,
          Qmi8658Detail::Odr        Rate = Qmi8658Detail::Odr::hz125>
 struct Qmi8658 {
-    static constexpr std::string_view Name = "QMI8658";
+    static constexpr std::string_view name = "QMI8658";
     /// QST QMI8658. qmi8658a.md:882, :1033: WHO_AM_I (0x00) is 0x05.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x00, 1, true, 0xFF, 0x05},
     };
-    static constexpr Address7                Address = 0x6A;
-    static constexpr std::array<Address7, 2> Addresses{0x6A, 0x6B};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x6A;
+    static constexpr std::array<Address7, 2> addresses{0x6A, 0x6B};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::uint8_t Ctrl2
+    static constexpr std::uint8_t ctrl2
       = static_cast<std::uint8_t>(static_cast<std::uint8_t>(Acc) | static_cast<std::uint8_t>(Rate));
-    static constexpr std::uint8_t Ctrl3 = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t ctrl3 = static_cast<std::uint8_t>(
       static_cast<std::uint8_t>(Gyro) | static_cast<std::uint8_t>(Rate));
 
     /// After the soft reset. The QMI8658A finishes its reset in 15 ms at most (7.4, System Turn
     /// On Time in Tables 7 and 8); the QMI8658C lists a System Turn On Time of 1.75 s from
     /// software reset (Tables 7 and 8).
-    static constexpr std::chrono::milliseconds SoftResetSettle{20};
+    static constexpr std::chrono::milliseconds softResetSettle{20};
 
     /// CTRL1 = 0x40: ADDR_AI (bit 6) so the twelve data bytes come out of one read, and BE
     /// (bit 5) *cleared* for little-endian, which is what the AX_L/AX_H register naming and
@@ -168,13 +168,13 @@ struct Qmi8658 {
         return std::chrono::milliseconds{36};
     }
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
-        {.reg = 0x60, .payload = {0xB0}, .delay = SoftResetSettle}),   // RESET, then the settle
+        {.reg = 0x60, .payload = {0xB0}, .delay = softResetSettle}),   // RESET, then the settle
       Engine::Step::read({.reg = 0x4D, .count = 1, .offset = 0}),      // the reset result
       Engine::Step::write({.reg = 0x02, .payload = {0x40}}),
-      Engine::Step::write({.reg = 0x03, .payload = {Ctrl2}}),
-      Engine::Step::write({.reg = 0x04, .payload = {Ctrl3}}),
+      Engine::Step::write({.reg = 0x03, .payload = {ctrl2}}),
+      Engine::Step::write({.reg = 0x04, .payload = {ctrl3}}),
       Engine::Step::write({.reg = 0x06, .payload = {0x00}}),
       Engine::Step::write({.reg     = 0x08,
                            .payload = {0x03},
@@ -201,13 +201,13 @@ struct Qmi8658 {
     }
 
     struct Motion {
-        static constexpr auto Period = std::chrono::milliseconds{50};
+        static constexpr auto period = std::chrono::milliseconds{50};
         /// So the frames that said nothing new are counted (unchanged<Motion>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// STATUS0, then twelve bytes from 0x35 in one go, which the auto-increment set at
         /// bring-up allows.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x2E, .count = 1, .offset = 0}),
           Engine::Step::read({.reg = 0x35, .count = 12, .offset = 1})};
 
@@ -216,8 +216,8 @@ struct Qmi8658 {
             std::array<MilliDegPerSec, 3> gyro{};
         };
 
-        static constexpr std::int32_t CountsPerG   = Qmi8658Detail::countsPerG(Acc);
-        static constexpr std::int32_t CountsPerDps = Qmi8658Detail::countsPerDps(Gyro);
+        static constexpr std::int32_t countsPerG   = Qmi8658Detail::countsPerG(Acc);
+        static constexpr std::int32_t countsPerDps = Qmi8658Detail::countsPerDps(Gyro);
 
         /// At the template ranges.
         [[nodiscard]] static constexpr MicroG toAccel(std::int16_t raw) {
@@ -250,8 +250,8 @@ struct Qmi8658 {
     /// CTRL2: the accelerometer's range (6:4) and ODR (3:0), changeable at run time.
     struct AccelConfig {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Ctrl2;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = ctrl2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -268,8 +268,8 @@ struct Qmi8658 {
     /// CTRL3: the gyroscope's range (6:4) and ODR (3:0).
     struct GyroConfig {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Ctrl3;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = ctrl3;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

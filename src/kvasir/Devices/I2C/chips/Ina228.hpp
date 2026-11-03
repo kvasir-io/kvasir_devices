@@ -59,53 +59,53 @@ template<MicroOhm            Shunt      = Units::microOhm(2000),
          Ina228Detail::Range Range      = Ina228Detail::Range::mV160,
          typename Timing                = Engine::DefaultTiming>
 struct Ina228 {
-    static constexpr std::string_view Name = "INA228";
+    static constexpr std::string_view name = "INA228";
     /// TI INA228. INA228.md:1373 (MANUFACTURER_ID 3Eh = 5449h, "TI") and :1387..1398 (DEVICE_ID 3Fh:
     /// DIEID 228h in 15:4, the revision below it).
     /// Configuration: ADC_CONFIG (01h) MODE 15:12 = Fh, continuous bus, shunt and temperature
     /// (INA228.md:1024).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"manufacturer-id", 0x3E, 2, true, 0xFFFF, 0x5449},
       Engine::RegisterCheck{      "device-id", 0x3F, 2, true, 0xFFF0, 0x2280},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"continuous", 0x01, 2, true, 0xF000, 0xF000},
     };
-    static constexpr Address7    Address       = 0x40;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x40;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x40, 16>();
+    static constexpr auto addresses = addressRun<0x40, 16>();
 
     static_assert(Shunt > Units::microOhm(0) && MaxCurrent > Units::milliAmp(0),
                   "the shunt value and the full-scale current are what every reading is "
                   "scaled by; neither may be zero");
-    static constexpr std::chrono::milliseconds ReadPeriod
+    static constexpr std::chrono::milliseconds readPeriod
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{500}));
-    static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
+    static_assert(readPeriod > std::chrono::milliseconds::zero(),
                   "Timing::period is how often Power is read; 0 never reads it");
 
-    static constexpr bool Range40mV = Range == Ina228Detail::Range::mV40;
+    static constexpr bool range40mV = Range == Ina228Detail::Range::mV40;
 
     /// CURRENT_LSB: full scale over 2^19.
-    static constexpr NanoAmp CurrentLsb = Units::nanoAmp(
+    static constexpr NanoAmp currentLsb = Units::nanoAmp(
       static_cast<std::uint64_t>(Units::value(MaxCurrent)) * 1'000'000ULL / 524288ULL);
 
     /// SHUNT_CAL = 13107.2e6 x CURRENT_LSB[A] x R[Ohm], rounded, and x4 on the small range.
-    static constexpr std::uint64_t CalibrationWanted = [] {
-        auto const lsb   = static_cast<std::uint64_t>(Units::value(CurrentLsb));   // nA
+    static constexpr std::uint64_t calibrationWanted = [] {
+        auto const lsb   = static_cast<std::uint64_t>(Units::value(currentLsb));   // nA
         auto const shunt = static_cast<std::uint64_t>(Units::value(Shunt));        // uOhm
         auto const v     = (131072ULL * lsb * shunt + 5'000'000'000ULL) / 10'000'000'000ULL;
-        return Range40mV ? v * 4 : v;
+        return range40mV ? v * 4 : v;
     }();
-    static_assert(CalibrationWanted <= 0x7FFF,
+    static_assert(calibrationWanted <= 0x7FFF,
                   "SHUNT_CAL is 15 bits: lower MaxCurrent or the shunt until 13107.2e6 x "
                   "CURRENT_LSB x R (x4 on the 40 mV range) fits");
-    static constexpr std::uint16_t Calibration = static_cast<std::uint16_t>(CalibrationWanted);
+    static constexpr std::uint16_t calibration = static_cast<std::uint16_t>(calibrationWanted);
 
     /// decode() scales by CURRENT_LSB while the part divides by the rounded SHUNT_CAL, so a
     /// small SHUNT_CAL is a scale error: at 50 or more it is under 1 %.
-    static_assert(Calibration >= 50,
+    static_assert(calibration >= 50,
                   "SHUNT_CAL rounds to under 50, which puts current and power more than 1 % off "
                   "the scale decode() uses: raise MaxCurrent or the shunt");
     /// POWER is 24 bits of 3.2 x CURRENT_LSB, reported in microwatts in 32 bits: 85 V at the
@@ -128,9 +128,9 @@ struct Ina228 {
     }
 
     struct Power {
-        static constexpr auto Period = ReadPeriod;
+        static constexpr auto period = readPeriod;
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read(
             {.reg = 0x04, .count = 3, .offset = 0}),   // shunt voltage, 20 bit in 23:4
           Engine::Step::read(
@@ -180,13 +180,13 @@ struct Ina228 {
             Sample     sample{};
             auto const shunt = signed20(data.be24(0));
             // 312.5 nV is 625/2, and 78.125 nV is 625/8: both exact in integers.
-            sample.shuntVoltage = Units::nanoVolt(Range40mV ? shunt * 625 / 8 : shunt * 625 / 2);
+            sample.shuntVoltage = Units::nanoVolt(range40mV ? shunt * 625 / 8 : shunt * 625 / 2);
             // 195.3125 uV is 3125/16.
             sample.busVoltage = Units::microVolt(static_cast<std::uint32_t>(
               static_cast<std::uint64_t>(data.be24(3) >> 4) * 3125ULL / 16ULL));
             sample.dieTemperature
               = Units::milliDegC(static_cast<std::int32_t>(data.s16be(6)) * 125 / 16);
-            auto const lsb = static_cast<std::int64_t>(Units::value(CurrentLsb));   // nA
+            auto const lsb = static_cast<std::int64_t>(Units::value(currentLsb));   // nA
             sample.current
               = Units::microAmp(static_cast<std::int64_t>(signed20(data.be24(8))) * lsb / 1000);
             // POWER_LSB is 3.2 x CURRENT_LSB: x32/10, then nW -> uW.
@@ -202,9 +202,9 @@ struct Ina228 {
     /// calibration are computed for.
     struct Config {
         using Value                        = Ina228Detail::Config;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
-        static constexpr Value Initial{std::chrono::milliseconds::zero(),
+        static constexpr Value initial{std::chrono::milliseconds::zero(),
                                        Ina228Detail::Tempco::off};
 
         [[nodiscard]] static constexpr std::uint16_t raw(Value const& value) {
@@ -216,7 +216,7 @@ struct Ina228 {
             if(value.tempCompensation == Ina228Detail::Tempco::on) {
                 r = static_cast<std::uint16_t>(r | (1U << 5));
             }
-            if(Range40mV) { r = static_cast<std::uint16_t>(r | (1U << 4)); }
+            if(range40mV) { r = static_cast<std::uint16_t>(r | (1U << 4)); }
             return r;
         }
 
@@ -233,8 +233,8 @@ struct Ina228 {
     struct Reset {
         struct Value {};
 
-        static constexpr std::size_t Bytes     = 2;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 2;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&,
                                                            std::span<std::byte> buffer) {
@@ -246,7 +246,7 @@ struct Ina228 {
 
     /// Reset 0xFB68: continuous shunt, bus and temperature, 1052 us conversions, 1 average.
     using AdcConfig = Engine::Groups::Word<0x01, 0xFB68>;
-    using ShuntCal  = Engine::Groups::Word<0x02, Calibration>;
+    using ShuntCal  = Engine::Groups::Word<0x02, calibration>;
 
     using Reads  = Engine::List<Power>;
     using Writes = Engine::List<Config, AdcConfig, ShuntCal, Reset>;

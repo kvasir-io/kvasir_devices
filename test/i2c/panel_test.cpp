@@ -119,15 +119,15 @@ void lcd1602() {
 
 namespace Oled {
     struct Wide : Chips::Ssd1306Detail::PanelDefaults {
-        static constexpr int      Width   = 128;
-        static constexpr int      Height  = 32;
+        static constexpr int      width   = 128;
+        static constexpr int      height  = 32;
         static constexpr Address7 address = 0x3C;
     };
 
     /// The 0.66" module: 64 x 48 on RAM columns 32..95.
     struct Small : Chips::Ssd1306Detail::PanelDefaults {
-        static constexpr int          Width        = 64;
-        static constexpr int          Height       = 48;
+        static constexpr int          width        = 64;
+        static constexpr int          height       = 48;
         static constexpr Address7     address      = 0x3D;
         static constexpr int          columnOffset = 32;
         static constexpr std::uint8_t comPins      = 0x12;
@@ -139,8 +139,8 @@ namespace Oled {
 // renderer asks of a panel, which is spelled out here as a concept.
 template<typename P>
 concept PanelContract = requires(P& p, std::uint32_t pages) {
-    { P::Width } -> std::convertible_to<int>;
-    { P::Height } -> std::convertible_to<int>;
+    { P::width } -> std::convertible_to<int>;
+    { P::height } -> std::convertible_to<int>;
     { p.ready() } -> std::same_as<bool>;
     { p.failed() } -> std::same_as<bool>;
     { p.turn() };
@@ -225,7 +225,7 @@ void ssd1306() {
       }};
     Dev<S> sm{};
     check(runUntil(sm, [&] { return sm.answering() && !sm.pending(); }, 500ms), "up");
-    checkEq(std::size_t{S::Pages}, std::size_t{6}, "six pages");
+    checkEq(std::size_t{S::pages}, std::size_t{6}, "six pages");
     check(hasWrite({0x00, 0xDA, 0x12, 0x81, 0x7F, 0xD9, 0xF1}), "ComPins 12h, as the panel says");
     check(hasWrite({0x00, 0xB0, 0x00, 0x12}), "page 0 at column 32: low nibble 0, high 2");
     check(hasWrite({0x00, 0xB5, 0x00, 0x12}), "and page 5, the last");
@@ -242,7 +242,7 @@ void ssd1306() {
     check(runUntil(panelDev, [&] { return panel.ready(); }, 500ms), "ready once brought up");
     check(panel.link() == panelDev.link() && panel.link() == Kvasir::Link::answering,
           "link(): the device's own");
-    checkEq(std::size_t{Panel::Pages}, std::size_t{4}, "four pages");
+    checkEq(std::size_t{Panel::pages}, std::size_t{4}, "four pages");
     base                  = FakeBus::log.size();
     panel.pageRam()[1][7] = 0x5A;   // a canvas would do this, one pixel at a time
     panel.pagesChanged(1U << 1);
@@ -511,22 +511,22 @@ namespace Es8311Test {
     using Master = Chips::Es8311<Units::hertz(6'144'000), Units::hertz(24'000)>;
     using Slave
       = Chips::Es8311<Units::hertz(6'144'000), Units::hertz(24'000), ED::Role::codecSlave>;
-    static_assert(Master::Reg00Run == 0xC0,
+    static_assert(Master::reg00Run == 0xC0,
                   "CSM_ON | MSC");
-    static_assert(Slave::Reg00Run == 0x80,
+    static_assert(Slave::reg00Run == 0x80,
                   "CSM_ON alone");
-    static_assert(Master::Reg09 == 0x0C,
+    static_assert(Master::reg09 == 0x0C,
                   "16-bit I2S into the DAC");
 
     // The master-mode dividers follow MCLK / fs, not the vendor table's 256 fs for every row.
     using Master16k = Chips::Es8311<Units::hertz(12'288'000), Units::hertz(16'000)>;
-    static_assert(Master16k::LrckDiv == 767 && Master16k::BclkCode == 21,
+    static_assert(Master16k::lrckDiv == 767 && Master16k::bclkCode == 21,
                   "768 fs: LRCK / 768, BCLK / 24 is 32 bits a frame (code 21 is / 24)");
     using Master8k24 = Chips::Es8311<Units::hertz(12'288'000),
                                      Units::hertz(8'000),
                                      ED::Role::codecMaster,
                                      ED::WordLength::bits24>;
-    static_assert(Master8k24::LrckDiv == 1535 && Master8k24::BclkCode == 21,
+    static_assert(Master8k24::lrckDiv == 1535 && Master8k24::bclkCode == 21,
                   "1536 fs with 24-bit words: 64 bits a frame, BCLK / 24");
 }   // namespace Es8311Test
 

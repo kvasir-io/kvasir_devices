@@ -53,7 +53,7 @@ void tombstoneKeepsItsSlot() {
     B::fresh();
     check(B::submit(0), "on the wire");
     Kvasir::Bus::Ticket first{};
-    for(int i = 1; i <= static_cast<int>(B::Depth); ++i) {
+    for(int i = 1; i <= static_cast<int>(B::depth); ++i) {
         auto const t = B::submitTracked(i);
         check(t.valid(), "queued");
         if(i == 1) { first = t; }
@@ -65,10 +65,10 @@ void tombstoneKeepsItsSlot() {
     B::ok();
     checkEq(B::starts(), 2, "the completion started the next live request, not the tombstone");
     check(B::submit(100), "the tombstone dropped at the head: its slot is back");
-    for(int i = 0; i != static_cast<int>(B::Depth) + 1; ++i) { B::ok(); }
+    for(int i = 0; i != static_cast<int>(B::depth) + 1; ++i) { B::ok(); }
     checkEq(B::callbacksOf(1), 1, "the cancelled one: one callback");
     checkEq(B::callbacksOf(100), 1, "the late one ran");
-    checkEq(B::starts(), static_cast<int>(B::Depth) + 1, "every live request once on the wire");
+    checkEq(B::starts(), static_cast<int>(B::depth) + 1, "every live request once on the wire");
 }
 
 template<typename B>
@@ -225,7 +225,7 @@ void twoBusesShareNothing() {
     checkEq(B::seen.size(), seen, "it saw no callback");
     auto const tb1 = B::submitTracked(2);
     checkEq(tb1.id, static_cast<std::uint16_t>(tb0.id + 1U), "its ticket counter is its own");
-    for(int i = 0; i != static_cast<int>(B::Depth); ++i) {
+    for(int i = 0; i != static_cast<int>(B::depth); ++i) {
         check(B::submit(10 + i), "its queue is its own: empty");
     }
     check(!B::submit(50), "and holds its own depth");

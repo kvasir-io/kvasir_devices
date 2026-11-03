@@ -40,10 +40,10 @@ struct TimedBus {
     using Result  = FakeBusResult;
     using Request = TimedRequest;
 
-    static constexpr std::uint32_t BaudRate   = 400'000;
-    static constexpr std::size_t   QueueDepth = 8;
+    static constexpr std::uint32_t baudRate   = 400'000;
+    static constexpr std::size_t   queueDepth = 8;
 
-    static consteval std::uint32_t timing(std::uint32_t hz) { return std::min(hz, BaudRate); }
+    static consteval std::uint32_t timing(std::uint32_t hz) { return std::min(hz, baudRate); }
 
     /// Each submitted request's address and timing, in order.
     static inline std::vector<std::pair<std::uint8_t, std::uint32_t>> seen{};
@@ -62,16 +62,16 @@ struct TimedBus {
 
 /// A part that must not be clocked above 100 kHz, as a description says it.
 struct SlowChip {
-    static constexpr std::string_view Name          = "SLOW";
-    static constexpr Address7         Address       = 0x21;
-    static constexpr std::size_t      RegisterBytes = 1;
-    static constexpr Units::Hertz     I2cMaxClock   = Units::hertz(100'000);
-    static constexpr std::array       Init{
+    static constexpr std::string_view name          = "SLOW";
+    static constexpr Address7         address       = 0x21;
+    static constexpr std::size_t      registerBytes = 1;
+    static constexpr Units::Hertz     i2cMaxClock   = Units::hertz(100'000);
+    static constexpr std::array       init{
       Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Value {
-        static constexpr auto       Period = std::chrono::milliseconds{10};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{10};
+        static constexpr std::array steps{
           Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
         using Sample = std::uint8_t;
 
@@ -83,10 +83,10 @@ struct SlowChip {
 
 /// The same part with no limit of its own, at another address.
 struct FreeChip {
-    static constexpr std::string_view Name          = "FREE";
-    static constexpr Address7         Address       = 0x22;
-    static constexpr std::size_t      RegisterBytes = 1;
-    static constexpr auto             Init          = SlowChip::Init;
+    static constexpr std::string_view name          = "FREE";
+    static constexpr Address7         address       = 0x22;
+    static constexpr std::size_t      registerBytes = 1;
+    static constexpr auto             init          = SlowChip::init;
     using Value                                     = SlowChip::Value;
     using Reads                                     = Kvasir::Engine::List<Value>;
 };
@@ -110,11 +110,11 @@ using Clocked   = Kvasir::I2C::Bus<TimedBus, FakeClock, Slow, Free, Mid, Slower>
 using Unclocked = Device<FakeBus, FakeClock, FreeChip>;
 
 // What each device is run at: its Config's clock, else its chip's limit, else the bus's rate.
-static_assert(Slow::BusHz == 100'000);
-static_assert(Free::BusHz == 400'000);
-static_assert(Mid::BusHz == 250'000);
-static_assert(Slower::BusHz == 50'000);
-static_assert(Unclocked::BusHz == 0,
+static_assert(Slow::busHz == 100'000);
+static_assert(Free::busHz == 400'000);
+static_assert(Mid::busHz == 250'000);
+static_assert(Slower::busHz == 50'000);
+static_assert(Unclocked::busHz == 0,
               "a bus that says no rate has none to give");
 
 // Nothing on a bus without the feature: the request has no member it could be carried in.
@@ -141,11 +141,11 @@ void eachDeviceItsOwnClock() {
     std::map<std::uint8_t, std::set<std::uint32_t>> byAddress{};
     for(auto const& [a, t] : TimedBus::seen) { byAddress[a].insert(t); }
     check(byAddress.size() == 4, "all four devices went on the wire");
-    checkEq(byAddress[Slow::Address].size(), 1U, "one timing per device");
-    checkEq(*byAddress[Slow::Address].begin(), 100'000U, "the chip's limit");
-    checkEq(*byAddress[Free::Address].begin(), 400'000U, "no limit: the bus's rate");
-    checkEq(*byAddress[Mid::Address].begin(), 250'000U, "the Config's clock");
-    checkEq(*byAddress[Slower::Address].begin(), 50'000U, "the Config's, below the chip's");
+    checkEq(byAddress[Slow::address].size(), 1U, "one timing per device");
+    checkEq(*byAddress[Slow::address].begin(), 100'000U, "the chip's limit");
+    checkEq(*byAddress[Free::address].begin(), 400'000U, "no limit: the bus's rate");
+    checkEq(*byAddress[Mid::address].begin(), 250'000U, "the Config's clock");
+    checkEq(*byAddress[Slower::address].begin(), 50'000U, "the Config's, below the chip's");
     check(bus.template get<Slow>().link() == Kvasir::Link::answering, "a clocked device comes up");
 }
 
@@ -153,7 +153,7 @@ void loadCountsEachDeviceAtItsClock() {
     testCase("the bus load counts each device's bits at its own clock");
     // Four identical parts: the load is each one's bits over its own rate, so the one at
     // 50 kHz weighs eight times the one at 400 kHz.
-    constexpr double bits = detail::cyclicBitsPerSecond<Free>();
+    constexpr double bits = Detail::cyclicBitsPerSecond<Free>();
     constexpr double want
       = bits / 100'000.0 + bits / 400'000.0 + bits / 250'000.0 + bits / 50'000.0;
     constexpr double got = Clocked::busLoad();
@@ -182,7 +182,7 @@ void muxWritesCarryTheMuxClock() {
     ScopedHook const answering{
       TimedBus::Base::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(a == Behind::Mux::Address) {
+          if(a == Behind::Mux::address) {
               if(!sent.empty()) { control = std::to_integer<std::uint8_t>(sent[0]); }
               if(!recv.empty()) { recv[0] = std::byte{control}; }
               return FakeBusResult::ok;
@@ -194,12 +194,12 @@ void muxWritesCarryTheMuxClock() {
 
     std::map<std::uint8_t, std::set<std::uint32_t>> byAddress{};
     for(auto const& [a, t] : TimedBus::seen) { byAddress[a].insert(t); }
-    check(!byAddress[Behind::Mux::Address].empty(), "the switch was written");
-    check(byAddress[Behind::Mux::Address] == std::set<std::uint32_t>{400'000U},
+    check(!byAddress[Behind::Mux::address].empty(), "the switch was written");
+    check(byAddress[Behind::Mux::address] == std::set<std::uint32_t>{400'000U},
           "every switch write at the switch's clock");
-    check(byAddress[Behind::SlowCh0::Address] == std::set<std::uint32_t>{100'000U},
+    check(byAddress[Behind::SlowCh0::address] == std::set<std::uint32_t>{100'000U},
           "channel 0's part at 100 kHz");
-    check(byAddress[Behind::MidCh1::Address] == std::set<std::uint32_t>{250'000U},
+    check(byAddress[Behind::MidCh1::address] == std::set<std::uint32_t>{250'000U},
           "channel 1's part at 250 kHz");
 }
 

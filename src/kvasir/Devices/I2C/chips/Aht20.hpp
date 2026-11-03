@@ -22,14 +22,14 @@ namespace Kvasir::I2C::Chips {
 /// T[15:8], T[7:0], CRC-8 (poly 0x31, init 0xFF) over the six. Busy (status bit 7) means read
 /// again later. RH = S / 2^20 * 100 %, T = S / 2^20 * 200 - 50 degC (8.1, 8.2).
 struct Aht20 {
-    static constexpr std::string_view        Name    = "AHT20";
-    static constexpr Address7                Address = 0x38;
-    static constexpr std::array<Address7, 1> Addresses{0x38};
-    static constexpr std::size_t             RegisterBytes = 0;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{100};
+    static constexpr std::string_view        name    = "AHT20";
+    static constexpr Address7                address = 0x38;
+    static constexpr std::array<Address7, 1> addresses{0x38};
+    static constexpr std::size_t             registerBytes = 0;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{100};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0xBA}, .delay = std::chrono::milliseconds{20}}),
       Engine::Step::command(
         {.payload = {0xBE, 0x08, 0x00}, .delay = std::chrono::milliseconds{10}}),
@@ -50,9 +50,9 @@ struct Aht20 {
     }
 
     struct Measurement {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
         // clang-format off
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command(
             {.payload = {0xAC, 0x33, 0x00}, .delay = std::chrono::milliseconds{80}}),
           Engine::Step::receive({.count = 7, .offset = 0})};

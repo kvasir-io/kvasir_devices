@@ -61,20 +61,20 @@ struct Max31820 {
 
     static constexpr std::size_t readoutPacketSize{9};
 
-    static constexpr std::chrono::milliseconds ConversionTime = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds conversionTime = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        conversionTime,
                        std::chrono::milliseconds{Max31820Defaults::conversionTime}));
 
-    static constexpr std::chrono::milliseconds RetryDelay = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds retryDelay = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config,
                        retryDelay,
                        std::chrono::milliseconds{Max31820Defaults::retryDelay}));
 
-    static constexpr std::uint8_t AbsentAfter
+    static constexpr std::uint8_t absentAfter
       = KVASIR_CONFIG_OR(Config, absentAfter, Max31820Defaults::absentAfter);
 
-    static_assert(OneWire::BufferSize >= readoutPacketSize,
+    static_assert(OneWire::bufferSize >= readoutPacketSize,
                   "OneWire buffer too small");
 
     struct Sample {
@@ -144,7 +144,7 @@ struct Max31820 {
                 case OS::succeeded:
                     {
                         st_       = State::waitForConversion;
-                        waitTime_ = currentTime + ConversionTime;
+                        waitTime_ = currentTime + conversionTime;
                         OneWire::release();
                     }
                     break;
@@ -226,7 +226,7 @@ struct Max31820 {
 private:
     void fail_(TimePoint currentTime) {
         st_       = State::startConversion;
-        waitTime_ = currentTime + RetryDelay;
+        waitTime_ = currentTime + retryDelay;
         valid_    = false;
         streak_.failed();
         ++errors_;
@@ -236,7 +236,7 @@ private:
     TimePoint                  waitTime_{TimePoint::min()};
     SampleSlot<Sample>         slot_{};
     bool                       valid_{false};
-    FailureStreak<AbsentAfter> streak_{};
+    FailureStreak<absentAfter> streak_{};
     std::uint32_t              errors_{};
 };
 }   // namespace Kvasir

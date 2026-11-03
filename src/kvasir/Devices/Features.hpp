@@ -2,14 +2,14 @@
 
 // "Empty when off" members for the optional features of a bus, an engine or a driver: no bytes, and the code that
 // touches them compiles the same with the feature on and off. Bus-neutral: the device engine (Engine/EngineFeatures.hpp),
-// the queued buses (BusTypes.hpp, SPI/QueueCore.hpp) and the chip I2C drivers use them. `Kvasir::Engine::detail` takes
+// the queued buses (BusTypes.hpp, SPI/QueueCore.hpp) and the chip I2C drivers use them. `Kvasir::Engine::Detail` takes
 // them in with using-declarations for its own code. Also the one kit that passes a part's Startup members (Claims,
 // Provides, the init steps) on to the driver built on it (ForwardClaims, ...).
 
 #include <cstdint>
 #include <type_traits>
 
-namespace Kvasir::detail {
+namespace Kvasir::Detail {
 /// What a feature that is off leaves of a time point: nothing.
 struct NoStamp {};
 
@@ -96,4 +96,4 @@ template<typename P>
 struct ForwardInterruptConfig<P> {
     static constexpr auto initStepInterruptConfig = P::initStepInterruptConfig;
 };
-}   // namespace Kvasir::detail
+}   // namespace Kvasir::Detail

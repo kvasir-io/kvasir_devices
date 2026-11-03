@@ -33,22 +33,22 @@ namespace Bme280Detail {
 /// SDO low, 0x77 high.
 template<Bme280Compensation::Model Model = Bme280Compensation::Model::bme280>
 struct Bmx280 {
-    static constexpr bool Humidity = Model == Bme280Compensation::Model::bme280;
+    static constexpr bool humidity = Model == Bme280Compensation::Model::bme280;
 
-    static constexpr std::string_view Name = Humidity ? "BME280" : "BMP280";
+    static constexpr std::string_view name = humidity ? "BME280" : "BMP280";
     /// The id register 0xD0 reads 0x60 on the BME280 and, on the BMP280, 0x58 in mass production
     /// or 0x56 / 0x57 on samples (BME280.md:1106, Table 17; BMP280.md:989 names 0x58 only): the
     /// mask 0xFE takes the sample pair as one value.
-    static constexpr std::array Identity{
-      Humidity ? Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x60U}
+    static constexpr std::array identity{
+      humidity ? Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFF, 0x60U}
                : Engine::RegisterCheck{"chip-id", 0xD0, 1, true, 0xFE, 0x58U, 0x56U},
     };
-    static constexpr Address7                Address = 0x76;
-    static constexpr std::array<Address7, 2> Addresses{0x76, 0x77};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x76;
+    static constexpr std::array<Address7, 2> addresses{0x76, 0x77};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr auto Init = [] {
-        if constexpr(Humidity) {
+    static constexpr auto init = [] {
+        if constexpr(humidity) {
             return std::array{
               Engine::Step::write(
                 {.reg = 0xE0, .payload = {0xB6}, .delay = std::chrono::milliseconds{3}}),
@@ -84,14 +84,14 @@ struct Bmx280 {
     [[nodiscard]] static constexpr bool setup(Bytes  data,
                                               State& state) {
         state.loadTemperaturePressure(data, 0);
-        if constexpr(Humidity) { state.loadHumidity(data, 26); }
+        if constexpr(humidity) { state.loadHumidity(data, 26); }
         return true;
     }
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
-          Engine::Step::read({.reg = 0xF7, .count = Humidity ? 8 : 6})};
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = 0xF7, .count = humidity ? 8 : 6})};
 
         struct Sample {
             CentiDegC    temperature{};   ///< 0.01 degC
@@ -103,11 +103,11 @@ struct Bmx280 {
                                                                       State const& t) {
             std::int32_t const adcP = static_cast<std::int32_t>(data.be24(0) >> 4);
             std::int32_t const adcT = static_cast<std::int32_t>(data.be24(3) >> 4);
-            if(adcP == Bme280Compensation::Skipped20 || adcT == Bme280Compensation::Skipped20) {
+            if(adcP == Bme280Compensation::skipped20 || adcT == Bme280Compensation::skipped20) {
                 return Engine::Outcome<Sample>::reject();
             }
-            if constexpr(Humidity) {
-                if(data.be16(6) == Bme280Compensation::Skipped16) {
+            if constexpr(humidity) {
+                if(data.be16(6) == Bme280Compensation::skipped16) {
                     return Engine::Outcome<Sample>::reject();
                 }
             }
@@ -115,7 +115,7 @@ struct Bmx280 {
             Sample     sample{};
             sample.temperature = Units::centiDegC(State::centi(tFine));
             sample.pressure    = Units::pascal(t.pressurePa(adcP, tFine));
-            if constexpr(Humidity) {
+            if constexpr(humidity) {
                 sample.humidity = Units::milliPercent(
                   t.humidityMilli(static_cast<std::int32_t>(data.be16(6)), tFine));
             }

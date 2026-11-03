@@ -216,7 +216,7 @@ void thresholdChanged() {
     auto const statusReads = framesOf(0x07);
     run(rtd, 100ms);
     check(!rtd.temperature(), "no reading while the part flags every conversion");
-    checkEq(rtd.fault(), Kvasir::SPI::Max31865Detail::FaultRtdHigh, "the fault status is kept");
+    checkEq(rtd.fault(), Kvasir::SPI::Max31865Detail::faultRtdHigh, "the fault status is kept");
     check(framesOf(0x07) > statusReads, "a flagged conversion reads the fault status");
     std::size_t clears = 0;
     for(auto const& f : Bus::frames) {

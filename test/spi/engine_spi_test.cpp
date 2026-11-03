@@ -34,8 +34,8 @@ using Bme = Kvasir::SPI::Device<Bus, FakeClock, Kvasir::SPI::Chips::Bme280, Spi:
 using Bmp = Kvasir::SPI::Device<Bus, FakeClock, Kvasir::SPI::Chips::Bmp280, Spi::Cs>;
 
 // Two SPI devices are one engine port, so they share one Engine (Transport.hpp, TransportRequest).
-static_assert(std::is_same_v<Kvasir::Engine::detail::PortOf<Bme::TransportT>,
-                             Kvasir::Engine::detail::PortOf<Bmp::TransportT>>);
+static_assert(std::is_same_v<Kvasir::Engine::Detail::PortOf<Bme::TransportT>,
+                             Kvasir::Engine::Detail::PortOf<Bmp::TransportT>>);
 
 SpiRegisters part{};
 

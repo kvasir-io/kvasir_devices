@@ -22,18 +22,18 @@ namespace Kvasir::I2C::Chips {
 /// writing a DCDC or LDO voltage on a board whose regulators are already configured for its
 /// panel and PSRAM is a good way to brown something out, and nothing here needs to.
 struct Axp2101 {
-    static constexpr std::string_view Name = "AXP2101";
+    static constexpr std::string_view name = "AXP2101";
     /// IC type, register 0x03, reads 0x4A. Not in the datasheet: its register list (6.13.1,
     /// i2c/axp2101.md l.1073-1075) goes from 0x01 to 0x04; register and value are the vendor
     /// driver's (XPowersLib REG/AXP2101Constants.h l.5 and l.9, the check in
     /// XPowersAXP2101.hpp l.3085). The engine reads it before anything is written: a part with
     /// another identity at 0x34 gets nothing.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"ic-type", 0x03, 1, true, 0xFF, 0x4A},
     };
-    static constexpr Address7                Address = 0x34;
-    static constexpr std::array<Address7, 1> Addresses{0x34};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x34;
+    static constexpr std::array<Address7, 1> addresses{0x34};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// Turn on the ADC channels the readings below come from (after the Identity):
     /// ADC_CHANNEL_CTRL 0x30 bit 0 battery voltage, bit 2 VBUS, bit 3 system, bit 4 die
@@ -41,7 +41,7 @@ struct Axp2101 {
     /// each of these bits read-modify-write; the whole byte is written here. Bit 1, the TS pin
     /// channel, is kept at its reset value 1 (6.13.2.29): the charger's thermistor protection
     /// measures through it. Bit 5, the general-purpose ADC, stays at its reset value 0.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x30, .payload = {0x1F}}),
       Engine::Step::write({.reg = 0x68, .payload = {0x01}, .delay = std::chrono::milliseconds{10}}),
     };
@@ -67,12 +67,12 @@ struct Axp2101 {
     };
 
     struct Power {
-        static constexpr auto Period = std::chrono::milliseconds{500};
+        static constexpr auto period = std::chrono::milliseconds{500};
 
         /// STATUS1 and STATUS2 at 0x00, then the ADC results at 0x34. Two reads rather than
         /// one because 0x02..0x33 in between is the interrupt and rail configuration, which
         /// a status poll has no reason to touch.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0}),
           Engine::Step::read({.reg = 0x34, .count = 10, .offset = 2})};
 
@@ -139,8 +139,8 @@ struct Axp2101 {
     /// The fuel gauge's percentage, on its own because it is a single byte far from the ADC
     /// block and changes slowly.
     struct Gauge {
-        static constexpr auto       Period = std::chrono::milliseconds{2000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{2000};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0xA4, .count = 1, .offset = 0})};
 
         using Sample = Percent;

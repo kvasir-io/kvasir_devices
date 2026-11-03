@@ -28,14 +28,14 @@ namespace Sht3xDetail {
 /// firmware is not idle, so the bring-up opens with Break 0x3093 (4.8), which stops periodic
 /// data acquisition and is harmless on an idle part. Power-up takes up to 1.5 ms (tPU, 4.1).
 struct Sht3x {
-    static constexpr std::string_view        Name    = "SHT3x";
-    static constexpr Address7                Address = 0x44;
-    static constexpr std::array<Address7, 2> Addresses{0x44, 0x45};
-    static constexpr std::size_t             RegisterBytes = 0;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{2};
+    static constexpr std::string_view        name    = "SHT3x";
+    static constexpr Address7                address = 0x44;
+    static constexpr std::array<Address7, 2> addresses{0x44, 0x45};
+    static constexpr std::size_t             registerBytes = 0;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{2};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command(
         {.payload = {0x30, 0x93}, .delay = std::chrono::milliseconds{2}}),   // Break
       Engine::Step::command({.payload = {0x30, 0xA2}, .delay = std::chrono::milliseconds{2}}),
@@ -55,9 +55,9 @@ struct Sht3x {
     }
 
     struct Measurement {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
         // clang-format off
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0x24, 0x00}, .delay = std::chrono::milliseconds{16}}),
           Engine::Step::receive({.count = 6, .offset = 0})};
         // clang-format on
@@ -85,7 +85,7 @@ struct Sht3x {
     /// write group. An application that turns it on turns it off: nothing here times it.
     struct Heater {
         using Value                        = Sht3xDetail::Heater;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

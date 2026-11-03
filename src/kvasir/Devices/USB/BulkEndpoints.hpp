@@ -31,7 +31,7 @@ bool handleEndpointRequest(SetupPacket const& pkt) {
     using Request   = SetupPacket::Request;
 
     if(pkt.type() != SetupPacket::Type::standard
-       || pkt.recipient() != SetupPacket::Recipient::endpoint || pkt.wIndex != Endpoint::Address)
+       || pkt.recipient() != SetupPacket::Recipient::endpoint || pkt.wIndex != Endpoint::address)
     {
         return false;
     }
@@ -56,7 +56,7 @@ bool handleEndpointRequest(SetupPacket const& pkt) {
             Derived::acknowledgeSetupRequest();
             using namespace std::string_view_literals;
             UC_LOG_D("USB: EP{:#04x} halt {}",
-                     Endpoint::Address,
+                     Endpoint::address,
                      pkt.bRequest == Request::setFeature ? "set"sv : "cleared"sv);
             return true;
         }
@@ -66,7 +66,7 @@ bool handleEndpointRequest(SetupPacket const& pkt) {
 
 }   // namespace Kvasir::USB
 
-namespace Kvasir::USB::detail {
+namespace Kvasir::USB::Detail {
 
 // SET_INTERFACE on one interface: alternate setting 0 is the only one, and selecting it resets the
 // interface's endpoints (restart).
@@ -91,12 +91,12 @@ bool handleSetInterface(SetupPacket const& pkt,
 // How much one arm of an endpoint may carry: a packet, unless the backend says more
 // (Endpoint::MaxTransfer, Backend.hpp). A whole number of packets.
 template<typename EP>
-inline constexpr std::size_t MaxTransferOf
-  = static_cast<std::size_t>(KVASIR_CONFIG_OR(EP, maxTransfer, MaxPacketSize));
+inline constexpr std::size_t maxTransferOf
+  = static_cast<std::size_t>(KVASIR_CONFIG_OR(EP, maxTransfer, maxPacketSize));
 
 // A size the host sees as "more follows": a whole number of full packets.
 constexpr bool endsOnPacketBoundary(std::size_t size) {
-    return size != 0 && size % MaxPacketSize == 0;
+    return size != 0 && size % maxPacketSize == 0;
 }
 
 // The IN half of a bulk function.
@@ -122,32 +122,32 @@ template<typename Derived,
          std::size_t RingBytes = 0>
 struct BulkInEndpoint {
     using EP
-      = EndpointOf<Derived, EndpointNumber, EndpointDirection::In, EndpointTransferType::Bulk>;
+      = EndpointOf<Derived, EndpointNumber, EndpointDirection::in, EndpointTransferType::bulk>;
 
-    static constexpr std::uint8_t Address
-      = makeEndpointAddress(EndpointDirection::In, static_cast<std::uint8_t>(EndpointNumber));
+    static constexpr std::uint8_t address
+      = makeEndpointAddress(EndpointDirection::in, static_cast<std::uint8_t>(EndpointNumber));
 
     // Framed: room for one message being sent and one being written - unless the config says
     // otherwise (Config::sendRingSize), down to one message: send() then waits for the last one.
-    static constexpr std::size_t RingSize
+    static constexpr std::size_t ringSize
       = RingBytes != 0 ? RingBytes : (Framed ? 2 * MaxMessageSize + 1 : MaxMessageSize);
-    static_assert(RingSize > MaxMessageSize || !Framed,
+    static_assert(ringSize > MaxMessageSize || !Framed,
                   "the send ring has to hold a whole message (a ring of N holds N - 1 bytes)");
 
     // What one arm carries: a packet on most controllers, a run of them where the controller
     // splits a transfer into packets itself.
-    static constexpr std::size_t TransferSize = MaxTransferOf<EP>;
-    static_assert(TransferSize % MaxPacketSize == 0 && TransferSize != 0);
+    static constexpr std::size_t transferSize = maxTransferOf<EP>;
+    static_assert(transferSize % maxPacketSize == 0 && transferSize != 0);
 
     // How many messages may be queued at once.
-    static constexpr std::size_t MaxQueuedMessages = 4;
+    static constexpr std::size_t maxQueuedMessages = 4;
 
     // How many packets may be with the controller.
-    static constexpr std::uint8_t BuffersPerEndpoint = static_cast<std::uint8_t>(EP::queueDepth);
+    static constexpr std::uint8_t buffersPerEndpoint = static_cast<std::uint8_t>(EP::queueDepth);
 
-    using RingType  = Kvasir::Atomic::Queue<std::byte, RingSize>;
+    using RingType  = Kvasir::Atomic::Queue<std::byte, ringSize>;
     using SizeQueue = Kvasir::Atomic::
-      Fifo<std::uint32_t, MaxQueuedMessages, Kvasir::Atomic::OverflowPolicyIgnore>;
+      Fifo<std::uint32_t, maxQueuedMessages, Kvasir::Atomic::OverflowPolicyIgnore>;
 
     static inline RingType ring{};
 
@@ -155,12 +155,12 @@ struct BulkInEndpoint {
     // replay.
     // Word aligned: a backend that takes a transfer in place lets its controller read from here.
     alignas(4) static inline std::array<std::array<std::byte,
-                                                   TransferSize>,
-                                        BuffersPerEndpoint> packets{};
-    static inline std::array<std::uint16_t, BuffersPerEndpoint> packetSizes{};
+                                                   transferSize>,
+                                        buffersPerEndpoint> packets{};
+    static inline std::array<std::uint16_t, buffersPerEndpoint> packetSizes{};
     // How much of a slot went out before a cancel took the rest back (only a controller that
     // splits a transfer into packets ever sends part of one).
-    static inline std::array<std::uint16_t, BuffersPerEndpoint> packetOffsets{};
+    static inline std::array<std::uint16_t, buffersPerEndpoint> packetOffsets{};
     static inline std::uint8_t nextSlot{};   // where the next packet is put together
 
     // The packet put together in packets[nextSlot] and not yet handed over.
@@ -195,7 +195,7 @@ struct BulkInEndpoint {
                     messageOpen = true;
                 }
             }
-            std::size_t size = std::min(ring.size(), TransferSize);
+            std::size_t size = std::min(ring.size(), transferSize);
             if constexpr(Framed) { size = std::min<std::size_t>(size, messageBytesLeft); }
             if(size == 0) {
                 endTransfer(free);
@@ -255,7 +255,7 @@ struct BulkInEndpoint {
         if(!arm(std::span{packets[nextSlot]}.first(size), free)) { return false; }
         packetSizes[nextSlot]   = static_cast<std::uint16_t>(size);
         packetOffsets[nextSlot] = 0;
-        nextSlot                = static_cast<std::uint8_t>((nextSlot + 1) % BuffersPerEndpoint);
+        nextSlot                = static_cast<std::uint8_t>((nextSlot + 1) % buffersPerEndpoint);
         return true;
     }
 
@@ -265,7 +265,7 @@ struct BulkInEndpoint {
                               std::size_t  alreadySent) {
         for(std::uint8_t i = 0; i != count; ++i) {
             std::uint8_t const slot = static_cast<std::uint8_t>(
-              (nextSlot + BuffersPerEndpoint - count + i) % BuffersPerEndpoint);
+              (nextSlot + buffersPerEndpoint - count + i) % buffersPerEndpoint);
             // What an earlier cancel found sent stays sent.
             std::size_t const skip
               = std::min<std::size_t>(packetOffsets[slot] + (i == 0 ? alreadySent : 0),
@@ -389,7 +389,7 @@ struct BulkInEndpoint {
     static bool isSendReady() {
         if(halted || !Derived::isConfigured()) { return false; }
         if constexpr(Framed) {
-            return writeAvailable() >= MaxMessageSize && messageSizes.size() < MaxQueuedMessages;
+            return writeAvailable() >= MaxMessageSize && messageSizes.size() < maxQueuedMessages;
         } else {
             return writeAvailable() != 0;
         }
@@ -400,7 +400,7 @@ struct BulkInEndpoint {
         if(data.size() > MaxMessageSize) { return false; }
         return Derived::withIsrMasked([&] {
             if constexpr(Framed) {
-                if(writeAvailable() < data.size() || messageSizes.size() >= MaxQueuedMessages) {
+                if(writeAvailable() < data.size() || messageSizes.size() >= maxQueuedMessages) {
                     return false;
                 }
                 if(!data.empty()) { ring.push(data); }
@@ -425,10 +425,10 @@ struct BulkInEndpoint {
 template<typename Clock, typename Derived, std::size_t EndpointNumber, std::size_t RecvBufferSize>
 struct BulkOutEndpoint {
     using EP
-      = EndpointOf<Derived, EndpointNumber, EndpointDirection::Out, EndpointTransferType::Bulk>;
+      = EndpointOf<Derived, EndpointNumber, EndpointDirection::out, EndpointTransferType::bulk>;
 
-    static constexpr std::uint8_t Address
-      = makeEndpointAddress(EndpointDirection::Out, static_cast<std::uint8_t>(EndpointNumber));
+    static constexpr std::uint8_t address
+      = makeEndpointAddress(EndpointDirection::out, static_cast<std::uint8_t>(EndpointNumber));
 
     using QueueType = Kvasir::Atomic::Queue<std::byte, RecvBufferSize>;
 
@@ -445,7 +445,7 @@ struct BulkOutEndpoint {
     //   - after that the endpoint arms packet by packet, where nothing can wait, until
     //     FullPacketsForTransfers full packets in a row say a stream is coming again;
     //   - a halt clear takes what the transfer holds into the queue before it cancels.
-    static constexpr bool ReceivesInPlace
+    static constexpr bool receivesInPlace
       = !EP::asyncCancel && requires(std::span<std::byte> dest) {
             { EP::armReceiveInto(dest) } -> std::same_as<bool>;
             { EP::received() } -> std::convertible_to<std::size_t>;
@@ -453,27 +453,27 @@ struct BulkOutEndpoint {
             { EP::takeBackReceive() } -> std::same_as<std::optional<std::size_t>>;
         };
 
-    static constexpr std::size_t MaxReceive = [] {
-        if constexpr(ReceivesInPlace) {
+    static constexpr std::size_t maxReceive = [] {
+        if constexpr(receivesInPlace) {
             return static_cast<std::size_t>(EP::maxReceive);
         } else {
-            return MaxPacketSize;
+            return maxPacketSize;
         }
     }();
-    static_assert(MaxReceive % MaxPacketSize == 0 && MaxReceive != 0);
+    static_assert(maxReceive % maxPacketSize == 0 && maxReceive != 0);
 
     // Short on purpose: taking a transfer back too early costs nothing but a few packets armed
     // one by one, while every message of whole packets waits this long for its last ones.
     // Measured on the SAM D21 (MiB/s host to device / echo of 1 KiB
     // messages): 2 ms 0.847 / 0.218, 700 us 0.845 / 0.318, 300 us 0.774 / 0.348; packet by
     // packet it was 0.486 / 0.341.
-    static constexpr auto         StalledAfter            = std::chrono::microseconds{700};
-    static constexpr std::uint8_t FullPacketsForTransfers = 4;
+    static constexpr auto         stalledAfter            = std::chrono::microseconds{700};
+    static constexpr std::uint8_t fullPacketsForTransfers = 4;
 
     // Word aligned, the controller's while a transfer is armed into it. Empty where packets are
     // read out of the controller one by one.
     alignas(4) static inline std::array<std::byte,
-                                        ReceivesInPlace ? MaxReceive : 0> staging{};
+                                        receivesInPlace ? maxReceive : 0> staging{};
     // Of the transfer armed into staging, else 0. The interrupt's, and looked at by the reading
     // side without it masked (takeBackStalled()).
     static inline std::atomic<std::size_t> armedSize{};
@@ -490,20 +490,20 @@ struct BulkOutEndpoint {
     static inline bool              halted{false};
     static inline bool              restartPending{false};
 
-    static bool hasRoom() { return queue.max_size() - queue.size() >= MaxPacketSize; }
+    static bool hasRoom() { return queue.max_size() - queue.size() >= maxPacketSize; }
 
     static void arm() {
         if(!flushPending && hasRoom()) {
             paused = false;
-            if constexpr(ReceivesInPlace) {
+            if constexpr(receivesInPlace) {
                 // As much as the queue can take afterwards, in whole packets.
                 std::size_t const room = queue.max_size() - queue.size();
                 std::size_t const size = packetArmsLeft != 0
-                                         ? MaxPacketSize
-                                         : std::min(MaxReceive, room - room % MaxPacketSize);
+                                         ? maxPacketSize
+                                         : std::min(maxReceive, room - room % maxPacketSize);
                 if(EP::armReceiveInto(std::span{staging}.first(size))) { armedSize = size; }
             } else {
-                EP::armReceive(MaxPacketSize);
+                EP::armReceive(maxPacketSize);
             }
         } else {
             paused = true;
@@ -513,7 +513,7 @@ struct BulkOutEndpoint {
     // What the armed transfer holds goes into the queue (acknowledged bytes) or is dropped with
     // it. Interrupt masked, or in the interrupt.
     static void takeBack(bool keep) {
-        if constexpr(ReceivesInPlace) {
+        if constexpr(receivesInPlace) {
             if(armedSize == 0) { return; }
             auto const held = EP::takeBackReceive();
             // Completed meanwhile: that is bufferDone()'s to take, with its completion.
@@ -585,18 +585,18 @@ struct BulkOutEndpoint {
     }
 
     static void bufferDone() {
-        if constexpr(ReceivesInPlace) {
+        if constexpr(receivesInPlace) {
             // A completion of a transfer that was taken back meanwhile has nothing to add.
             if(armedSize != 0) {
                 armedSize             = 0;
                 std::size_t const len = std::min<std::size_t>(EP::received(), staging.size());
                 queue.push(std::span{staging}.first(len));
-                if(packetArmsLeft != 0 && len == MaxPacketSize) { --packetArmsLeft; }
+                if(packetArmsLeft != 0 && len == maxPacketSize) { --packetArmsLeft; }
             }
             // A transfer that completed just as the halt came: the halt clear arms again.
             if(halted) { return; }
         } else {
-            std::array<std::byte, MaxPacketSize> tempBuffer{};
+            std::array<std::byte, maxPacketSize> tempBuffer{};
             std::size_t const                    len = EP::readCurrentBuffer(tempBuffer);
             queue.push(std::span{tempBuffer.data(), len});
         }
@@ -607,13 +607,13 @@ struct BulkOutEndpoint {
     // behind that wrote whole packets and no short one. Looked at without the interrupt masked -
     // a hint - and taken back with it masked.
     static void takeBackStalled() {
-        if constexpr(ReceivesInPlace) {
-            if(armedSize <= MaxPacketSize) { return; }
+        if constexpr(receivesInPlace) {
+            if(armedSize <= maxPacketSize) { return; }
             std::size_t const soFar = EP::receivedSoFar();
             auto const        now   = Clock::now();
             if(soFar != seenSoFar) {
                 seenSoFar = soFar;
-                stalledAt.restart(StalledAfter, now);
+                stalledAt.restart(stalledAfter, now);
                 return;
             }
             if(soFar == 0 || stalledAt.armed(now)) { return; }
@@ -622,7 +622,7 @@ struct BulkOutEndpoint {
                 // While halted too: what the transfer holds was acknowledged before the halt,
                 // and the queue's bytes stay readable through one. The halt clear arms again.
                 takeBack(true);
-                packetArmsLeft = FullPacketsForTransfers;
+                packetArmsLeft = fullPacketsForTransfers;
                 if(!halted) { arm(); }
             });
             seenSoFar = 0;
@@ -701,7 +701,7 @@ struct BulkDataAdapter {
 private:
     friend Mixin;
 
-    static constexpr std::size_t SendBufferSize = [] {
+    static constexpr std::size_t sendBufferSize = [] {
         if constexpr(requires { Config::sendBufferSize(InterfaceNumber); }) {
             return static_cast<std::size_t>(Config::sendBufferSize(InterfaceNumber));
         } else if constexpr(requires { Config::sendBufferSize; }) {
@@ -711,7 +711,7 @@ private:
         }
     }();
 
-    static constexpr std::size_t RecvBufferSize = [] {
+    static constexpr std::size_t recvBufferSize = [] {
         if constexpr(requires { Config::recvBufferSize(InterfaceNumber); }) {
             return static_cast<std::size_t>(Config::recvBufferSize(InterfaceNumber));
         } else if constexpr(requires { Config::recvBufferSize; }) {
@@ -721,7 +721,7 @@ private:
         }
     }();
 
-    static constexpr std::size_t SendRingSize = [] {
+    static constexpr std::size_t sendRingSize = [] {
         if constexpr(requires { Config::sendRingSize(InterfaceNumber); }) {
             return static_cast<std::size_t>(Config::sendRingSize(InterfaceNumber));
         } else {
@@ -729,11 +729,11 @@ private:
         }
     }();
 
-    using In  = BulkInEndpoint<Derived, EndpointNumber, SendBufferSize, Framed, SendRingSize>;
+    using In  = BulkInEndpoint<Derived, EndpointNumber, sendBufferSize, Framed, sendRingSize>;
     using Out = BulkOutEndpoint<Clock,
                                 Derived,
                                 EndpointNumber,
-                                Bidirectional ? RecvBufferSize : std::size_t{2}>;
+                                Bidirectional ? recvBufferSize : std::size_t{2}>;
 
     static inline RecvQueue<Out> recvQueue{};
 
@@ -841,4 +841,4 @@ public:
     }
 };
 
-}   // namespace Kvasir::USB::detail
+}   // namespace Kvasir::USB::Detail

@@ -18,7 +18,7 @@ struct NoGate;
 struct DeferBinding {};
 }   // namespace Kvasir::Engine
 
-namespace Kvasir::Engine::detail {
+namespace Kvasir::Engine::Detail {
 
 /// What some device of a set has, so the engine's path for it is left out of a set where none
 /// has it (Engine::AnyGate / AnyReset). Part of the set's type: two Buses with the same chips but
@@ -35,10 +35,10 @@ template<typename D>
 consteval SetFlags flagsOf() {
     if constexpr(requires {
                      typename D::GateT;
-                     D::HasResetLine;
+                     D::hasResetLine;
                  })
     {
-        return {.anyGate = !std::is_same_v<typename D::GateT, NoGate>, .anyReset = D::HasResetLine};
+        return {.anyGate = !std::is_same_v<typename D::GateT, NoGate>, .anyReset = D::hasResetLine};
     } else {
         return {};
     }
@@ -61,12 +61,12 @@ consteval SetFlags flagsOfAll() {
 /// (+17 KB) - out of line it is one switch per hook, each chip's code once.
 template<typename Port, typename Clock, SetFlags F, typename... Chips>
 struct SetOps {
-    static constexpr bool     IsSetOps = true;
-    static constexpr SetFlags Flags    = F;
+    static constexpr bool     isSetOps = true;
+    static constexpr SetFlags flags    = F;
 
     using State     = EngineState<Port, Clock>;
     using TimePoint = typename Clock::time_point;
-    using ReadSlotT = ReadSlotBase<Clock, Port::Features>;
+    using ReadSlotT = ReadSlotBase<Clock, Port::features>;
     /// The name the hook list (Hooks.hpp) gives the read slot's type.
     using ReadSlotBaseT = ReadSlotT;
 
@@ -75,10 +75,10 @@ struct SetOps {
     /// (three buses of KTD2061s).
     using Cores = List<Chips...>;
 
-    static constexpr std::size_t CoreCount = Cores::size;
-    static_assert(CoreCount > 0,
+    static constexpr std::size_t coreCount = Cores::size;
+    static_assert(coreCount > 0,
                   "a device set with no device");
-    static_assert(CoreCount <= 255,
+    static_assert(coreCount <= 255,
                   "a device set holds up to 255 distinct chips");
 
     /// The one chip of a single-chip set.
@@ -97,11 +97,11 @@ struct SetOps {
 /// - a compare, branch and call per chip per hook.
 #define KVASIR_SET_HOOK(name, Result)                                                           \
     static constexpr auto name##Table                                                           \
-      = []<typename... Cs>(List<Cs...>) { return std::array{Cs::EngineOps.name...}; }(Cores{}); \
+      = []<typename... Cs>(List<Cs...>) { return std::array{Cs::engineOps.name...}; }(Cores{}); \
     template<typename... Args>                                                                  \
     static Result name(State& e, Args... args) {                                                \
-        if constexpr(CoreCount == 1) {                                                          \
-            return FirstCore::EngineOps.name(e, args...);                                       \
+        if constexpr(coreCount == 1) {                                                          \
+            return FirstCore::engineOps.name(e, args...);                                       \
         } else {                                                                                \
             return name##Table[e.setIndex_](e, args...);                                        \
         }                                                                                       \
@@ -112,15 +112,15 @@ struct SetOps {
     static constexpr bool name##Needed                                                          \
       = []<typename... Cs>(List<Cs...>) { return (Cs::Needs || ...); }(Cores{});                \
     static constexpr auto name##Table                                                           \
-      = []<typename... Cs>(List<Cs...>) { return std::array{Cs::EngineOps.name...}; }(Cores{}); \
+      = []<typename... Cs>(List<Cs...>) { return std::array{Cs::engineOps.name...}; }(Cores{}); \
     template<typename... Args>                                                                  \
     static Result name(State& e, Args... args) {                                                \
         if constexpr(!name##Needed) {                                                           \
             static_cast<void>(e);                                                               \
             ((static_cast<void>(args)), ...);                                                   \
             return none;                                                                        \
-        } else if constexpr(CoreCount == 1) {                                                   \
-            return FirstCore::EngineOps.name(e, args...);                                       \
+        } else if constexpr(coreCount == 1) {                                                   \
+            return FirstCore::engineOps.name(e, args...);                                       \
         } else {                                                                                \
             return name##Table[e.setIndex_](e, args...);                                        \
         }                                                                                       \
@@ -139,7 +139,7 @@ struct SetOps {
       = []<typename... Cs>(List<Cs...>) { return std::array{&of<Cs>...}; }(Cores{}); \
     template<typename... Args>                                                       \
     static Result name(State& e, Args... args) {                                     \
-        if constexpr(CoreCount == 1) {                                               \
+        if constexpr(coreCount == 1) {                                               \
             return of<FirstCore>(e, args...);                                        \
         } else {                                                                     \
             return name##Table[e.setIndex_](e, args...);                             \
@@ -148,21 +148,21 @@ struct SetOps {
 
     /// No chip of the set reads back: never due, and nothing started - a constant the engine's
     /// verify paths fold on (Engine::verifyDue_).
-    static constexpr bool VerifyNeeded
-      = []<typename... Cs>(List<Cs...>) { return (Cs::NeedsVerify || ...); }(Cores{});
+    static constexpr bool verifyNeeded
+      = []<typename... Cs>(List<Cs...>) { return (Cs::needsVerify || ...); }(Cores{});
     /// No chip of the set has an Initial: scheduleWrites never applies one.
-    static constexpr bool InitialNeeded
-      = []<typename... Cs>(List<Cs...>) { return (Cs::NeedsInitial || ...); }(Cores{});
+    static constexpr bool initialNeeded
+      = []<typename... Cs>(List<Cs...>) { return (Cs::needsInitial || ...); }(Cores{});
 
     // -- the constants: data, one entry a chip ---------------------------------------------------
 
 #define KVASIR_SET_CONSTANT(name, Type)                                   \
     static constexpr auto name##Table = []<typename... Cs>(List<Cs...>) { \
-        return std::array<Type, CoreCount>{Cs::EngineOps.name...};        \
+        return std::array<Type, coreCount>{Cs::engineOps.name...};        \
     }(Cores{});                                                           \
     static Type name(State const& e) {                                    \
-        if constexpr(CoreCount == 1) {                                    \
-            return FirstCore::EngineOps.name;                             \
+        if constexpr(coreCount == 1) {                                    \
+            return FirstCore::engineOps.name;                             \
         } else {                                                          \
             return name##Table[e.setIndex_];                              \
         }                                                                 \
@@ -204,4 +204,4 @@ using SetOpsFor = typename SetOpsOf<Port,
                                     flagsOfAll<Ds...>(),
                                     typename Unique<List<typename Ds::Core...>>::type>::type;
 
-}   // namespace Kvasir::Engine::detail
+}   // namespace Kvasir::Engine::Detail

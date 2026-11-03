@@ -1,7 +1,7 @@
 #pragma once
 // The chip hooks of the device engine, written once. Every list the engine keeps of them is generated from
 // KVASIR_ENGINE_HOOKS: the fields of the chip table (`detail::Ops`, Engine.hpp), its initializer (DeviceCore's
-// `EngineOps`, Device.hpp), a device set's direct dispatch (`detail::SetOps`, SetOps.hpp) and the engine's constant
+// `engineOps`, Device.hpp), a device set's direct dispatch (`detail::SetOps`, SetOps.hpp) and the engine's constant
 // accessors (Engine.hpp). Adding a hook is a line here and a static function of the same name in
 // `DeviceCore::ChipHooks`; the order of the lines is the order of the table's fields in flash.
 //
@@ -46,27 +46,27 @@
 #define KVASIR_ENGINE_HOOKS(HOOK, HOOK_IF, THUNK, CONST)                                                         \
     HOOK   (script,          std::span<Step const>,           ())                                               \
     HOOK   (buffer,          std::span<std::byte>,            ())                                               \
-    HOOK_IF(sizeRead,        void,                            (),                     NeedsSizedRead, void())   \
+    HOOK_IF(sizeRead,        void,                            (),                     needsSizedRead, void())   \
     HOOK   (countRead,       void,                            (std::uint8_t))                                   \
-    HOOK_IF(ready,           bool,                            (),                     NeedsReady,     true)     \
-    HOOK_IF(oracle,          bool,                            (),                     NeedsOracle,    true)     \
+    HOOK_IF(ready,           bool,                            (),                     needsReady,     true)     \
+    HOOK_IF(oracle,          bool,                            (),                     needsOracle,    true)     \
     HOOK   (identify,        bool,                            ())                                               \
     HOOK   (clearInit,       void,                            ())                                               \
     THUNK  (finishInit,      void,                            (TimePoint))                                      \
-    HOOK_IF(wakeReset,       void,                            (),                     NeedsWake,      void())   \
+    HOOK_IF(wakeReset,       void,                            (),                     needsWake,      void())   \
     HOOK   (redirtyItem,     void,                            ())                                               \
     HOOK   (unserve,         void,                            ())                                               \
     HOOK   (forgetSamples,   void,                            ())                                               \
     HOOK   (setupFinal,      bool,                            ())                                               \
     HOOK   (startupSchedule, void,                            (TimePoint))                                      \
-    HOOK_IF(wakeRetry,       bool,                            (TimePoint),            NeedsWake,      false)    \
+    HOOK_IF(wakeRetry,       bool,                            (TimePoint),            needsWake,      false)    \
     CONST  (startupDelayMs,  std::uint32_t)                                                                     \
     CONST  (resetLowMs,      std::uint32_t)                                                                     \
     CONST  (resetSettleMs,   std::uint32_t)                                                                     \
     CONST  (reads,           std::span<ReadGroupInfo const>)                                                    \
     HOOK   (readSlot,        ReadSlotBaseT&,                  (std::uint8_t))                                   \
     HOOK   (periodNow,       std::chrono::milliseconds,       (std::uint8_t))                                   \
-    HOOK_IF(dynamicPeriod,   std::chrono::milliseconds,       (std::uint8_t),         NeedsDynamicPeriod,       \
+    HOOK_IF(dynamicPeriod,   std::chrono::milliseconds,       (std::uint8_t),         needsDynamicPeriod,       \
                                                                                       std::chrono::milliseconds{}) \
     HOOK   (prepareRead,     void,                            (std::uint8_t))                                   \
     HOOK   (decode,          DecodeResult,                    (std::uint8_t))                                   \

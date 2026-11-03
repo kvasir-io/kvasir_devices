@@ -38,21 +38,22 @@ public:
     using Duration  = typename Device::Duration;
     using LedOut    = typename Chip::LedOut::Value;
 
-    static constexpr std::size_t          Outputs  = Chip::Channels;
-    static constexpr SegmentDisplay::Scan Scanning = SegmentDisplay::Scan::unsupported;
+    static constexpr std::size_t          outputs  = Chip::channels;
+    static constexpr SegmentDisplay::Scan scanning = SegmentDisplay::Scan::unsupported;
 
-    using Bits = std::bitset<Outputs>;
+    using Bits = std::bitset<outputs>;
 
     /// `current` per segment (IREFALL), `brightness` the PWMALL duty while lit, and the CLRERR
     /// after each bring-up (zero: never).
     Pca9956bSegments(Device&                   device,
                      MilliAmp                  current,
-                     std::uint8_t              brightness       = 255,
-                     std::chrono::milliseconds clearErrorsAfter = std::chrono::milliseconds::zero())
+                     std::uint8_t              brightness = 255,
+                     std::chrono::milliseconds clearErrorsAfterArg
+                     = std::chrono::milliseconds::zero())
       : device_{&device}
       , current_{current}
       , brightness_{brightness}
-      , clearErrorsAfter_{std::chrono::duration_cast<Duration>(clearErrorsAfter)} {
+      , clearErrorsAfter_{std::chrono::duration_cast<Duration>(clearErrorsAfterArg)} {
         device_->template set<typename Chip::IrefAll>(Chip::iref(current_));
         device_->template set<typename Chip::PwmAll>(brightness_);
     }
@@ -60,7 +61,7 @@ public:
     /// A frame as the six LEDOUT bytes: two bits a channel, LED0 in the low bits of LEDOUT0.
     [[nodiscard]] static constexpr LedOut ledOut(Bits const& levels) {
         LedOut out{};
-        for(std::size_t ch = 0; ch < Outputs; ++ch) {
+        for(std::size_t ch = 0; ch < outputs; ++ch) {
             if(!levels.test(ch)) { continue; }
             auto& byte = out[ch / 4];
             byte       = static_cast<std::uint8_t>(byte | (0b11U << (2U * (ch % 4U))));
@@ -88,7 +89,7 @@ public:
             }
         }
         if(device_->answering() && clear_.expired(now)) {
-            device_->template set<typename Chip::Mode2>(Chip::ClrErr);   // Mode2 always writes
+            device_->template set<typename Chip::Mode2>(Chip::clrErr);   // Mode2 always writes
             clear_.stop();
         }
     }
@@ -160,10 +161,10 @@ public:
     using Output    = typename SegmentBackendsDetail::OutputOf<Chip>::type;
     using Value     = typename Output::Value;
 
-    static constexpr std::size_t          Outputs  = 8 * sizeof(Value);
-    static constexpr SegmentDisplay::Scan Scanning = SegmentDisplay::Scan::unsupported;
+    static constexpr std::size_t          outputs  = 8 * sizeof(Value);
+    static constexpr SegmentDisplay::Scan scanning = SegmentDisplay::Scan::unsupported;
 
-    using Bits = std::bitset<Outputs>;
+    using Bits = std::bitset<outputs>;
 
     explicit ExpanderSegments(Device& device) : device_{&device} {}
 
@@ -173,12 +174,12 @@ public:
         if constexpr(SegmentBackendsDetail::LatchExpander<Chip>) {
             using Direction = typename Chip::Direction;
             device_->template set<Direction>(
-              static_cast<typename Direction::Value>(Direction::Initial & ~used_));
+              static_cast<typename Direction::Value>(Direction::initial & ~used_));
         }
     }
 
     bool show(Bits const& levels) {
-        auto const idle = static_cast<Value>(Output::Initial & static_cast<Value>(~used_));
+        auto const idle = static_cast<Value>(Output::initial & static_cast<Value>(~used_));
         return device_->template set<Output>(static_cast<Value>((valueOf(levels) & used_) | idle));
     }
 
@@ -204,7 +205,7 @@ private:
 ///             1  f              5  c
 ///             2  a              6  d
 ///             3  b              7  e
-inline constexpr auto Pca9956bBoard = SegmentDisplay::perDigit<3>({
+inline constexpr auto pca9956bBoard = SegmentDisplay::perDigit<3>({
   .pattern = {2, 3, 5, 6, 7, 1, 0, 4},
   .stride  = 8,
   .first   = SegmentDisplay::FirstDigit::right,
@@ -214,7 +215,7 @@ inline constexpr auto Pca9956bBoard = SegmentDisplay::perDigit<3>({
 /// Digits on a PCA9956B, the board wiring above unless told otherwise:
 /// `Pca9956bDisplay<decltype(leds)> digits{leds, Units::milliAmp(5)}`.
 template<typename DeviceT,
-         SegmentDisplay::Layout auto Layout = Pca9956bBoard,
+         SegmentDisplay::Layout auto Layout = pca9956bBoard,
          typename Timing                    = SegmentDisplay::DefaultDisplayTiming>
 using Pca9956bDisplay = SegmentDisplay::Display<Pca9956bSegments<DeviceT>, Layout, Timing>;
 

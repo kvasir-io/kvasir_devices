@@ -23,16 +23,16 @@ namespace Kvasir::I2C::Chips {
 /// reading a part in gravity gives -- is a bus that answered nothing and is rejected.
 /// 0x53 (SDO low) or 0x1D.
 struct Adxl345 {
-    static constexpr std::string_view Name = "ADXL345";
+    static constexpr std::string_view name = "ADXL345";
     /// Analog Devices ADXL345. ADXL345.md:614, :661: DEVID (0x00) is 0xE5.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"devid", 0x00, 1, true, 0xFF, 0xE5},
     };
-    static constexpr Address7                Address = 0x53;
-    static constexpr std::array<Address7, 2> Addresses{0x53, 0x1D};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x53;
+    static constexpr std::array<Address7, 2> addresses{0x53, 0x1D};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x31, .payload = {0x08}}),
       Engine::Step::write({.reg = 0x2C, .payload = {0x0A}}),
       Engine::Step::write({.reg = 0x2D, .payload = {0x08}}),
@@ -48,8 +48,8 @@ struct Adxl345 {
     }
 
     struct Motion {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{20};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x30, .count = 8})};   // INT_SOURCE, 0x31, DATAX0..DATAZ1
 
         struct Sample {

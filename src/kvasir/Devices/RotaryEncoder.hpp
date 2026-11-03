@@ -29,7 +29,7 @@ struct RotaryEncoder {
     static inline std::atomic<ValueType> cnt{};
     static inline TimePoint              lastTime{};
 
-    static constexpr std::array<RotaryAcceleration, 4> DefaultAcceleration{
+    static constexpr std::array<RotaryAcceleration, 4> defaultAcceleration{
       {{std::chrono::microseconds{2500}, 20},
        {std::chrono::microseconds{5000}, 10},
        {std::chrono::microseconds{10000}, 5},
@@ -41,7 +41,7 @@ struct RotaryEncoder {
           = KVASIR_CONFIG_OR(UserConfig, useAcceleration, false);
 
         static constexpr auto acceleration
-          = KVASIR_CONFIG_OR(UserConfig, acceleration, DefaultAcceleration);
+          = KVASIR_CONFIG_OR(UserConfig, acceleration, defaultAcceleration);
     };
 
     static void edgeCallback() {

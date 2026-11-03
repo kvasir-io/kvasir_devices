@@ -43,13 +43,13 @@ using On = Device<FakeBus,
 
 /// A part that is always due: a one-byte register read every millisecond.
 struct BusyChip {
-    static constexpr std::string_view Name          = "BUSY";
-    static constexpr Address7         Address       = 0x61;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "BUSY";
+    static constexpr Address7         address       = 0x61;
+    static constexpr std::size_t      registerBytes = 1;
 
     struct Data {
-        static constexpr auto       Period = std::chrono::milliseconds{1};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1};
+        static constexpr std::array steps{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
         using Sample = std::uint8_t;
 
@@ -65,7 +65,7 @@ using Busy  = On<BusyChip, 5>;                             // 0x61, behind chann
 using Wire  = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, Light, Sht, Busy>;
 using Scan  = BusScan<Wire>;
 
-static_assert(Wire::Segments == 9 && Wire::segmentOf<Sht>() == 3 && Wire::segmentOf<Busy>() == 6);
+static_assert(Wire::segments == 9 && Wire::segmentOf<Sht>() == 3 && Wire::segmentOf<Busy>() == 6);
 static_assert(std::is_same_v<Wire::SwitchDevice,
                              MuxDev>
               && std::is_same_v<Wire::SwitchArbiter,
@@ -101,7 +101,7 @@ struct Wiring {
             }
             return FakeBus::Result::ok;
         };
-        if(address == MuxDev::Address) {
+        if(address == MuxDev::address) {
             // The switch: a write sets it, and it answers the engine's read-back with its
             // control byte -- which is not a probe of the scan's.
             if(!switchAnswers) { return FakeBus::Result::nack; }
@@ -137,7 +137,7 @@ struct Rig {
         auto& mux        = bus->get<MuxDev>();
         bus->forEach([&](auto& d) {
             using D = std::remove_cvref_t<decltype(d)>;
-            if constexpr(D::GateT::Gated) { d.gate().bind(mux, arbiter); }
+            if constexpr(D::GateT::gated) { d.gate().bind(mux, arbiter); }
         });
         scan = std::make_unique<Scan>(*bus, arbiter);
     }
@@ -191,7 +191,7 @@ void whileTheyRun() {
     // switch closed an address owned behind a channel is only wire, and may be probed.
     bool owned = false;
     for(auto const& p : rig.wiring.probes) {
-        bool const o = p.address == 0x23 || p.address == MuxDev::Address
+        bool const o = p.address == 0x23 || p.address == MuxDev::address
                     || (p.address == 0x44 && (p.switchValue & 0x04) != 0)
                     || (p.address == 0x61 && (p.switchValue & 0x20) != 0);
         if(o && !owned) {
@@ -258,9 +258,9 @@ struct QuickScan {
 static_assert(BusScan<Wire,
                       NoHints,
                       AddressProbe,
-                      QuickScan>::SelectTimeout
+                      QuickScan>::selectTimeout
                   == 50ms
-                && Scan::SelectTimeout == 500ms,
+                && Scan::selectTimeout == 500ms,
               "a Config's SelectTimeout is the scan's, ScanDefaults otherwise");
 
 void aSwitchThatIsNeverSet() {
@@ -288,7 +288,7 @@ void plainBus() {
     Wiring wiring{};
     FakeBus::respond = std::ref(wiring);
     using Plain      = Kvasir::I2C::Bus<FakeBus, FakeClock, Light>;
-    static_assert(Plain::Segments == 1 && std::is_void_v<Plain::SwitchDevice>);
+    static_assert(Plain::segments == 1 && std::is_void_v<Plain::SwitchDevice>);
     auto           bus = std::make_unique<Plain>();
     BusScan<Plain> scan{*bus};
     scan.start();
@@ -305,8 +305,8 @@ struct MuxBConfig {
 using MuxB = Device<FakeBus, FakeClock, Chips::Tca9548a, MuxBConfig>;
 
 struct BusyChipB : BusyChip {
-    static constexpr std::string_view Name    = "BUSYB";
-    static constexpr Address7         Address = 0x62;
+    static constexpr std::string_view name    = "BUSYB";
+    static constexpr Address7         address = 0x62;
 };
 
 using BusyB   = Device<FakeBus,
@@ -318,7 +318,7 @@ using BusyB   = Device<FakeBus,
 using TwoWire = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, MuxB, Light, Sht, Busy, BusyB>;
 using TwoScan = BusScan<TwoWire>;
 
-static_assert(TwoWire::Switches == 2 && TwoWire::Segments == 17
+static_assert(TwoWire::switches == 2 && TwoWire::segments == 17
               && TwoWire::segmentOf<BusyB>() == 10);
 static_assert(std::is_same_v<TwoWire::SwitchDeviceAt<0>,
                              MuxDev>
@@ -351,7 +351,7 @@ struct TwoSwitchWiring {
             }
             return FakeBus::Result::ok;
         };
-        if(address == MuxDev::Address) {
+        if(address == MuxDev::address) {
             if(!sent.empty()) { a = static_cast<std::uint8_t>(sent[0]); }
             for(auto& r : recv) { r = std::byte{a}; }   // the read-back, not a probe
             return FakeBus::Result::ok;
@@ -392,7 +392,7 @@ struct TwoRig {
         FakeBus::respond = std::ref(wiring);
         bus->forEach([&](auto& d) {
             using D = std::remove_cvref_t<decltype(d)>;
-            if constexpr(D::GateT::Gated) {
+            if constexpr(D::GateT::gated) {
                 if constexpr(std::is_same_v<typename D::GateT::Mux, MuxDev>) {
                     d.gate().bind(bus->get<MuxDev>(), arbiterA);
                 } else {
@@ -446,7 +446,7 @@ void twoSwitches() {
                            : p.a != 0  ? 1U + static_cast<std::size_t>(std::countr_zero(p.a))
                                        : 9U + static_cast<std::size_t>(std::countr_zero(p.b));
         seen[segment]      = true;
-        owned              = owned || p.address == 0x23 || p.address == MuxDev::Address
+        owned              = owned || p.address == 0x23 || p.address == MuxDev::address
                           || p.address == MuxBConfig::address || (p.address == 0x44 && (p.a & 0x04) != 0)
                           || (p.address == 0x61 && (p.a & 0x20) != 0)
                           || (p.address == 0x62 && (p.b & 0x02) != 0);

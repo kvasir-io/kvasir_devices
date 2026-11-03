@@ -33,32 +33,32 @@ namespace Kvasir { namespace St77916 {
 
     /// ST77916: 360 RGB x 390; the 1.85" round modules use it at 360 x 360.
     struct Chip {
-        static constexpr std::string_view Name = "ST77916";
+        static constexpr std::string_view name = "ST77916";
 
-        static constexpr std::uint8_t ReadInstruction = 0x0B;
-        static constexpr std::size_t  ReadDummyBytes  = 1;
-        static constexpr int          WindowAlign     = 1;
-        static constexpr int          MaxAddress      = 65536;
+        static constexpr std::uint8_t readInstruction = 0x0B;
+        static constexpr std::size_t  readDummyBytes  = 1;
+        static constexpr int          windowAlign     = 1;
+        static constexpr int          maxAddress      = 65536;
 
-        static constexpr Units::Hertz MaxWriteClock = Units::hertz(50'000'000);
-        static constexpr Units::Hertz MaxReadClock  = Units::hertz(6'666'666);
+        static constexpr Units::Hertz maxWriteClock = Units::hertz(50'000'000);
+        static constexpr Units::Hertz maxReadClock  = Units::hertz(6'666'666);
 
         // 3Ah: IFPF 101 = 16 bit (13.2); 55h sets VIPF the same way, as Espressif does.
-        static constexpr std::uint8_t Colmod565 = 0x55;
+        static constexpr std::uint8_t colmod565 = 0x55;
 
-        static constexpr std::chrono::milliseconds ResetPulse{10};
+        static constexpr std::chrono::milliseconds resetPulse{10};
         /// no SLPOUT within 120 ms of RESX
-        static constexpr std::chrono::milliseconds ResetToCommand{120};
-        static constexpr std::chrono::milliseconds SleepOut{120};
+        static constexpr std::chrono::milliseconds resetToCommand{120};
+        static constexpr std::chrono::milliseconds sleepOut{120};
 
         // WRDISBV drives the CABC backlight PWM output, which these modules do not wire.
-        static constexpr bool         Brightness  = false;
-        static constexpr std::uint8_t CtrlDisplay = 0x00;
+        static constexpr bool         brightness  = false;
+        static constexpr std::uint8_t ctrlDisplay = 0x00;
 
-        static constexpr std::uint8_t ExpectedId1 = 0x00;   // not documented
+        static constexpr std::uint8_t expectedId1 = 0x00;   // not documented
 
         /// Espressif's vendor_specific_init_default (esp_lcd_st77916, Apache-2.0).
-        static constexpr std::array<std::uint8_t, 899> InitBytes{
+        static constexpr std::array<std::uint8_t, 899> initBytes{
           0xF0, 0x01, 0x08, 0x00, 0xF2, 0x01, 0x08, 0x00, 0x9B, 0x01, 0x51, 0x00, 0x86, 0x01, 0x53,
           0x00, 0xF2, 0x01, 0x80, 0x00, 0xF0, 0x01, 0x00, 0x00, 0xF0, 0x01, 0x01, 0x00, 0xF1, 0x01,
           0x01, 0x00, 0xB0, 0x01, 0x54, 0x00, 0xB1, 0x01, 0x3F, 0x00, 0xB2, 0x01, 0x2A, 0x00, 0xB4,
@@ -120,8 +120,8 @@ namespace Kvasir { namespace St77916 {
           0x01, 0x00, 0x00, 0x4C, 0x01, 0x01, 0x0A, 0x4C, 0x01, 0x00, 0x00, 0x2A, 0x04, 0x00, 0x00,
           0x01, 0x67, 0x00, 0x2B, 0x04, 0x00, 0x00, 0x01, 0x67, 0x00, 0x21, 0x01, 0x00, 0x00,
         };
-        static_assert(Dcs::Script::wellFormed(InitBytes));
-        static constexpr Dcs::Script Init{InitBytes};
+        static_assert(Dcs::Script::wellFormed(initBytes));
+        static constexpr Dcs::Script init{initBytes};
     };
 
     static_assert(Display::Chip<Chip>);
@@ -137,31 +137,31 @@ namespace Kvasir { namespace St77922 {
 
     /// ST77922: up to 532 x 300 with RAM; same QSPI framing and timings as the ST77916.
     struct Chip {
-        static constexpr std::string_view Name = "ST77922";
+        static constexpr std::string_view name = "ST77922";
 
-        static constexpr std::uint8_t ReadInstruction = 0x0B;
-        static constexpr std::size_t  ReadDummyBytes  = 1;
-        static constexpr int          WindowAlign     = 1;
-        static constexpr int          MaxAddress      = 65536;
+        static constexpr std::uint8_t readInstruction = 0x0B;
+        static constexpr std::size_t  readDummyBytes  = 1;
+        static constexpr int          windowAlign     = 1;
+        static constexpr int          maxAddress      = 65536;
 
-        static constexpr Units::Hertz MaxWriteClock = Units::hertz(50'000'000);
-        static constexpr Units::Hertz MaxReadClock  = Units::hertz(6'666'666);
+        static constexpr Units::Hertz maxWriteClock = Units::hertz(50'000'000);
+        static constexpr Units::Hertz maxReadClock  = Units::hertz(6'666'666);
 
         // The datasheet says 3Ah = 01h for 16 bit; Espressif's driver sends 55h. Wrong
         // colours: try this first.
-        static constexpr std::uint8_t Colmod565 = 0x55;
+        static constexpr std::uint8_t colmod565 = 0x55;
 
-        static constexpr std::chrono::milliseconds ResetPulse{10};
-        static constexpr std::chrono::milliseconds ResetToCommand{120};
-        static constexpr std::chrono::milliseconds SleepOut{120};
+        static constexpr std::chrono::milliseconds resetPulse{10};
+        static constexpr std::chrono::milliseconds resetToCommand{120};
+        static constexpr std::chrono::milliseconds sleepOut{120};
 
-        static constexpr bool         Brightness  = false;
-        static constexpr std::uint8_t CtrlDisplay = 0x00;
+        static constexpr bool         brightness  = false;
+        static constexpr std::uint8_t ctrlDisplay = 0x00;
 
-        static constexpr std::uint8_t ExpectedId1 = 0x00;
+        static constexpr std::uint8_t expectedId1 = 0x00;
 
         /// Espressif's vendor_specific_init_default (esp_lcd_st77922, Apache-2.0).
-        static constexpr std::array<std::uint8_t, 525> InitBytes{
+        static constexpr std::array<std::uint8_t, 525> initBytes{
           0x28, 0x00, 0x00, 0x10, 0x00, 0x00, 0x2A, 0x04, 0x00, 0x00, 0x02, 0x13, 0x00, 0x2B, 0x04,
           0x00, 0x00, 0x01, 0x2B, 0x00, 0xD0, 0x01, 0x80, 0x00, 0xF1, 0x00, 0x00, 0x60, 0x03, 0x00,
           0x00, 0x00, 0x00, 0x65, 0x01, 0x00, 0x00, 0x66, 0x02, 0x00, 0x3F, 0x00, 0xBE, 0x03, 0x1E,
@@ -198,8 +198,8 @@ namespace Kvasir { namespace St77922 {
           0x02, 0x15, 0x27, 0x00, 0x7B, 0x02, 0x04, 0x57, 0x00, 0x7E, 0x02, 0x01, 0x0E, 0x00, 0xBF,
           0x01, 0x36, 0x00, 0xE3, 0x02, 0x43, 0x43, 0x00, 0xF0, 0x00, 0x00, 0x21, 0x01, 0x00, 0x00,
         };
-        static_assert(Dcs::Script::wellFormed(InitBytes));
-        static constexpr Dcs::Script Init{InitBytes};
+        static_assert(Dcs::Script::wellFormed(initBytes));
+        static constexpr Dcs::Script init{initBytes};
     };
 
     static_assert(Display::Chip<Chip>);

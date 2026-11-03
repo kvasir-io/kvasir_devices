@@ -36,7 +36,7 @@ namespace Ads1015Detail {
 /// 0x48..0x4B by the ADDR pin.
 template<Ads1x15Detail::Gain Gain = Ads1x15Detail::Gain::fsr2V048>
 struct Ads1015 {
-    static constexpr std::string_view Name = "ADS1015";
+    static constexpr std::string_view name = "ADS1015";
     /// TI ADS1115 and ADS1015. The config register (01h) while the description sweeps the four
     /// inputs with single-shot conversions (ADS1115.md:1031..1058): MUX bit 14 set -- an input against
     /// GND, whichever of the four the sweep is at --, PGA 11:9 = 010b, +-2.048 V, which is what the
@@ -45,20 +45,20 @@ struct Ads1015 {
     /// not read this way: its RDATA command and the read after it are two transactions, and a register
     /// read between them would be taken for the conversion result.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"single-ended-2v048-single-shot", 0x01, 2, true, 0x4F03, 0x4503},
     };
-    static constexpr Address7    Address       = 0x48;
-    static constexpr auto        Addresses     = addressRun<0x48, 4>();
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x48;
+    static constexpr auto        addresses     = addressRun<0x48, 4>();
+    static constexpr std::size_t registerBytes = 1;
 
     /// +FSR, what a code of 0x7FF + 1 would be.
-    static constexpr MicroVolt FullScale
+    static constexpr MicroVolt fullScale
       = Units::microVolt(Ads1x15Detail::fullScaleMicroVolt(Gain));
 
     struct Sweep {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Ads1015Detail::start(0, Gain),
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0}),
           Ads1015Detail::start(1, Gain),
@@ -75,7 +75,7 @@ struct Ads1015 {
             /// A code at the configured full-scale range: 2048 counts is +FSR.
             [[nodiscard]] static constexpr MicroVolt toVoltage(std::int16_t c) {
                 return Units::microVolt(static_cast<std::int32_t>(
-                  static_cast<std::int64_t>(c) * Units::value(FullScale) / 2048));
+                  static_cast<std::int64_t>(c) * Units::value(fullScale) / 2048));
             }
 
             /// Channel `ch`.

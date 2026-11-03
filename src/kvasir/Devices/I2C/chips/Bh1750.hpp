@@ -26,12 +26,12 @@ namespace Kvasir::I2C::Chips {
 /// bus that answered nothing, so no frame is rejected; `saturated()` marks it.
 /// 0x23 with ADDR low, 0x5C with ADDR high.
 struct Bh1750 {
-    static constexpr std::string_view        Name    = "BH1750";
-    static constexpr Address7                Address = 0x23;
-    static constexpr std::array<Address7, 2> Addresses{0x23, 0x5C};
-    static constexpr std::size_t             RegisterBytes = 0;
+    static constexpr std::string_view        name    = "BH1750";
+    static constexpr Address7                address = 0x23;
+    static constexpr std::array<Address7, 2> addresses{0x23, 0x5C};
+    static constexpr std::size_t             registerBytes = 0;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x01}}),
       Engine::Step::command({.payload = {0x07}}),
       Engine::Step::command({.payload = {0x42}}),   // MTreg bits 7:5 = 010
@@ -40,8 +40,8 @@ struct Bh1750 {
     };
 
     struct Light {
-        static constexpr auto       Period = std::chrono::milliseconds{200};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 2})};
+        static constexpr auto       period = std::chrono::milliseconds{200};
+        static constexpr std::array steps{Engine::Step::receive({.count = 2})};
 
         struct Sample {
             std::uint16_t raw{};

@@ -19,10 +19,10 @@ namespace Opt4048Detail {
     enum class ConversionTime : std::uint8_t {
         us600  = 0,
         ms1    = 1,
-        ms1_8  = 2,
-        ms3_4  = 3,
-        ms6_5  = 4,
-        ms12_7 = 5,
+        ms1p8  = 2,
+        ms3p4  = 3,
+        ms6p5  = 4,
+        ms12p7 = 5,
         ms25   = 6,
         ms50   = 7,
         ms100  = 8,
@@ -34,8 +34,8 @@ namespace Opt4048Detail {
     /// Configuration RANGE (13:10): 0..6 the fixed full scales (2.2 klux up to 144 klux), 12
     /// auto-range.
     enum class Range : std::uint8_t {
-        klux2_2   = 0,
-        klux4_5   = 1,
+        klux2p2   = 0,
+        klux4p5   = 1,
         klux9     = 2,
         klux18    = 3,
         klux36    = 4,
@@ -45,7 +45,7 @@ namespace Opt4048Detail {
     };
 
     /// Per channel, rounded up, so a whole measurement is four of these.
-    inline constexpr std::array<std::chrono::milliseconds, 12> ConversionTimes{
+    inline constexpr std::array<std::chrono::milliseconds, 12> conversionTimes{
       std::chrono::milliseconds{1},
       std::chrono::milliseconds{1},
       std::chrono::milliseconds{2},
@@ -60,7 +60,7 @@ namespace Opt4048Detail {
       std::chrono::milliseconds{800}};
 
     [[nodiscard]] constexpr std::chrono::milliseconds conversionTime(std::uint8_t code) {
-        return code < ConversionTimes.size() ? ConversionTimes[code] : ConversionTimes[8];
+        return code < conversionTimes.size() ? conversionTimes[code] : conversionTimes[8];
     }
 
     /// The datasheet's 4-bit CRC over one channel's exponent E[3:0], mantissa R[19:0] and
@@ -127,51 +127,51 @@ namespace Opt4048Detail {
 template<Opt4048Detail::ConversionTime ConversionTime = Opt4048Detail::ConversionTime::ms100,
          Opt4048Detail::Range          Range          = Opt4048Detail::Range::autoRange>
 struct Opt4048 {
-    static constexpr std::string_view Name = "OPT4048";
+    static constexpr std::string_view name = "OPT4048";
     /// TI OPT4048. OPT4048.md:963 and :1452..1453, register 11h: DIDH 821h in 11:0 (DIDL in 13:12).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"device-id", 0x11, 2, true, 0x0FFF, 0x0821},
     };
-    static constexpr Address7    Address       = 0x44;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x44;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x44, 4>();
+    static constexpr auto addresses = addressRun<0x44, 4>();
 
-    static constexpr std::size_t Channels = 4;
+    static constexpr std::size_t channels = 4;
 
-    static constexpr std::uint8_t ConversionCode = static_cast<std::uint8_t>(ConversionTime);
-    static constexpr std::uint8_t RangeCode      = static_cast<std::uint8_t>(Range);
+    static constexpr std::uint8_t conversionCode = static_cast<std::uint8_t>(ConversionTime);
+    static constexpr std::uint8_t rangeCode      = static_cast<std::uint8_t>(Range);
 
     /// The range, the chosen conversion time, continuous mode.
-    static constexpr std::uint16_t Configuration
-      = static_cast<std::uint16_t>((RangeCode << 10) | (ConversionCode << 6) | (3U << 4));
+    static constexpr std::uint16_t configuration
+      = static_cast<std::uint16_t>((rangeCode << 10) | (conversionCode << 6) | (3U << 4));
 
-    static constexpr std::array<std::chrono::milliseconds, 12> ConversionTimes
-      = Opt4048Detail::ConversionTimes;
+    static constexpr std::array<std::chrono::milliseconds, 12> conversionTimes
+      = Opt4048Detail::conversionTimes;
 
     /// Four channels at the conversion time, plus headroom.
     [[nodiscard]] static constexpr std::chrono::milliseconds
-    readPeriod(std::uint8_t conversionCode) {
-        return 4 * Opt4048Detail::conversionTime(conversionCode) + std::chrono::milliseconds{50};
+    readPeriod(std::uint8_t conversionCodeArg) {
+        return 4 * Opt4048Detail::conversionTime(conversionCodeArg) + std::chrono::milliseconds{50};
     }
 
-    static constexpr std::uint16_t DeviceId = 0x0821;
+    static constexpr std::uint16_t deviceId = 0x0821;
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x0B, .payload = {0x80, 0x11}}),   // I2C_BURST, the rest at reset
       Engine::Step::write({.reg     = 0x0A,
-                           .payload = {static_cast<std::uint8_t>(Configuration >> 8),
-                                       static_cast<std::uint8_t>(Configuration & 0xFF)},
-                           .delay   = ConversionTimes[ConversionCode] * 4})};
+                           .payload = {static_cast<std::uint8_t>(configuration >> 8),
+                                       static_cast<std::uint8_t>(configuration & 0xFF)},
+                           .delay   = conversionTimes[conversionCode] * 4})};
     // clang-format on
 
     struct State {
         std::uint16_t deviceId{};
-        std::uint8_t  conversionTime{ConversionCode};   ///< CONVERSION_TIME as written now
-        std::uint8_t  range{RangeCode};
+        std::uint8_t  conversionTime{conversionCode};   ///< CONVERSION_TIME as written now
+        std::uint8_t  range{rangeCode};
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs: the
@@ -179,12 +179,12 @@ struct Opt4048 {
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
         state.deviceId       = static_cast<std::uint16_t>(ids[0]);
-        state.conversionTime = ConversionCode;
-        state.range          = RangeCode;
+        state.conversionTime = conversionCode;
+        state.range          = rangeCode;
     }
 
     struct Colour {
-        static constexpr auto Period = readPeriod(ConversionCode);
+        static constexpr auto period = readPeriod(conversionCode);
 
         /// The conversion time the configuration holds now, which a Config write changes.
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
@@ -192,14 +192,14 @@ struct Opt4048 {
         }
 
         /// The eight result registers in one burst (I2C_BURST is set out of reset).
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 16, .offset = 0})};
 
         struct Sample {
             /// Linearised 28-bit codes: X, Y, Z and the wide channel.
-            std::array<std::uint32_t, Channels> code{};
-            std::array<std::uint8_t, Channels>  exponent{};
-            std::array<std::uint8_t, Channels>  counter{};
+            std::array<std::uint32_t, channels> code{};
+            std::array<std::uint8_t, channels>  exponent{};
+            std::array<std::uint8_t, channels>  counter{};
 
             /// lux = ADC_CODE_CH1 x 2.15e-3.
             [[nodiscard]] constexpr MilliLux lux() const {
@@ -219,7 +219,7 @@ struct Opt4048 {
                                                                       Sample const& previous) {
             Sample sample{};
             bool   same = true;
-            for(std::size_t c = 0; c < Channels; ++c) {
+            for(std::size_t c = 0; c < channels; ++c) {
                 auto const hi      = data.be16(4 * c);
                 auto const lo      = data.be16(4 * c + 2);
                 auto const exp     = static_cast<std::uint8_t>(hi >> 12);
@@ -244,8 +244,8 @@ struct Opt4048 {
     /// the period Colour is read at from the write's completion on.
     struct Config {
         using Value                          = std::uint16_t;
-        static constexpr std::size_t Bytes   = 2;
-        static constexpr Value       Initial = Configuration;
+        static constexpr std::size_t bytes   = 2;
+        static constexpr Value       initial = configuration;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

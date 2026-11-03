@@ -45,31 +45,31 @@ namespace Kvasir { namespace SPI {
     template<typename Master, typename Clock, typename Cs, typename Drdy, typename Config>
     class Ads131m0X {
     public:
-        static constexpr std::size_t MaxChannels = 8;
-        static constexpr std::size_t NumChannels = Config::channels;
-        static_assert(NumChannels >= 1 && NumChannels <= MaxChannels,
+        static constexpr std::size_t maxChannels = 8;
+        static constexpr std::size_t numChannels = Config::channels;
+        static_assert(numChannels >= 1 && numChannels <= maxChannels,
                       "an ADS131M0x has 1 to 8 channels");
         using TimePoint = typename Clock::time_point;
-        using Codes     = std::array<std::int16_t, NumChannels>;
+        using Codes     = std::array<std::int16_t, numChannels>;
 
-        static constexpr std::uint16_t ResetAck = static_cast<std::uint16_t>(0xFF20U | NumChannels);
-        static constexpr std::uint8_t  SettlingReadings = 2;
+        static constexpr std::uint16_t resetAck = static_cast<std::uint16_t>(0xFF20U | numChannels);
+        static constexpr std::uint8_t  settlingReadings = 2;
 
-        static constexpr std::chrono::milliseconds StartupDelay = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds startupDelay = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            startupDelay,
                            std::chrono::milliseconds{Ads131m0XDefaults::startupDelay}));
-        static constexpr std::chrono::milliseconds SamplePeriod = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds samplePeriod = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            samplePeriod,
                            std::chrono::milliseconds{Ads131m0XDefaults::samplePeriod}));
-        static constexpr std::uint8_t AbsentAfterFailures = static_cast<std::uint8_t>(
+        static constexpr std::uint8_t absentAfterFailures = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, absentAfterFailures, Ads131m0XDefaults::absentAfterFailures));
-        static constexpr auto Setup
+        static constexpr auto setup
           = Master::setup(Hal::ClockMode::mode1,
                           KVASIR_CONFIG_OR(Config, maxClock, Ads131m0XDefaults::maxClock));
 
-        Ads131m0X() : next_{Clock::now() + StartupDelay} { ChipSelect<Cs>::release(); }
+        Ads131m0X() : next_{Clock::now() + startupDelay} { ChipSelect<Cs>::release(); }
 
         Ads131m0X(Ads131m0X const&)            = delete;
         Ads131m0X& operator=(Ads131m0X const&) = delete;
@@ -79,7 +79,7 @@ namespace Kvasir { namespace SPI {
         }
 
         [[nodiscard]] std::optional<Units::MicroVolt> voltage(std::size_t channel) const {
-            if(!valid_ || channel >= NumChannels) { return std::nullopt; }
+            if(!valid_ || channel >= numChannels) { return std::nullopt; }
             return toVoltage(slot_.latest()[channel]);
         }
 
@@ -114,7 +114,7 @@ namespace Kvasir { namespace SPI {
                 bool const reading = state_ == State::first || state_ == State::second;
                 if(!reading) { bringUpFailed_(); }
                 state_ = reading ? State::idle : State::startup;
-                next_  = now + (reading ? SamplePeriod : StartupDelay);
+                next_  = now + (reading ? samplePeriod : startupDelay);
                 return;
             }
             bool const done = poll == Frame::Poll::ok;
@@ -122,7 +122,7 @@ namespace Kvasir { namespace SPI {
             case State::startup:
                 if(now > next_) {
                     valid_ = false;
-                    start_(CmdReset);
+                    start_(cmdReset);
                     state_ = State::reset;
                 }
                 break;
@@ -134,39 +134,39 @@ namespace Kvasir { namespace SPI {
                 break;
             case State::resetGap:
                 if(now >= next_) {
-                    start_(CmdNull);
+                    start_(cmdNull);
                     state_ = State::ack;
                 }
                 break;
             case State::ack:
                 if(done) {
                     auto const response = Bytes{frame_}.be16(0);
-                    if(response == ResetAck) {
+                    if(response == resetAck) {
                         next_     = now;
-                        settling_ = SettlingReadings;
+                        settling_ = settlingReadings;
                         bringUpFailures_.cleared();
                         state_ = State::idle;
-                        UC_LOG_D("ads131m0x: up, {} channels", NumChannels);
+                        UC_LOG_D("ads131m0x: up, {} channels", numChannels);
                     } else {
                         ++errors_;
                         bringUpFailed_();
                         UC_LOG_W("ads131m0x: reset answered {:#06x}, expected {:#06x}",
                                  response,
-                                 ResetAck);
-                        next_  = now + StartupDelay;
+                                 resetAck);
+                        next_  = now + startupDelay;
                         state_ = State::startup;
                     }
                 }
                 break;
             case State::idle:
                 if(!(now > next_) || apply(read(Drdy{}))) { return; }
-                next_ = now + SamplePeriod;
-                start_(CmdNull);   // the older sample in the FIFO
+                next_ = now + samplePeriod;
+                start_(cmdNull);   // the older sample in the FIFO
                 state_ = State::first;
                 break;
             case State::first:
                 if(done) {
-                    start_(CmdNull);   // straight after it: the newest
+                    start_(cmdNull);   // straight after it: the newest
                     state_ = State::second;
                 }
                 break;
@@ -185,8 +185,8 @@ namespace Kvasir { namespace SPI {
         }
 
     private:
-        static constexpr std::uint16_t CmdNull  = 0x0000;
-        static constexpr std::uint16_t CmdReset = 0x0011;
+        static constexpr std::uint16_t cmdNull  = 0x0000;
+        static constexpr std::uint16_t cmdReset = 0x0011;
         enum class State : std::uint8_t { startup, reset, resetGap, ack, idle, first, second };
 
         using Frame = OneFrame<Master>;
@@ -196,7 +196,7 @@ namespace Kvasir { namespace SPI {
             std::fill(frame_.begin(), frame_.end(), std::byte{0});
             frame_[0] = static_cast<std::byte>(command >> 8U);
             frame_[1] = static_cast<std::byte>(command & 0xFFU);
-            if(!xfer_.start(typename Master::Request{.setup = Setup,
+            if(!xfer_.start(typename Master::Request{.setup = setup,
                                                      .lines = ChipSelect<Cs>::lines,
                                                      .tx    = std::span<std::byte const>{frame_},
                                                      .rx    = std::span{frame_}}))
@@ -207,7 +207,7 @@ namespace Kvasir { namespace SPI {
 
         void decode_() {
             Codes codes{};
-            for(std::size_t channel = 0; channel < NumChannels; ++channel) {
+            for(std::size_t channel = 0; channel < numChannels; ++channel) {
                 codes[channel] = Bytes{frame_}.s16be(3 + 3 * channel);
             }
             slot_.publish(codes);
@@ -217,12 +217,12 @@ namespace Kvasir { namespace SPI {
         void bringUpFailed_() { bringUpFailures_.failed(); }
 
         TimePoint                                      next_{};
-        std::array<std::byte, 3 + 3 * NumChannels + 3> frame_{};
+        std::array<std::byte, 3 + 3 * numChannels + 3> frame_{};
         Frame                                          xfer_{};
         State                                          state_{State::startup};
         bool                                           valid_{};
         std::uint8_t                                   settling_{};
-        FailureStreak<AbsentAfterFailures>             bringUpFailures_{};
+        FailureStreak<absentAfterFailures>             bringUpFailures_{};
         SampleSlot<Codes>                              slot_{};
         std::uint32_t                                  discarded_{};
         std::uint32_t                                  errors_{};

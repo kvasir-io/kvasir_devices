@@ -103,7 +103,7 @@ struct Presence {
         probe_ = Probe::none;
         if(absent_) {
             absent_ = false;
-            KVASIR_LOG_LIMITED(log_.allow(PresentAgain, now),
+            KVASIR_LOG_LIMITED(log_.allow(presentAgain, now),
                                UC_LOG_I,
                                "i2c device {:#04x} present again after {} probe(s)",
                                address,
@@ -140,7 +140,7 @@ struct Presence {
             probes_   = 0;
             interval_ = std::chrono::milliseconds{k.probeIntervalMs};
             nextProbe_.restart(interval_, now);
-            KVASIR_LOG_LIMITED(log_.allow(NotResponding, now),
+            KVASIR_LOG_LIMITED(log_.allow(notResponding, now),
                                UC_LOG_W,
                                "i2c device {:#04x} not responding ({} NAKs in a row) -- "
                                "probing every {} .. {}",
@@ -190,8 +190,8 @@ struct Presence {
 private:
     enum class Probe : std::uint8_t { none, armed, inFlight };
 
-    static constexpr std::uint32_t NotResponding = rateLimitKey(1);
-    static constexpr std::uint32_t PresentAgain  = rateLimitKey(2);
+    static constexpr std::uint32_t notResponding = rateLimitKey(1);
+    static constexpr std::uint32_t presentAgain  = rateLimitKey(2);
 
     // In order of alignment: the small fields share the tail.
     Kvasir::Deadline<Clock> nextProbe_{};   ///< armed while parked

@@ -12,7 +12,7 @@
 // takeIfDead() runs masked in the core's turn(): once the streak reached Threshold it clears the streak, counts a
 // resuscitation and hands the reaction (the core's: I2C alternates a re-init and a full recovery, SPI re-inits) to the
 // caller. `Resuscitations` is the counter's type: a plain u32 where the reaction reads it (I2C), a statistics counter
-// that may be switched off where it is only read out (SPI, Kvasir::detail::StatCount). An object, owned by its bus
+// that may be switched off where it is only read out (SPI, Kvasir::Detail::StatCount). An object, owned by its bus
 // core: two buses of one shape are two cores, so two streaks.
 #include <cstdint>
 #include <limits>

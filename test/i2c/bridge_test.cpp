@@ -73,7 +73,7 @@ using SplitLight = BehindBridge<Split, Dev<Chips::Bh1750>>;
 using DockLight  = BehindBridge<Dock, Dev<Chips::Bh1750>>;
 using CutSwitch  = BehindBridge<Cut, Dev<Chips::Tca9548a>>;
 
-static_assert(CutLight::Bridged && !Dev<Chips::Bh1750>::Bridged);
+static_assert(CutLight::bridged && !Dev<Chips::Bh1750>::bridged);
 static_assert(sizeof(Dev<Chips::Bh1750>)
                 == sizeof(Kvasir::I2C::Device<FakeBus,
                                               FakeClock,
@@ -125,7 +125,7 @@ void driven(bool unpowered) {
                : "Bridge (disconnected): off from the start, the part is offline");
     runFor(both, 5s);
     check(B::driven == std::vector<bool>{false}, "the pin is driven off once, and that is all");
-    checkEq(transactionsTo(Light::Address), std::size_t{0}, "nothing is said to the part");
+    checkEq(transactionsTo(Light::address), std::size_t{0}, "nothing is said to the part");
     check(light.link() == Kvasir::Link::offline, "it says offline");
     check(!light.absent() && !light.valid(), "which is not absent, and not valid");
     checkEq(light.errors(), 0U, "no error is counted");
@@ -134,8 +134,8 @@ void driven(bool unpowered) {
     testCase("Bridge: on, the part waits for Settle and comes up");
     line.on();
     auto const onAt = FakeClock::now();
-    check(runUntil(both, [&] { return transactionsTo(Light::Address) != 0; }, 1s), "it talks");
-    check(FakeClock::now() - onAt >= Line::Settle, "not before the bridge has settled");
+    check(runUntil(both, [&] { return transactionsTo(Light::address) != 0; }, 1s), "it talks");
+    check(FakeClock::now() - onAt >= Line::settle, "not before the bridge has settled");
     check(runUntil(both, [&] { return light.valid(); }, 2s), "and delivers");
     check(light.link() == Kvasir::Link::answering, "answering");
     checkEq(light.bringUps(), 1U, "through one bring-up");
@@ -149,7 +149,7 @@ void driven(bool unpowered) {
     check(line.state() == BridgeState::off && !B::isOn(), "the pin followed");
     auto const mark = FakeBus::log.size();
     runFor(both, 5s);
-    checkEq(transactionsTo(Light::Address, mark), std::size_t{0}, "nothing more is said");
+    checkEq(transactionsTo(Light::address, mark), std::size_t{0}, "nothing more is said");
     check(!light.valid(), "the reading is not valid any more");
     checkEq(light.samples(), samples, "and no sample was made up");
     check(!light.absent(), "not absent");
@@ -265,7 +265,7 @@ void owed() {
     testCase("Bridge: what the application sets while the part is offline is sent when it is back");
     mux.set<Chips::Tca9548a::Channels>(0x04);
     runFor(both, 1s);
-    checkEq(transactionsTo(CutSwitch::Address), std::size_t{0}, "nothing goes out");
+    checkEq(transactionsTo(CutSwitch::address), std::size_t{0}, "nothing goes out");
     check(mux.pending<Chips::Tca9548a::Channels>(), "the write stays owed");
     line.on();
     check(runUntil(both, [&] { return !mux.pending<Chips::Tca9548a::Channels>(); }, 1s), "sent");
@@ -281,7 +281,7 @@ void unbound() {
     testCase("Bridge: a device never bound to its line stays offline");
     runFor(light, 1s);
     check(light.link() == Kvasir::Link::offline, "offline");
-    checkEq(transactionsTo(CutLight::Address), std::size_t{0}, "silent");
+    checkEq(transactionsTo(CutLight::address), std::size_t{0}, "silent");
 }
 
 // -- in a Bus ---------------------------------------------------------------------------------
@@ -290,15 +290,15 @@ using Front    = Dev<Chips::Bh1750>;
 using FarLight = BehindBridge<Cut, Dev<Chips::Bh1750, Kvasir::Engine::At<0x5C>>>;
 using Mixed    = Kvasir::I2C::Bus<FakeBus, FakeClock, Front, FarLight>;
 
-static_assert(Mixed::Bridges == 1 && Mixed::Switches == 0 && Mixed::Segments == 1);
+static_assert(Mixed::bridges == 1 && Mixed::switches == 0 && Mixed::segments == 1);
 static_assert(Kvasir::I2C::Bus<FakeBus,
                                FakeClock,
-                               Front>::Bridges
+                               Front>::bridges
               == 0);
-static_assert(!detail::addressesDistinct<Front,
+static_assert(!Detail::addressesDistinct<Front,
                                          CutLight>(),
               "a bridge alone keeps nobody apart: in front of it and behind it meet when it is on");
-static_assert(!detail::addressesDistinct<CutLight,
+static_assert(!Detail::addressesDistinct<CutLight,
                                          SplitLight>(),
               "and neither do two bridges that may be on together");
 
@@ -310,7 +310,7 @@ void inABus() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(a == FarLight::Address && !Cut::isOn()) { return FakeBusResult::nack; }
+          if(a == FarLight::address && !Cut::isOn()) { return FakeBusResult::nack; }
           return zeros(a, s, r);
       }};
 
@@ -327,7 +327,7 @@ void inABus() {
     checkEq(bus.errors(), 0U, "no errors");
     check(bus.valid(), "the Bus is valid: the offline part is not meant to deliver");
     checkEq(bus.counts().offline[0], 1U, "the segment counts say so too");
-    checkEq(transactionsTo(FarLight::Address), std::size_t{0}, "and nothing was said to it");
+    checkEq(transactionsTo(FarLight::address), std::size_t{0}, "and nothing was said to it");
 
     testCase("Bridge in a Bus: bus.bridge<B>().on()");
     bus.bridge<Cut>().on();
@@ -342,7 +342,7 @@ void inABus() {
     auto const mark = FakeBus::log.size();
     bus.restart();
     runFor(bus, 2s);
-    checkEq(transactionsTo(FarLight::Address, mark), std::size_t{0}, "still silent behind it");
+    checkEq(transactionsTo(FarLight::address, mark), std::size_t{0}, "still silent behind it");
     check(bus.get<FarLight>().offline(), "still offline");
 }
 
@@ -364,7 +364,7 @@ using Right  = BehindBridge<Cut,
                                    MuxGate<MuxDev, 3>>>;
 using Both   = Kvasir::I2C::Bus<FakeBus, FakeClock, MuxDev, Left, Right>;
 
-static_assert(Both::Switches == 1 && Both::Bridges == 1);
+static_assert(Both::switches == 1 && Both::bridges == 1);
 static_assert(Both::segmentOf<Left>() == 1 && Both::segmentOf<Right>() == 4,
               "a bridge around a channel's gate leaves the part on its segment");
 static_assert(Both::channelOf<Right>() == 3);
@@ -428,7 +428,7 @@ using FarPart = BehindBridge<Cut,
                                     MuxGate<FarMux, 1>>>;
 using FarBus  = Kvasir::I2C::Bus<FakeBus, FakeClock, FarMux, FarPart>;
 
-static_assert(FarBus::Switches == 1 && FarBus::Bridges == 1 && FarBus::segmentOf<FarPart>() == 2);
+static_assert(FarBus::switches == 1 && FarBus::bridges == 1 && FarBus::segmentOf<FarPart>() == 2);
 
 void switchBehindABridge() {
     auto        busPtr = std::make_unique<FarBus>();
@@ -493,7 +493,7 @@ void throughAPart() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(a == Expander::Address) {
+          if(a == Expander::address) {
               if(!s.empty()) { port = static_cast<std::uint8_t>(s[0]); }
               for(auto& b : r) { b = std::byte{port}; }
               return FakeBusResult::ok;
@@ -551,10 +551,10 @@ using LightA  = BehindBridge<SlotA, Dev<Chips::Bh1750>>;
 using LightB  = BehindBridge<SlotB, Dev<Chips::Bh1750>>;
 using SlotBus = Kvasir::I2C::Bus<FakeBus, FakeClock, LightA, LightB>;
 
-static_assert(detail::addressesDistinct<LightA,
+static_assert(Detail::addressesDistinct<LightA,
                                         LightB>(),
               "the same address behind two bridges of one ExclusiveGroup");
-static_assert(SlotBus::Bridges == 2);
+static_assert(SlotBus::bridges == 2);
 
 void oneAtATime() {
     SlotBus bus{};
@@ -629,13 +629,13 @@ using BeforeAt23  = Device<FakeBus,
                            BridgeFrontGate<PortA, PortB>>;
 using SwitchedBus = Kvasir::I2C::Bus<FakeBus, FakeClock, Before, OnA, OnB>;
 
-static_assert(detail::addressesDistinct<Before,
+static_assert(Detail::addressesDistinct<Before,
                                         OnA,
                                         OnB>(),
               "one address behind each of two switched bridges of a group");
-static_assert(!detail::addressesDistinct<Front,
+static_assert(!Detail::addressesDistinct<Front,
                                          OnA>()
-                && !detail::addressesDistinct<BeforeAt23,
+                && !Detail::addressesDistinct<BeforeAt23,
                                               OnA>(),
               "never in front as well, whatever gate that part has: it is on the wire all the "
               "time and would answer with the part behind the bridge");
@@ -649,17 +649,17 @@ struct Trusted : Pin<Trusted> {
 using TrustedLight = BehindBridge<Trusted, Dev<Chips::Bh1750>>;
 
 static_assert(!BridgeLine<FakeClock,
-                          Trusted>::Switched
+                          Trusted>::switched
               && BridgeLine<FakeClock,
-                            PortA>::Switched);
+                            PortA>::switched);
 
-static_assert(detail::addressesDistinct<CutLight,
+static_assert(Detail::addressesDistinct<CutLight,
                                         TrustedLight>(),
               "behind it and behind another");
-static_assert(!detail::addressesDistinct<Front,
+static_assert(!Detail::addressesDistinct<Front,
                                          TrustedLight>(),
               "but not behind it and behind nothing: that part is always on the wire");
-static_assert(!detail::addressesDistinct<TrustedLight,
+static_assert(!Detail::addressesDistinct<TrustedLight,
                                          TrustedLight>(),
               "but two behind it are two on one wire");
 
@@ -676,11 +676,11 @@ void asASwitch() {
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const>, std::span<std::byte> r) {
           if(PortA::isOn() && PortB::isOn()) { ++bothOn; }
-          if(a == Before::Address && (PortA::isOn() || PortB::isOn())) { ++overheard; }
-          if(a != Before::Address && !PortA::isOn() && !PortB::isOn()) {
+          if(a == Before::address && (PortA::isOn() || PortB::isOn())) { ++overheard; }
+          if(a != Before::address && !PortA::isOn() && !PortB::isOn()) {
               return FakeBusResult::nack;   // nobody there with both bridges off
           }
-          std::uint8_t const who = a == Before::Address ? 0xF : PortA::isOn() ? 0xA : 0xB;
+          std::uint8_t const who = a == Before::address ? 0xF : PortA::isOn() ? 0xA : 0xB;
           for(auto& b : r) { b = std::byte{who}; }
           return FakeBusResult::ok;
       }};
@@ -749,9 +749,9 @@ using CutModuleLight   = BehindBridge<Cut, Dev<Chips::Bh1750, Enabled>>;
 using CutKeptLight     = BehindBridge<Cut, Dev<Chips::Bh1750, EnabledKeeping>>;
 using SplitModuleLight = BehindBridge<Split, Dev<Chips::Bh1750, Enabled>>;
 
-static_assert(CutModuleLight::Bridged
+static_assert(CutModuleLight::bridged
               && !Dev<Chips::Bh1750,
-                      Enabled>::Bridged);
+                      Enabled>::bridged);
 
 void disabled() {
     I2cCase testcase{"enabled(): behind a bridge, offline while either says so"};

@@ -31,18 +31,18 @@ namespace Kvasir::I2C::Chips {
 /// and `At24cxx::WritePage` get exactly the same treatment.
 template<Ohm EndToEnd = Units::ohm(10000)>
 struct Ds3502 {
-    static constexpr std::string_view Name          = "DS3502";
-    static constexpr Address7         Address       = 0x28;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "DS3502";
+    static constexpr Address7         address       = 0x28;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x28, 4>();
+    static constexpr auto addresses = addressRun<0x28, 4>();
 
-    static constexpr std::uint8_t MaxTap = 127;
+    static constexpr std::uint8_t maxTap = 127;
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     /// MODE = 0x80: wiper writes are volatile from here on.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x02, .payload = {0x80}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
@@ -52,13 +52,13 @@ struct Ds3502 {
 
     [[nodiscard]] static constexpr bool setup(Bytes  data,
                                               State& state) {
-        state.powerUpTap = static_cast<std::uint8_t>(data.u8(0) & MaxTap);
+        state.powerUpTap = static_cast<std::uint8_t>(data.u8(0) & maxTap);
         return true;   // there is no id register to check
     }
 
     struct Position {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Sample {
@@ -68,12 +68,12 @@ struct Ds3502 {
             /// is not modelled.
             [[nodiscard]] constexpr Ohm resistance() const {
                 return Units::ohm(static_cast<std::uint32_t>(tap) * Units::value(EndToEnd)
-                                  / MaxTap);
+                                  / maxTap);
             }
         };
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
-            return {static_cast<std::uint8_t>(data.u8(0) & MaxTap)};
+            return {static_cast<std::uint8_t>(data.u8(0) & maxTap)};
         }
     };
 
@@ -82,11 +82,11 @@ struct Ds3502 {
     /// tap it is written again after a reset.
     struct Wiper {
         using Value                        = std::uint8_t;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            buffer[0] = static_cast<std::byte>(value > MaxTap ? MaxTap : value);
+            buffer[0] = static_cast<std::byte>(value > maxTap ? maxTap : value);
             return Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = 1});
         }
     };
@@ -98,15 +98,15 @@ struct Ds3502 {
     /// sets.
     struct Persist {
         using Value                        = std::uint8_t;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
         /// A one-shot command: replaying it after a reset would spend another write cycle.
-        static constexpr bool Transient = true;
+        static constexpr bool transient = true;
 
         [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&         value,
                std::span<std::byte> buffer) {
-            buffer[0] = static_cast<std::byte>(value > MaxTap ? MaxTap : value);
+            buffer[0] = static_cast<std::byte>(value > maxTap ? maxTap : value);
             return {
               Engine::Step::write({.reg = 0x02, .payload = {0x00}}),
               Engine::Step::writeBuffer(

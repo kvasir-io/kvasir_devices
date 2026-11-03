@@ -16,10 +16,10 @@ namespace Kvasir::I2C::Chips {
 namespace Hmc5883lDetail {
     /// Configuration register A, DO (4:2): the continuous-measurement output rate.
     enum class Rate : std::uint8_t {
-        hz0_75 = 0,
-        hz1_5  = 1,
+        hz0p75 = 0,
+        hz1p5  = 1,
         hz3    = 2,
-        hz7_5  = 3,
+        hz7p5  = 3,
         hz15   = 4,
         hz30   = 5,
         hz75   = 6
@@ -38,7 +38,7 @@ namespace Hmc5883lDetail {
     };
 
     /// One period of each rate, rounded up to whole milliseconds.
-    inline constexpr std::array<std::chrono::milliseconds, 7> RatePeriod{
+    inline constexpr std::array<std::chrono::milliseconds, 7> ratePeriod{
       std::chrono::milliseconds{1334},
       std::chrono::milliseconds{667},
       std::chrono::milliseconds{334},
@@ -48,7 +48,7 @@ namespace Hmc5883lDetail {
       std::chrono::milliseconds{14}};
 
     inline constexpr std::array<std::uint16_t, 8>
-      CountsPerGauss{1370, 1090, 820, 660, 440, 390, 330, 230};
+      countsPerGauss{1370, 1090, 820, 660, 440, 390, 330, 230};
 }   // namespace Hmc5883lDetail
 
 /// Honeywell HMC5883L. Fixed address 0x1E, one-byte pointer, auto-increment. Bring-up:
@@ -61,38 +61,38 @@ namespace Hmc5883lDetail {
 template<Hmc5883lDetail::Rate Rate = Hmc5883lDetail::Rate::hz15,
          Hmc5883lDetail::Gain Gain = Hmc5883lDetail::Gain::g1090>
 struct Hmc5883lX {
-    static constexpr std::string_view Name = "HMC5883L";
+    static constexpr std::string_view name = "HMC5883L";
     /// Honeywell HMC5883L. HMC5883L.md:594..626: identification registers A, B, C (10..12) read the
     /// ASCII characters H, 4, 3.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id-a", 0x0A, 1, true, 0xFF, 'H'},
       Engine::RegisterCheck{"id-b", 0x0B, 1, true, 0xFF, '4'},
       Engine::RegisterCheck{"id-c", 0x0C, 1, true, 0xFF, '3'},
     };
-    static constexpr Address7                Address = 0x1E;
-    static constexpr std::array<Address7, 1> Addresses{0x1E};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x1E;
+    static constexpr std::array<Address7, 1> addresses{0x1E};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// 8 samples averaged (MA 6:5 = 11), the rate, normal bias.
-    static constexpr std::uint8_t ConfigA
+    static constexpr std::uint8_t configA
       = static_cast<std::uint8_t>(0x60U | (static_cast<unsigned>(Rate) << 2U));
-    static constexpr std::uint8_t ConfigB
+    static constexpr std::uint8_t configB
       = static_cast<std::uint8_t>(static_cast<unsigned>(Gain) << 5U);
 
-    static constexpr std::uint16_t CountsPerGauss
-      = Hmc5883lDetail::CountsPerGauss[static_cast<std::size_t>(Gain)];
-    static constexpr std::chrono::milliseconds OutputPeriod
-      = Hmc5883lDetail::RatePeriod[static_cast<std::size_t>(Rate)];
+    static constexpr std::uint16_t countsPerGauss
+      = Hmc5883lDetail::countsPerGauss[static_cast<std::size_t>(Gain)];
+    static constexpr std::chrono::milliseconds outputPeriod
+      = Hmc5883lDetail::ratePeriod[static_cast<std::size_t>(Rate)];
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = 0x00, .payload = {ConfigA}}),
-      Engine::Step::write({.reg = 0x01, .payload = {ConfigB}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = 0x00, .payload = {configA}}),
+      Engine::Step::write({.reg = 0x01, .payload = {configB}}),
       Engine::Step::write({.reg = 0x02, .payload = {0x00}, .delay = std::chrono::milliseconds{7}}),
       // The measurement the part took at power-up, at the default gain, holds RDY until it is
       // read, and the first measurement after a gain change still uses the previous gain
       // (Configuration Register B): both are read out here and dropped, and the first sample
       // kept is two output periods on (Mode Register, "first set of data after 2/fDO").
-      Engine::Step::read({.reg = 0x03, .count = 6, .offset = 0, .delay = 2 * OutputPeriod}),
+      Engine::Step::read({.reg = 0x03, .count = 6, .offset = 0, .delay = 2 * outputPeriod}),
     };
 
     struct State {
@@ -108,8 +108,8 @@ struct Hmc5883lX {
     }
 
     struct Field {
-        static constexpr auto       Period = OutputPeriod;
-        static constexpr std::array Steps{
+        static constexpr auto       period = outputPeriod;
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x03, .count = 7})};   // X, Z, Y, status
 
         struct Sample {
@@ -127,7 +127,7 @@ struct Hmc5883lX {
                 return Engine::Outcome<Sample>::reject();
             }
             auto const nT = [](std::int16_t raw) {
-                return Units::nanoTesla(static_cast<std::int64_t>(raw) * 100'000 / CountsPerGauss);
+                return Units::nanoTesla(static_cast<std::int64_t>(raw) * 100'000 / countsPerGauss);
             };
             return Engine::Outcome<Sample>::ok({nT(rx), nT(ry), nT(rz)});
         }

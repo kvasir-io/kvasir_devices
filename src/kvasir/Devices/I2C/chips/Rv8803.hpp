@@ -69,7 +69,7 @@ namespace Rv8803Detail {
     /// FD, extension register 1Dh bits 3:2 (3.6, 4.9): the square wave on CLKOUT while CLKOE is
     /// high. FD = 11 is 32.768 kHz as well and is not listed.
     enum class ClockOut : std::uint8_t {
-        khz32_768 = 0,   ///< the reset value
+        khz32p768 = 0,   ///< the reset value
         hz1024    = 1,   ///< carries the compensation pulses (4.9 note 1)
         hz1       = 2,   ///< what 5.4's offset calibration measures
     };
@@ -83,8 +83,8 @@ namespace Rv8803Detail {
     /// ET, event control 2Fh bits 5:4 (3.10, 4.8.2): EVI's digital debounce.
     enum class EventFilter : std::uint8_t {
         none   = 0,   ///< edge detection, pulses of 30.5 us and longer
-        ms3_9  = 1,   ///< sampled at 256 Hz
-        ms15_6 = 2,   ///< 64 Hz
+        ms3p9  = 1,   ///< sampled at 256 Hz
+        ms15p6 = 2,   ///< 64 Hz
         ms125  = 3,   ///< 8 Hz
     };
 
@@ -179,23 +179,23 @@ namespace Rv8803Detail {
 /// "For devices with production date code 853 and earlier it is recommended ... to complete
 /// the I2C-bus access always with a Read Operation followed by the STOP condition" (7.6).
 /// Parts that old are not accommodated: Init, SetTime and the write groups end with a write.
-template<Rv8803Detail::ClockOut       Fd     = Rv8803Detail::ClockOut::khz32_768,
+template<Rv8803Detail::ClockOut       Fd     = Rv8803Detail::ClockOut::khz32p768,
          Rv8803Detail::EventInterrupt Events = Rv8803Detail::EventInterrupt::off>
 struct Rv8803 {
-    static constexpr std::string_view        Name    = "RV-8803";
-    static constexpr Address7                Address = 0x32;
-    static constexpr std::array<Address7, 1> Addresses{0x32};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "RV-8803";
+    static constexpr Address7                address = 0x32;
+    static constexpr std::array<Address7, 1> addresses{0x32};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// The part does not acknowledge its address during a 61 us window while it updates its
     /// internal counters, once a second (Linux rtc-rv8803.c retries every transfer up to four
     /// times for it); a NAK there is put back on the wire rather than counted as a fault.
-    static constexpr std::uint8_t WakeRetries = 3;
+    static constexpr std::uint8_t wakeRetries = 3;
 
     /// tPOR1, the power-on delay (7.4: typ 3 ms, max 10 ms). Verify: the table describes the
     /// CLKOUT pin, and the power-on reset duration tPOR2 behind it is 80 ms typ, 500 ms max;
     /// the manual does not say when the I2C interface answers.
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     using Time         = Rv8803Detail::Time;
     using Centiseconds = Rv8803Detail::Centiseconds;
@@ -206,37 +206,37 @@ struct Rv8803 {
     using EventFilter  = Rv8803Detail::EventFilter;
 
     // flag register 1Eh (3.7)
-    static constexpr std::uint8_t V1F = 0x01;
-    static constexpr std::uint8_t V2F = 0x02;
-    static constexpr std::uint8_t EVF = 0x04;
-    static constexpr std::uint8_t AF  = 0x08;
-    static constexpr std::uint8_t TF  = 0x10;
-    static constexpr std::uint8_t UF  = 0x20;
+    static constexpr std::uint8_t v1f = 0x01;
+    static constexpr std::uint8_t v2f = 0x02;
+    static constexpr std::uint8_t evf = 0x04;
+    static constexpr std::uint8_t af  = 0x08;
+    static constexpr std::uint8_t tf  = 0x10;
+    static constexpr std::uint8_t uf  = 0x20;
 
     // control register 1Fh (3.8)
-    static constexpr std::uint8_t Reset = 0x01;
-    static constexpr std::uint8_t Eie   = 0x04;
+    static constexpr std::uint8_t reset = 0x01;
+    static constexpr std::uint8_t eie   = 0x04;
 
     /// Control as this description keeps it: every interrupt off but EIE when asked, RESET 0.
-    static constexpr std::uint8_t Control = Events == Rv8803Detail::EventInterrupt::on ? Eie : 0x00;
+    static constexpr std::uint8_t control = Events == Rv8803Detail::EventInterrupt::on ? eie : 0x00;
 
     /// A write of 0 clears a flag; a write of 1 leaves it (3.7 says so for V1F and V2F; for UF,
     /// TF, AF and EVF it only says "cleared by writing a 0" -- verify that a 1 is ignored).
-    static constexpr std::uint8_t ClearEventFlags   = static_cast<std::uint8_t>(V1F | V2F);
-    static constexpr std::uint8_t ClearVoltageFlags = static_cast<std::uint8_t>(UF | TF | AF | EVF);
-    static constexpr std::uint8_t ClearEvfOnly
-      = static_cast<std::uint8_t>(UF | TF | AF | V2F | V1F);
+    static constexpr std::uint8_t clearEventFlags   = static_cast<std::uint8_t>(v1f | v2f);
+    static constexpr std::uint8_t clearVoltageFlags = static_cast<std::uint8_t>(uf | tf | af | evf);
+    static constexpr std::uint8_t clearEvfOnly
+      = static_cast<std::uint8_t>(uf | tf | af | v2f | v1f);
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::read(
         {.reg = 0x1E, .count = 2, .offset = 0}),   // flags, control: what the part held
       Engine::Step::read({.reg = 0x2C, .count = 1, .offset = 2}),   // offset
       Engine::Step::identify(),
       Engine::Step::write(
         {.reg     = 0x1E,
-         .payload = {ClearEventFlags}}),   // UF TF AF EVF cleared, V1F V2F left as they are
+         .payload = {clearEventFlags}}),   // UF TF AF EVF cleared, V1F V2F left as they are
       Engine::Step::write(
-        {.reg = 0x1F, .payload = {Control}}),   // RESET released, interrupts as configured
+        {.reg = 0x1F, .payload = {control}}),   // RESET released, interrupts as configured
     };
 
     struct State {
@@ -250,22 +250,22 @@ struct Rv8803 {
     [[nodiscard]] static constexpr bool setup(Bytes  data,
                                               State& state) {
         auto const flags          = data.u8(0);
-        auto const control        = data.u8(1);
+        auto const controlHere    = data.u8(1);
         auto const offset         = data.u8(2);
-        state.timeLost            = (flags & V2F) != 0;
-        state.compensationStopped = (flags & V1F) != 0;
-        state.wasStopped          = (control & Reset) != 0;
+        state.timeLost            = (flags & v2f) != 0;
+        state.compensationStopped = (flags & v1f) != 0;
+        state.wasStopped          = (controlHere & reset) != 0;
         state.offset              = static_cast<std::int8_t>(Bytes::signExtend(offset & 0x3FU, 6));
         state.clockOut            = Fd;
-        return (flags & 0xC0U) == 0 && (control & 0x02U) == 0 && (offset & 0xC0U) == 0;
+        return (flags & 0xC0U) == 0 && (controlHere & 0x02U) == 0 && (offset & 0xC0U) == 0;
     }
 
     /// The time, once a second: 10h..1Eh in one burst (the time, the alarm and timer
     /// registers nothing reads, the extension and the flag register), then the seconds again.
     struct Clock {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x10, .count = 15, .offset = 0}),
           Engine::Step::read({.reg = 0x11, .count = 1, .offset = 15})};
 
@@ -302,8 +302,8 @@ struct Rv8803 {
             t.weekday        = std::chrono::weekday{weekday};
             t.time           = Centiseconds{((hh * 60 + mm) * 60 + ss) * 100 + cc};
             auto const flags = data.u8(14);
-            t.valid          = (flags & V2F) == 0;
-            t.compensated    = (flags & V1F) == 0;
+            t.valid          = (flags & v2f) == 0;
+            t.compensated    = (flags & v1f) == 0;
             return Engine::Outcome<Sample>::ok(t);
         }
     };
@@ -314,8 +314,8 @@ struct Rv8803 {
     /// ignored. A year outside 2000..2099 is written as 00 or 99.
     struct SetTime {
         using Value                            = Time;
-        static constexpr std::size_t Bytes     = 7;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 7;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   4>
@@ -336,13 +336,13 @@ struct Rv8803 {
             put(6, static_cast<unsigned>(digit));
             return {
               Engine::Step::write(
-                {.reg = 0x1F, .payload = {static_cast<std::uint8_t>(Control | Reset)}}),
+                {.reg = 0x1F, .payload = {static_cast<std::uint8_t>(control | reset)}}),
               Engine::Step::writeBuffer({.reg = 0x11, .offset = 0, .count = 7}),
               Engine::Step::write(
                 {.reg     = 0x1E,
-                 .payload = {ClearVoltageFlags}}),   // V2F and V1F: the time is valid again
+                 .payload = {clearVoltageFlags}}),   // V2F and V1F: the time is valid again
               Engine::Step::write(
-                {.reg = 0x1F, .payload = {Control}}),   // RESET released: the second starts now
+                {.reg = 0x1F, .payload = {control}}),   // RESET released: the second starts now
             };
         }
 
@@ -361,7 +361,7 @@ struct Rv8803 {
     /// bring-up.
     struct Offset {
         using Value                        = std::int8_t;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr std::int8_t clamp(Value v) {
             return v < -32 ? std::int8_t{-32} : (v > 31 ? std::int8_t{31} : v);
@@ -383,8 +383,8 @@ struct Rv8803 {
     /// the extension register is written as its reset value 0 (TEST must be 0, 3.6).
     struct ClockOut {
         using Value                          = ClockOutRate;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Fd;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Fd;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -402,7 +402,7 @@ struct Rv8803 {
     /// debounce. ERST is written 0. No Initial: the reset value is capture off.
     struct EventControl {
         using Value                        = EventCapture;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -425,9 +425,9 @@ struct Rv8803 {
     /// hundredth of different minutes, without EVF, look like one. Until the first event, a
     /// request with EVF clear is unchanged.
     struct Event {
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x1E, .count = 1, .offset = 0}),
-          Engine::Step::write({.reg = 0x1E, .payload = {ClearEvfOnly}}),
+          Engine::Step::write({.reg = 0x1E, .payload = {clearEvfOnly}}),
           Engine::Step::read({.reg = 0x20, .count = 2, .offset = 1}),
         };
 
@@ -443,7 +443,7 @@ struct Rv8803 {
             auto const ss = data.bcd(2, 0x7F);
             if(ss > 59) { return Engine::Outcome<Sample>::reject(); }
             Sample const now{Centiseconds{ss * 100 + cc}};
-            bool const   flagged = (data.u8(0) & EVF) != 0;
+            bool const   flagged = (data.u8(0) & evf) != 0;
             bool const   moved
               = previous.stamp >= Centiseconds::zero() && now.stamp != previous.stamp;
             if(flagged || moved) { return Engine::Outcome<Sample>::ok(now); }

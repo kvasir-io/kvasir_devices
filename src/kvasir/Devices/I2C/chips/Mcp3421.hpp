@@ -19,18 +19,18 @@ namespace Kvasir::I2C::Chips {
 /// trailing configuration byte) set means the register has not been updated since the
 /// last read, so the read is repeated. 0x68 by default (0x68..0x6F are factory options).
 struct Mcp3421 {
-    static constexpr std::string_view Name          = "MCP3421";
-    static constexpr Address7         Address       = 0x68;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "MCP3421";
+    static constexpr Address7         address       = 0x68;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr auto Addresses = addressRun<0x68, 8>();
+    static constexpr auto addresses = addressRun<0x68, 8>();
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x9C}, .delay = std::chrono::milliseconds{270}})};
 
     struct Conversion {
-        static constexpr auto       Period = std::chrono::milliseconds{300};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 4, .offset = 0})};
+        static constexpr auto       period = std::chrono::milliseconds{300};
+        static constexpr std::array steps{Engine::Step::receive({.count = 4, .offset = 0})};
 
         struct Sample {
             std::int32_t code{};   ///< 18-bit two's complement

@@ -9,7 +9,7 @@
 /// Pins are fast enough to scan, so this is the backend a `MultiplexedLayout` runs on.
 namespace Kvasir::SegmentDisplay {
 
-/// Output lines on pins, through a policy: `Pins::Count` lines, `Pins::write(line, Level)`, and
+/// Output lines on pins, through a policy: `Pins::count` lines, `Pins::write(line, Level)`, and
 /// an optional `Pins::init()` run once from the constructor. `KvasirPins` is the policy for
 /// Kvasir pin types; a test hands in one that records. Only the lines that changed are
 /// written, so an update that changes nothing touches no pin.
@@ -18,10 +18,10 @@ class GpioSegments {
 public:
     using TimePoint = typename Clock::time_point;
 
-    static constexpr std::size_t Outputs  = Pins::Count;
-    static constexpr Scan        Scanning = Scan::supported;
+    static constexpr std::size_t outputs  = Pins::count;
+    static constexpr Scan        scanning = Scan::supported;
 
-    using Bits = std::bitset<Outputs>;
+    using Bits = std::bitset<outputs>;
 
     GpioSegments() {
         if constexpr(requires { Pins::init(); }) { Pins::init(); }
@@ -29,7 +29,7 @@ public:
 
     bool show(Bits const& levels) {
         bool changed = false;
-        for(std::size_t line = 0; line < Outputs; ++line) {
+        for(std::size_t line = 0; line < outputs; ++line) {
             if(known_ && levels.test(line) == shadow_.test(line)) { continue; }
             Pins::write(line, levels.test(line) ? Level::high : Level::low);
             changed = true;
@@ -48,7 +48,7 @@ private:
 /// constructor on. Include the part's Io header before this one.
 template<typename... P>
 struct KvasirPins {
-    static constexpr std::size_t Count = sizeof...(P);
+    static constexpr std::size_t count = sizeof...(P);
 
     static void init() { apply(makeOutput(P{})...); }
 

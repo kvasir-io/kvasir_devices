@@ -18,8 +18,8 @@
 namespace Kvasir::Bus {
 template<typename Core, typename Request>
 struct QueuedFront {
-    static constexpr std::size_t QueueDepth   = Core::QueueDepth;
-    static constexpr std::size_t CallbackSize = Core::CallbackSize;
+    static constexpr std::size_t queueDepth   = Core::queueDepth;
+    static constexpr std::size_t callbackSize = Core::callbackSize;
 
     using Result  = typename Core::Result;
     using Latency = typename Core::Latency;
@@ -29,7 +29,7 @@ struct QueuedFront {
 
     /// submit(), with a ticket for cancel(); an invalid ticket (refused, no callback) when submit() would be false.
     static Ticket submitTracked(Request const& r)
-        requires(Core::Tracked)
+        requires(Core::tracked)
     {
         return Core::submitTracked(r);
     }
@@ -38,7 +38,7 @@ struct QueuedFront {
     /// wire - the chip stops it at the next chance and its interrupt completes it (cancelled); its buffers belong to
     /// the bus until then. tooLate: completed already, or an unknown ticket.
     static Cancel cancel(Ticket t)
-        requires(Core::Features.cancel)
+        requires(Core::features.cancel)
     {
         return Core::cancel(t);
     }
@@ -59,42 +59,42 @@ struct QueuedFront {
 
     /// Times the dead-bus watch stepped in.
     static std::uint32_t resuscitations()
-        requires(Core::Features.counters)
+        requires(Core::features.counters)
     {
         return Core::resuscitations();
     }
 
     /// Transfers turn() gave up on after their timeout.
     static std::uint32_t timeouts()
-        requires(Core::Features.counters)
+        requires(Core::features.counters)
     {
         return Core::timeouts();
     }
 
     /// Requests accepted for the wire since boot.
     static std::uint32_t transfers()
-        requires(Core::Features.counters)
+        requires(Core::features.counters)
     {
         return Core::transfers();
     }
 
     /// Queued requests failed without going on the wire (a reset or recovery, an expired deadline).
     static std::uint32_t drainedRequests()
-        requires(Core::Features.counters)
+        requires(Core::features.counters)
     {
         return Core::drainedRequests();
     }
 
     /// The registers and times of the last timeout.
     static typename Core::TimeoutSnapshot const& lastTimeout()
-        requires(Core::Features.timeoutSnapshot)
+        requires(Core::features.timeoutSnapshot)
     {
         return Core::lastTimeout();
     }
 
     /// lastTimeout() as a log line.
     static void logLastTimeout()
-        requires(Core::Features.timeoutSnapshot)
+        requires(Core::features.timeoutSnapshot)
     {
         Core::logLastTimeout();
     }
@@ -102,7 +102,7 @@ struct QueuedFront {
     /// The protocol's waits (I2C: first interrupt and interrupt gap; SPI: queue wait and lateness) since the last
     /// call. Taken and cleared.
     static Latency takeLatency()
-        requires(Core::Features.latency)
+        requires(Core::features.latency)
     {
         return Core::takeLatency();
     }

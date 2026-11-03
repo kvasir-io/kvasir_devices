@@ -144,7 +144,7 @@ template<template<typename, typename> class BackendT,
          template<typename, typename, typename, std::size_t, std::size_t> class... Mixins>
 struct Device;
 
-namespace detail {
+namespace Detail {
     // A mixin is a base of the device and so is instantiated while the device is incomplete:
     // the backend is read off the device's template arguments, not out of its body.
     template<typename DeviceT>
@@ -168,17 +168,17 @@ namespace detail {
                             Mixins...>> {
         using type = BackendT<Clock, ConfigT>;
     };
-}   // namespace detail
+}   // namespace Detail
 
 /// The backend of a device, usable from a mixin (where the device is still incomplete).
 template<typename DeviceT>
-using BackendOf = typename detail::BackendOf<DeviceT>::type;
+using BackendOf = typename Detail::BackendOf<DeviceT>::type;
 
 /// One of a device's endpoints.
 template<typename DeviceT, std::size_t Number, EndpointDirection Dir, EndpointTransferType Type>
 using EndpointOf = typename BackendOf<DeviceT>::template Endpoint<Number, Dir, Type>;
 
-namespace detail {
+namespace Detail {
     template<typename E>
     concept EndpointCommon = requires {
         { E::queueDepth } -> std::convertible_to<std::size_t>;
@@ -228,5 +228,5 @@ namespace detail {
         B::maskInterrupt();
         B::unmaskInterrupt();
     };
-}   // namespace detail
+}   // namespace Detail
 }   // namespace Kvasir::USB

@@ -22,7 +22,7 @@ namespace Mpu6050Detail {
 
     /// Per LSB in FS_SEL's order: 1 / 131, 1 / 65.5, 1 / 32.8 and 1 / 16.4 deg/s, to the
     /// nearest micro-degree a second.
-    inline constexpr std::array<MicroDegPerSec, 4> RatePerCount{Units::microDegPerSec(7634),
+    inline constexpr std::array<MicroDegPerSec, 4> ratePerCount{Units::microDegPerSec(7634),
                                                                 Units::microDegPerSec(15267),
                                                                 Units::microDegPerSec(30488),
                                                                 Units::microDegPerSec(60976)};
@@ -53,50 +53,50 @@ namespace Mpu6050Detail {
 template<Mpu6050Detail::AccelRange Accel = Mpu6050Detail::AccelRange::g2,
          Mpu6050Detail::GyroRange  Gyro  = Mpu6050Detail::GyroRange::dps250>
 struct Mpu6050x {
-    static constexpr std::string_view Name = "MPU6050";
+    static constexpr std::string_view name = "MPU6050";
     /// InvenSense MPU-6050. MPU6050_RegMap.md:1929..1943, WHO_AM_I (register 117) defaults to 0x68,
     /// bits 6:1.
     /// Configuration (MPU6050_RegMap.md:255, :155, :419): PWR_MGMT_1 SLEEP clear with CLKSEL 1, the
     /// X gyro's PLL; with the DLPF on (DLPF_CFG 3) the gyro runs at 1 kHz, so SMPLRT_DIV 9 is the
     /// 100 Hz output rate; FS_SEL and AFS_SEL 0 are 250 dps and 2 g.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x75, 1, true, 0x7E, 0x68},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{     "awake-pll", 0x6B, 1, true, 0x47, 0x01},
       Engine::RegisterCheck{"sample-divider", 0x19, 1, true, 0xFF, 0x09},
       Engine::RegisterCheck{          "dlpf", 0x1A, 1, true, 0x07, 0x03},
       Engine::RegisterCheck{   "gyro-250dps", 0x1B, 1, true, 0x18, 0x00},
       Engine::RegisterCheck{      "accel-2g", 0x1C, 1, true, 0x18, 0x00},
     };
-    static constexpr Address7                Address = 0x68;
-    static constexpr std::array<Address7, 2> Addresses{0x68, 0x69};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x68;
+    static constexpr std::array<Address7, 2> addresses{0x68, 0x69};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::uint8_t GyroConfigByte
+    static constexpr std::uint8_t gyroConfigByte
       = static_cast<std::uint8_t>(static_cast<unsigned>(Gyro) << 3U);   // FS_SEL
-    static constexpr std::uint8_t AccelConfigByte
+    static constexpr std::uint8_t accelConfigByte
       = static_cast<std::uint8_t>(static_cast<unsigned>(Accel) << 3U);   // AFS_SEL
 
     /// WHO_AM_I first, and checked before anything is written (Step::identify): 0x68 is also
     /// the address of the DS1307, DS3231 and PCF8523 clocks. Linux reads it first too.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
         {.reg = 0x6B, .payload = {0x80}, .delay = std::chrono::milliseconds{100}}),
       Engine::Step::write({.reg = 0x6B, .payload = {0x01}}),
       Engine::Step::write({.reg = 0x19, .payload = {9}}),
       Engine::Step::write({.reg = 0x1A, .payload = {3}}),
-      Engine::Step::write({.reg = 0x1B, .payload = {GyroConfigByte}}),
-      Engine::Step::write({.reg = 0x1C, .payload = {AccelConfigByte}}),
+      Engine::Step::write({.reg = 0x1B, .payload = {gyroConfigByte}}),
+      Engine::Step::write({.reg = 0x1C, .payload = {accelConfigByte}}),
       Engine::Step::write({.reg = 0x38, .payload = {0x01}}),   // INT_ENABLE: DATA_RDY_EN
     };
 
     using State = Mpu6050Detail::State;
 
     /// The rate one count stands for at the range the bring-up sets.
-    static constexpr MicroDegPerSec RatePerCount
-      = Mpu6050Detail::RatePerCount[static_cast<std::size_t>(Gyro)];
+    static constexpr MicroDegPerSec ratePerCount
+      = Mpu6050Detail::ratePerCount[static_cast<std::size_t>(Gyro)];
 
     /// What the engine read of the Identity above, once it matched and before Init runs:
     /// `state().deviceId` is the part's own word, read once.
@@ -108,11 +108,11 @@ struct Mpu6050x {
     }
 
     struct Motion {
-        static constexpr auto Period = std::chrono::milliseconds{20};
+        static constexpr auto period = std::chrono::milliseconds{20};
         /// So the frames that said nothing new are counted (unchanged<Motion>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x3A, .count = 15})};   // INT_STATUS, then 0x3B..0x48
 
         struct Sample {
@@ -130,7 +130,7 @@ struct Mpu6050x {
                 return Engine::Outcome<Sample>::unchanged();
             }   // DATA_RDY_INT
             Sample     sample{};
-            auto const perRate = Units::value(Mpu6050Detail::RatePerCount[state.gyroRange & 0x03U]);
+            auto const perRate = Units::value(Mpu6050Detail::ratePerCount[state.gyroRange & 0x03U]);
             for(std::size_t i = 0; i < 3; ++i) {
                 // 1e6 / 16384 = 15625 / 256 micro-g at +-2 g, doubling with each range step.
                 auto const accel = static_cast<std::int64_t>(data.s16be(1 + 2 * i)) * 15625
@@ -148,8 +148,8 @@ struct Mpu6050x {
     /// ACCEL_CONFIG: AFS_SEL in 4:3 (the self-test bits above it), changeable at run time.
     struct AccelConfig {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = AccelConfigByte;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = accelConfigByte;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -166,8 +166,8 @@ struct Mpu6050x {
     /// GYRO_CONFIG: FS_SEL in 4:3.
     struct GyroConfig {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = GyroConfigByte;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = gyroConfigByte;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

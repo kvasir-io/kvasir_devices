@@ -75,7 +75,7 @@ template<typename I2c,
          Kvasir::I2C::Chips::TouchDetail::Controller Ctrl,
          typename Config,
          typename Reset = Kvasir::NoReset>
-struct Controller : Kvasir::detail::ForwardClaims<Reset> {
+struct Controller : Kvasir::Detail::ForwardClaims<Reset> {
     using Chip      = Kvasir::I2C::Chips::TouchPanel<Ctrl, Config>;
     using Device    = Kvasir::I2C::Device<I2c, Clock, Chip, Config, Reset>;
     using DeviceT   = Device;   ///< for a DeviceSet (DeviceSet.hpp)
@@ -87,13 +87,13 @@ struct Controller : Kvasir::detail::ForwardClaims<Reset> {
     static_assert(std::derived_from<Config,
                                     Defaults>,
                   "derive the touch config from Kvasir::I2C::Touch::Defaults");
-    static_assert(Config::Width > 0 && Config::Height > 0,
+    static_assert(Config::width > 0 && Config::height > 0,
                   "Config needs Width and Height");
-    static_assert(Config::Width <= 4096 && Config::Height <= 4096,
+    static_assert(Config::width <= 4096 && Config::height <= 4096,
                   "a 12-bit controller coordinate");
 
     /// The INT edge the controller produces, for the application's GPIO interrupt.
-    static constexpr IntEdge Int = Chip::Int;
+    static constexpr IntEdge intPin = Chip::intPin;
 
     /// From the INT line's interrupt: asks for one data read on the next free turn. The
     /// engine's request<> is an atomic store, and a requested group is picked ahead of every
@@ -140,8 +140,8 @@ struct Controller : Kvasir::detail::ForwardClaims<Reset> {
     transform(std::uint16_t rx,
               std::uint16_t ry) {
         if constexpr(Config::swapXY == Axes::swapped) { std::swap(rx, ry); }
-        return {mirror_(rx, Config::Width, Config::flipX),
-                mirror_(ry, Config::Height, Config::flipY)};
+        return {mirror_(rx, Config::width, Config::flipX),
+                mirror_(ry, Config::height, Config::flipY)};
     }
 
     /// Once per loop turn: the device's own turn, then anything it has to say.
@@ -202,11 +202,11 @@ private:
         if(id.width == 0) { return; }
         auto const [cw, ch]
           = Config::swapXY == Axes::swapped
-            ? std::pair<std::uint16_t, std::uint16_t>{Config::Height, Config::Width}
-            : std::pair<std::uint16_t, std::uint16_t>{Config::Width, Config::Height};
+            ? std::pair<std::uint16_t, std::uint16_t>{Config::height, Config::width}
+            : std::pair<std::uint16_t, std::uint16_t>{Config::width, Config::height};
         if(id.width != cw || id.height != ch) {
             UC_LOG_W("{}: the controller reports {}x{}, the config says {}x{}",
-                     Chip::Name,
+                     Chip::name,
                      id.width,
                      id.height,
                      cw,

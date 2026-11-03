@@ -30,16 +30,16 @@ namespace Kvasir::I2C::Chips {
 /// clock drifts. It defaults to 12.5 pF, the commoner part; the reset value is 7 pF, so a
 /// design with a 7 pF crystal must say so.
 namespace Pcf85063aDetail {
-    enum class LoadCapacitance : std::uint8_t { pf7 = 0x00, pf12_5 = 0x01 };
+    enum class LoadCapacitance : std::uint8_t { pf7 = 0x00, pf12p5 = 0x01 };
 }   // namespace Pcf85063aDetail
 
 template<unsigned                         Epoch = 2000,
-         Pcf85063aDetail::LoadCapacitance Load  = Pcf85063aDetail::LoadCapacitance::pf12_5>
+         Pcf85063aDetail::LoadCapacitance Load  = Pcf85063aDetail::LoadCapacitance::pf12p5>
 struct Pcf85063a {
-    static constexpr std::string_view        Name    = "PCF85063A";
-    static constexpr Address7                Address = 0x51;
-    static constexpr std::array<Address7, 1> Addresses{0x51};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "PCF85063A";
+    static constexpr Address7                address = 0x51;
+    static constexpr std::array<Address7, 1> addresses{0x51};
+    static constexpr std::size_t             registerBytes = 1;
 
     static_assert(Epoch >= 1900 && Epoch <= 2100,
                   "Epoch is the first year of the century the two-digit year counts from");
@@ -47,13 +47,13 @@ struct Pcf85063a {
     /// Control_1: normal mode, the clock running, no software reset, no correction interrupt,
     /// 24-hour mode, and the crystal's load capacitance. Written at every bring-up, so a part
     /// that came up in 12-hour mode or at the wrong load after losing power is put back.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x00, .payload = {static_cast<std::uint8_t>(Load)}})};
 
     struct Time {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x04, .count = 7, .offset = 0})};
 
         struct Sample {
@@ -90,8 +90,8 @@ struct Pcf85063a {
     struct SetTime {
         using Value = typename Time::Sample;
 
-        static constexpr std::size_t Bytes     = 7;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 7;
+        static constexpr bool        transient = true;
 
         /// The two digits a year is written as: 0 for anything before Epoch, 99 for anything
         /// past Epoch + 99.

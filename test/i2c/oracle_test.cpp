@@ -37,7 +37,7 @@ struct IdentityPart {
     Says          says{Says::expect};
     std::uint32_t pointer{};
 
-    [[nodiscard]] static constexpr std::size_t regBytes() { return Chip::Identity[0].regBytes; }
+    [[nodiscard]] static constexpr std::size_t regBytes() { return Chip::identity[0].regBytes; }
 
     FakeBusResult operator()(std::uint8_t,
                              std::span<std::byte const> sent,
@@ -52,14 +52,14 @@ struct IdentityPart {
         auto        reg = pointer;
         while(at < recv.size()) {
             Kvasir::Engine::RegisterCheck const* hit = nullptr;
-            for(auto const& c : Chip::Identity) {
+            for(auto const& c : Chip::identity) {
                 if(c.reg == reg) { hit = &c; }
             }
             if(hit == nullptr) {
                 recv[at++] = std::byte{0};
             } else {
                 auto value = hit->expect;
-                if(says == Says::also && hit->also != Kvasir::Engine::RegisterCheck::None) {
+                if(says == Says::also && hit->also != Kvasir::Engine::RegisterCheck::none) {
                     value = hit->also;
                 }
                 if(says == Says::wrong) { value = hit->expect ^ hit->mask; }
@@ -96,12 +96,12 @@ struct Spy : Chip {
 /// engine has read already, and a second place for the value to live.
 template<typename Chip>
 constexpr bool readsIdentityItself() {
-    if constexpr(requires { std::span<Kvasir::Engine::Step const>{Chip::Init}; }) {
-        for(auto const& s : Chip::Init) {
+    if constexpr(requires { std::span<Kvasir::Engine::Step const>{Chip::init}; }) {
+        for(auto const& s : Chip::init) {
             if(s.kind != Kvasir::Engine::Step::Kind::read || !s.hasRegister || s.regFromBuffer) {
                 continue;
             }
-            for(auto const& c : Chip::Identity) {
+            for(auto const& c : Chip::identity) {
                 // a block read that starts below the register and runs over it counts too
                 if(c.reg >= s.reg && c.reg < static_cast<unsigned>(s.reg) + s.count) {
                     return true;
@@ -114,8 +114,8 @@ constexpr bool readsIdentityItself() {
 
 template<typename Chip>
 constexpr bool hasAlso() {
-    for(auto const& c : Chip::Identity) {
-        if(c.also != Kvasir::Engine::RegisterCheck::None) { return true; }
+    for(auto const& c : Chip::identity) {
+        if(c.also != Kvasir::Engine::RegisterCheck::none) { return true; }
     }
     return false;
 }
@@ -127,9 +127,9 @@ template<typename Chip>
 void identityFromTheDataSheet() {
     using D = Device<FakeBus, FakeClock, Chip>;
     using S = Device<FakeBus, FakeClock, Spy<Chip>>;
-    if constexpr(D::HasIdentity) {
+    if constexpr(D::hasIdentity) {
         using Part = IdentityPart<Chip>;
-        std::string const name{Chip::Name};
+        std::string const name{Chip::name};
 
         auto const passes = [&](typename Part::Says says, std::string const& what) {
             fresh();
@@ -139,12 +139,12 @@ void identityFromTheDataSheet() {
             S d{};
             check(runUntil(d, [&] { return d.identityMatched(); }, 5s), name + what);
             checkEq(Seen<Chip>::ids.size(),
-                    Chip::Identity.size(),
+                    Chip::identity.size(),
                     name + ": identified() is handed every value");
-            for(std::size_t i = 0; i < Chip::Identity.size() && i < Seen<Chip>::ids.size(); ++i) {
-                auto const& c = Chip::Identity[i];
+            for(std::size_t i = 0; i < Chip::identity.size() && i < Seen<Chip>::ids.size(); ++i) {
+                auto const& c = Chip::identity[i];
                 auto const  wanted
-                  = says == Part::Says::also && c.also != Kvasir::Engine::RegisterCheck::None
+                  = says == Part::Says::also && c.also != Kvasir::Engine::RegisterCheck::none
                     ? c.also
                     : c.expect;
                 checkEq(Seen<Chip>::ids[i] & c.mask,

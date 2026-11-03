@@ -28,20 +28,20 @@ namespace Kvasir::I2C::Chips {
 /// restored in the order Output, Direction, Polarity, so a replay after a reset never
 /// drives a pin from a stale latch. 0x18..0x1F by A2..A0.
 struct Pca9557 {
-    static constexpr std::string_view Name          = "PCA9557";
-    static constexpr Address7         Address       = 0x18;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "PCA9557";
+    static constexpr Address7         address       = 0x18;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x18, 8>();
+    static constexpr auto addresses = addressRun<0x18, 8>();
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{50};
+    static constexpr auto startupDelay = std::chrono::milliseconds{50};
 
     /// The input port read is the presence probe.
-    static constexpr std::array Init{Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+    static constexpr std::array init{Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Pins {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Sample {

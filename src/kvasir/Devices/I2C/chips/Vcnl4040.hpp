@@ -19,20 +19,20 @@ namespace Kvasir::I2C::Chips {
 /// 0x03 = 0 (proximity on, 1T, 12 bit); PS_CONF3/MS 0x04 = 0. Data: PS 0x08, ALS 0x09,
 /// WHITE 0x0A (Table 13).
 struct Vcnl4040 {
-    static constexpr std::string_view Name = "VCNL4040";
+    static constexpr std::string_view name = "VCNL4040";
     /// Vishay VCNL4040. VCNL4040.md:442..443, :620..621: command code 0x0C reads ID_L 0x86 then ID_M
     /// 0x01, low byte first.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x0C, 2, false, 0xFFFF, 0x0186},
     };
-    static constexpr Address7                Address = 0x60;
-    static constexpr std::array<Address7, 1> Addresses{0x60};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x60;
+    static constexpr std::array<Address7, 1> addresses{0x60};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::uint16_t DeviceId = 0x0186;
+    static constexpr std::uint16_t deviceId = 0x0186;
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x00, .payload = {0x00, 0x00}}),
       Engine::Step::write({.reg = 0x03, .payload = {0x00, 0x00}}),
       Engine::Step::write(
@@ -55,8 +55,8 @@ struct Vcnl4040 {
     }
 
     struct Light {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x08, .count = 2, .offset = 0}),
           Engine::Step::read({.reg = 0x09, .count = 2, .offset = 2}),
           Engine::Step::read({.reg = 0x0A, .count = 2, .offset = 4})};

@@ -17,7 +17,7 @@ concept BusLike = requires {
     typename M::ChipCores;
     typename M::PortT;
     typename M::ClockT;
-    M::Flags;
+    M::flags;
 };
 
 /// A driver that holds its engine device inside (TouchController, Max31865, Ad7124, Max7219): `DeviceT`, `device()`
@@ -62,7 +62,7 @@ class DeviceSet {
         using Cores                             = typename M::ChipCores;
         using Port                              = typename M::PortT;
         using Clock                             = typename M::ClockT;
-        static constexpr detail::SetFlags Flags = M::Flags;
+        static constexpr Detail::SetFlags flags = M::flags;
     };
 
     template<typename M>
@@ -71,7 +71,7 @@ class DeviceSet {
         using Cores                             = List<typename M::DeviceT::Core>;
         using Port                              = typename M::DeviceT::Core::PortT;
         using Clock                             = typename M::DeviceT::Core::ClockT;
-        static constexpr detail::SetFlags Flags = detail::flagsOf<typename M::DeviceT>();
+        static constexpr Detail::SetFlags flags = Detail::flagsOf<typename M::DeviceT>();
     };
 
     template<typename M>
@@ -80,7 +80,7 @@ class DeviceSet {
         using Cores                             = List<typename M::Core>;
         using Port                              = typename M::Core::PortT;
         using Clock                             = typename M::Core::ClockT;
-        static constexpr detail::SetFlags Flags = detail::flagsOf<M>();
+        static constexpr Detail::SetFlags flags = Detail::flagsOf<M>();
     };
 
     using First = std::tuple_element_t<0, std::tuple<Ms...>>;
@@ -100,12 +100,12 @@ public:
                   "the parts of a DeviceSet share one clock");
 
     /// The set: the distinct chips of every member.
-    static constexpr detail::SetFlags Flags{.anyGate  = (Traits<Ms>::Flags.anyGate || ...),
-                                            .anyReset = (Traits<Ms>::Flags.anyReset || ...)};
-    using SetOpsT = typename detail::SetOpsOf<PortT,
+    static constexpr Detail::SetFlags flags{.anyGate  = (Traits<Ms>::flags.anyGate || ...),
+                                            .anyReset = (Traits<Ms>::flags.anyReset || ...)};
+    using SetOpsT = typename Detail::SetOpsOf<PortT,
                                               ClockT,
-                                              Flags,
-                                              typename detail::Unique<typename detail::Concat<
+                                              flags,
+                                              typename Detail::Unique<typename Detail::Concat<
                                                 typename Traits<Ms>::Cores...>::type>::type>::type;
 
     DeviceSet() {
@@ -145,7 +145,7 @@ public:
     }
 
 private:
-    using Engine = detail::Engine<PortT, ClockT>;
+    using Engine = Detail::Engine<PortT, ClockT>;
 
     template<typename M>
     struct Slot {

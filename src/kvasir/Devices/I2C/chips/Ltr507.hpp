@@ -20,7 +20,7 @@ namespace Ltr507Detail {
     /// ALS_MEAS_RATE repeat rate (2:0).
     enum class AlsRate : std::uint8_t { ms100 = 0, ms200 = 1, ms500 = 2, ms1000 = 3, ms2000 = 4 };
 
-    inline constexpr std::array<std::chrono::milliseconds, 5> AlsRates{
+    inline constexpr std::array<std::chrono::milliseconds, 5> alsRates{
       std::chrono::milliseconds{100},
       std::chrono::milliseconds{200},
       std::chrono::milliseconds{500},
@@ -29,7 +29,7 @@ namespace Ltr507Detail {
 
     /// Millilux per count at 16-bit resolution for the four ranges (datasheet 6.1, ALS_CONTR
     /// gain): 1, 0.5, 0.01 and 0.005 lux/count, full scale 64k, 32k, 640 and 320 lux.
-    inline constexpr std::array<std::uint16_t, 4> MilliLuxPerCount{1000, 500, 10, 5};
+    inline constexpr std::array<std::uint16_t, 4> milliLuxPerCount{1000, 500, 10, 5};
 }   // namespace Ltr507Detail
 
 /// Lite-On LTR-507ALS ambient light and proximity sensor with a built-in emitter. Address by
@@ -59,60 +59,60 @@ template<Ltr507Detail::AlsGain AlsGain   = Ltr507Detail::AlsGain::range1,
          unsigned              LedPulses = 8,   ///< PS_N_PULSES
          Ltr507Detail::AlsRate Rate      = Ltr507Detail::AlsRate::ms100>
 struct Ltr507 {
-    static constexpr std::string_view Name = "LTR-507ALS";
+    static constexpr std::string_view name = "LTR-507ALS";
     /// Lite-On LTR-507ALS. LTR507.md:430..431, PART_ID 0x86 = 0x91 (part number in 7:4) and
     /// MANUFAC_ID 0x87 = 0x05.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{        "part-id", 0x86, 1, true, 0xF0, 0x90},
       Engine::RegisterCheck{"manufacturer-id", 0x87, 1, true, 0xFF, 0x05},
     };
-    static constexpr Address7                Address = 0x3A;
-    static constexpr std::array<Address7, 3> Addresses{0x3A, 0x3B, 0x23};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x3A;
+    static constexpr std::array<Address7, 3> addresses{0x3A, 0x3B, 0x23};
+    static constexpr std::size_t             registerBytes = 1;
 
     static_assert(LedPulses >= 1 && LedPulses <= 255,
                   "PS_N_PULSES is 1..255");
 
-    static constexpr std::uint8_t              GainCode = static_cast<std::uint8_t>(AlsGain);
-    static constexpr std::chrono::milliseconds MeasurementPeriod
-      = Ltr507Detail::AlsRates[static_cast<std::size_t>(Rate)];
+    static constexpr std::uint8_t              gainCode = static_cast<std::uint8_t>(AlsGain);
+    static constexpr std::chrono::milliseconds measurementPeriod
+      = Ltr507Detail::alsRates[static_cast<std::size_t>(Rate)];
 
     /// ALS_CONTR: gain in 4:3, active mode in bit 1 -- the same bit as PS_CONTR's. Bit 0 is
     /// reserved; setting it instead of bit 1 leaves the ALS in standby, so ALS_PS_STATUS
     /// never reports new ambient data.
-    static constexpr std::uint8_t AlsContr = static_cast<std::uint8_t>((GainCode << 3) | 0x02U);
+    static constexpr std::uint8_t alsContr = static_cast<std::uint8_t>((gainCode << 3) | 0x02U);
     /// PS_CONTR: active mode in bit 1, and the PS gain field 3:2, which "must write as 11"
     /// (6.2; the datasheet's own enable sequence writes 0x0E).
-    static constexpr std::uint8_t PsContr = 0x0E;
+    static constexpr std::uint8_t psContr = 0x0E;
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{100};
+    static constexpr auto startupDelay = std::chrono::milliseconds{100};
 
     /// PS_LED 0x82: pulse frequency 7:5, duty cycle 4:3, peak current 2:0. The duty field
     /// must always read 01 (50 %); 60 kHz and 100 mA, the highest current the part has.
-    static constexpr std::uint8_t PsLed = 0x6C;
+    static constexpr std::uint8_t psLed = 0x6C;
     /// ALS_MEAS_RATE 0x85: resolution and integration 7:5, repeat rate 2:0. 16 bit and 75 ms,
     /// repeated at `Rate` -- a fresh result for every poll. The reset value 0x82 is the same
     /// resolution at a 500 ms rate, too slow for a 100 ms poll.
-    static constexpr std::uint8_t AlsMeasRate
+    static constexpr std::uint8_t alsMeasRate
       = static_cast<std::uint8_t>(0x80U | static_cast<unsigned>(Rate));
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = 0x80, .payload = {AlsContr}}),
-      Engine::Step::write({.reg = 0x81, .payload = {PsContr}}),
-      Engine::Step::write({.reg = 0x82, .payload = {PsLed}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = 0x80, .payload = {alsContr}}),
+      Engine::Step::write({.reg = 0x81, .payload = {psContr}}),
+      Engine::Step::write({.reg = 0x82, .payload = {psLed}}),
       Engine::Step::write({.reg = 0x83, .payload = {static_cast<std::uint8_t>(LedPulses)}}),
       Engine::Step::write(
         {.reg     = 0x84,
          .payload = {0x03}}),   // PS measurement rate: 100 ms, the ALS's (0x00 would stop the ALS)
       Engine::Step::write({.reg     = 0x85,
-                           .payload = {AlsMeasRate},
-                           .delay   = MeasurementPeriod}),   // then one repeat's worth of wait
+                           .payload = {alsMeasRate},
+                           .delay   = measurementPeriod}),   // then one repeat's worth of wait
     };
 
     struct State {
         std::uint8_t partId{};
         std::uint8_t manufacturerId{};
-        std::uint8_t gain{GainCode};   ///< ALS_CONTR's gain field now
+        std::uint8_t gain{gainCode};   ///< ALS_CONTR's gain field now
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs: the
@@ -121,13 +121,13 @@ struct Ltr507 {
                                      State&                         state) {
         state.partId         = static_cast<std::uint8_t>(ids[0]);
         state.manufacturerId = static_cast<std::uint8_t>(ids[1]);
-        state.gain           = GainCode;
+        state.gain           = gainCode;
     }
 
     struct Light {
-        static constexpr auto Period = MeasurementPeriod + std::chrono::milliseconds{10};
+        static constexpr auto period = measurementPeriod + std::chrono::milliseconds{10};
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x8A, .count = 1, .offset = 0}),   // ALS_PS_STATUS
           Engine::Step::read({.reg = 0x88, .count = 2, .offset = 1}),   // ALS_DATA
           Engine::Step::read({.reg = 0x8B, .count = 2, .offset = 3}),   // PS_DATA
@@ -148,7 +148,7 @@ struct Ltr507 {
             /// The datasheet's lux per count for the range, at 16-bit resolution.
             [[nodiscard]] constexpr MilliLux lux() const {
                 return Units::milliLux(static_cast<std::uint32_t>(light)
-                                       * Ltr507Detail::MilliLuxPerCount[gain & 0x03U]);
+                                       * Ltr507Detail::milliLuxPerCount[gain & 0x03U]);
             }
 
             /// PS_DATA_1's Valid bit (6.11): clear is a valid reading, set an overflow.
@@ -180,8 +180,8 @@ struct Ltr507 {
     /// carries the new range.
     struct AlsControl {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = AlsContr;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = alsContr;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

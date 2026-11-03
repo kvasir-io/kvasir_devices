@@ -19,27 +19,27 @@ namespace Kvasir::I2C::Chips {
 /// 0x01 = 0 (continuous, alerts off). Temperature 0x05: bits 15..13 are alert flags, bit
 /// 12 the sign, 12 fraction/integer bits at 1/16 degC (5.1.3). 0x18..0x1F by A2..A0.
 struct Mcp9808 {
-    static constexpr std::string_view Name = "MCP9808";
+    static constexpr std::string_view name = "MCP9808";
     /// Microchip MCP9808. MCP9808.md:802 (manufacturer ID 0x0054, register 6) and :836 (device ID 0x04
     /// in the upper byte of register 7, the revision below it).
     /// Configuration: CONFIG (0x01) SHDN, bit 8, clear -- converting (MCP9808.md:550); resolution
     /// register 0x08 = 11b, 0.0625 degC, which is what the description's decode assumes.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"manufacturer-id", 0x06, 2, true, 0xFFFF, 0x0054},
       Engine::RegisterCheck{      "device-id", 0x07, 2, true, 0xFF00, 0x0400},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"not-shut-down", 0x01, 2, true, 0x0100, 0x0000},
       Engine::RegisterCheck{   "resolution", 0x08, 1, true,   0x03,   0x03},
     };
-    static constexpr Address7    Address       = 0x18;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x18;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x18, 8>();
+    static constexpr auto addresses = addressRun<0x18, 8>();
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x08, .payload = {0x03}}),
       Engine::Step::write({.reg = 0x01, .payload = {0x00, 0x00}}),
     };
@@ -59,8 +59,8 @@ struct Mcp9808 {
     }
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{250};
-        static constexpr std::array Steps{Engine::Step::read({.reg = 0x05, .count = 2})};
+        static constexpr auto       period = std::chrono::milliseconds{250};
+        static constexpr std::array steps{Engine::Step::read({.reg = 0x05, .count = 2})};
 
         struct Sample {
             CentiDegC temperature{};
@@ -85,8 +85,8 @@ struct Mcp9808 {
     /// flags in Temperature::Sample compare against them whatever the alert output does.
     struct Limits {
         using Value                        = CentiDegC;
-        static constexpr std::size_t Items = 3;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t items = 3;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
                                                            std::size_t          item,
@@ -106,9 +106,9 @@ struct Mcp9808 {
     };
 
     /// Limits items, in register order: 0x02 upper, 0x03 lower, 0x04 critical.
-    static constexpr std::size_t High     = 0;
-    static constexpr std::size_t Low      = 1;
-    static constexpr std::size_t Critical = 2;
+    static constexpr std::size_t high     = 0;
+    static constexpr std::size_t low      = 1;
+    static constexpr std::size_t critical = 2;
 
     using Reads  = Engine::List<Temperature>;
     using Writes = Engine::List<Limits>;

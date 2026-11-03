@@ -31,8 +31,8 @@ using ModuleLight  = Dev<Chips::Bh1750, Enabled>;
 using KeptLight    = Dev<Chips::Bh1750, EnabledKeeping>;
 using ModuleSwitch = Dev<Chips::Tca9548a, EnabledSwitch>;
 
-static_assert(ModuleLight::Enableable && ModuleLight::Switchable);
-static_assert(!Dev<Chips::Bh1750>::Switchable);
+static_assert(ModuleLight::enableable && ModuleLight::switchable);
+static_assert(!Dev<Chips::Bh1750>::switchable);
 
 std::size_t transactionsTo(std::uint8_t address,
                            std::size_t  from = 0) {
@@ -51,7 +51,7 @@ void disabled() {
         ModuleLight light{};
         runFor(light, 2s);
         check(light.link() == Kvasir::Link::offline, "offline");
-        checkEq(transactionsTo(ModuleLight::Address), std::size_t{0}, "silent");
+        checkEq(transactionsTo(ModuleLight::address), std::size_t{0}, "silent");
         checkEq(light.errors(), 0U, "nothing counted");
 
         testcase.step("enabled(): enabled, the part comes up");
@@ -106,7 +106,7 @@ void disabled() {
         ModuleSwitch mux{};
         mux.set<Chips::Tca9548a::Channels>(0x04);
         runFor(mux, 1s);
-        checkEq(transactionsTo(ModuleSwitch::Address), std::size_t{0}, "nothing goes out");
+        checkEq(transactionsTo(ModuleSwitch::address), std::size_t{0}, "nothing goes out");
         Fitted::yes = true;
         check(runUntil(mux, [&] { return !mux.pending<Chips::Tca9548a::Channels>(); }, 1s), "sent");
         check(hasWrite({0x04}), "the control byte is on the wire");

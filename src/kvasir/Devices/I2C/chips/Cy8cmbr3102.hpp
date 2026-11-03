@@ -160,17 +160,17 @@ template<Address7                       Addr     = 0x37,
          Cy8cmbr3102Detail::Spo0        Spo0Mode = Cy8cmbr3102Detail::Spo0::gpo,
          typename Timing                         = Engine::DefaultTiming>
 struct Cy8cmbr3102 {
-    static constexpr std::string_view        Name          = "CY8CMBR3102";
-    static constexpr Address7                Address       = Addr;
-    static constexpr std::size_t             RegisterBytes = 1;
-    static constexpr std::array<Address7, 1> Addresses{Addr};
+    static constexpr std::string_view        name          = "CY8CMBR3102";
+    static constexpr Address7                address       = Addr;
+    static constexpr std::size_t             registerBytes = 1;
+    static constexpr std::array<Address7, 1> addresses{Addr};
 
     /// TI2CBOOT: power to I2C ready, 15 ms max (DS AC table).
-    static constexpr auto StartupDelay = std::chrono::milliseconds{15};
+    static constexpr auto startupDelay = std::chrono::milliseconds{15};
 
     /// A NAK is put on the wire again this often before it counts (DS guideline 2).
-    static constexpr std::uint8_t WakeRetries    = 5;
-    static constexpr auto         WakeRetryDelay = std::chrono::milliseconds{10};
+    static constexpr std::uint8_t wakeRetries    = 5;
+    static constexpr auto         wakeRetryDelay = std::chrono::milliseconds{10};
 
     using Sensitivity  = Cy8cmbr3102Detail::Sensitivity;
     using AutoReset    = Cy8cmbr3102Detail::AutoReset;
@@ -182,62 +182,62 @@ struct Cy8cmbr3102 {
                   "the CY8CMBR3102 has CS0 and CS1");
     static_assert(SensorId == 0 || Spo0Mode == Spo0::sensor,
                   "CS1 is the SPO0 pin: it is a sensor only with SPO0 set to sensor (TRM 1.5.1)");
-    static constexpr std::chrono::milliseconds Refresh
+    static constexpr std::chrono::milliseconds refresh
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, refresh, std::chrono::milliseconds{100}));
-    static constexpr std::chrono::milliseconds ReadPeriod
-      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, Refresh));
+    static constexpr std::chrono::milliseconds readPeriod
+      = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, refresh));
 
-    static_assert(Refresh >= std::chrono::milliseconds{20}
-                    && Refresh <= std::chrono::milliseconds{500}
-                    && Refresh % std::chrono::milliseconds{20} == std::chrono::milliseconds::zero(),
+    static_assert(refresh >= std::chrono::milliseconds{20}
+                    && refresh <= std::chrono::milliseconds{500}
+                    && refresh % std::chrono::milliseconds{20} == std::chrono::milliseconds::zero(),
                   "REFRESH_INTERVAL is 1..25 steps of 20 ms (TRM 1.5.63)");
-    static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
+    static_assert(readPeriod > std::chrono::milliseconds::zero(),
                   "a cyclic read needs a period");
 
     // -- registers --------------------------------------------------------------------------
-    static constexpr std::uint8_t RegSensorEn     = 0x00;
-    static constexpr std::uint8_t RegSensitivity0 = 0x08;
-    static constexpr std::uint8_t RegGpoCfg       = 0x40;
-    static constexpr std::uint8_t RegSpoCfg       = 0x4C;
-    static constexpr std::uint8_t RegDeviceCfg2   = 0x4F;
-    static constexpr std::uint8_t RegI2cAddr      = 0x51;
-    static constexpr std::uint8_t RegRefreshCtrl  = 0x52;
-    static constexpr std::uint8_t RegConfigCrc    = 0x7E;
-    static constexpr std::uint8_t RegSensorId     = 0x82;
-    static constexpr std::uint8_t RegCtrlCmd      = 0x86;
-    static constexpr std::uint8_t RegCtrlCmdErr   = 0x89;
-    static constexpr std::uint8_t RegFamilyId     = 0x8F;
-    static constexpr std::uint8_t RegDebugBlock   = 0xDB;   ///< SYNC_COUNTER1 .. SYNC_COUNTER2
+    static constexpr std::uint8_t regSensorEn     = 0x00;
+    static constexpr std::uint8_t regSensitivity0 = 0x08;
+    static constexpr std::uint8_t regGpoCfg       = 0x40;
+    static constexpr std::uint8_t regSpoCfg       = 0x4C;
+    static constexpr std::uint8_t regDeviceCfg2   = 0x4F;
+    static constexpr std::uint8_t regI2cAddr      = 0x51;
+    static constexpr std::uint8_t regRefreshCtrl  = 0x52;
+    static constexpr std::uint8_t regConfigCrc    = 0x7E;
+    static constexpr std::uint8_t regSensorId     = 0x82;
+    static constexpr std::uint8_t regCtrlCmd      = 0x86;
+    static constexpr std::uint8_t regCtrlCmdErr   = 0x89;
+    static constexpr std::uint8_t regFamilyId     = 0x8F;
+    static constexpr std::uint8_t regDebugBlock   = 0xDB;   ///< SYNC_COUNTER1 .. SYNC_COUNTER2
 
-    static constexpr std::uint8_t  FamilyId = 0x9A;     ///< 154 (TRM 1.5.85)
-    static constexpr std::uint16_t DeviceId = 0x0A01;   ///< 2561, the 3102 (TRM 1.4.1)
+    static constexpr std::uint8_t  familyId = 0x9A;     ///< 154 (TRM 1.5.85)
+    static constexpr std::uint16_t deviceId = 0x0A01;   ///< 2561, the 3102 (TRM 1.4.1)
 
-    static constexpr std::uint8_t CmdSaveCheckCrc = 2;   ///< TRM 1.5.80 (3 is CALC_CRC)
+    static constexpr std::uint8_t cmdSaveCheckCrc = 2;   ///< TRM 1.5.80 (3 is CALC_CRC)
 
     /// 220 ms typ for the save (DS note 20, guideline 4), no maximum given: the margin is ours.
-    static constexpr std::chrono::milliseconds SaveTime{500};
+    static constexpr std::chrono::milliseconds saveTime{500};
     /// TBOOT_SYS, reset to first scan with system diagnostics on, 900 ms max (DS AC table).
-    static constexpr std::chrono::milliseconds BootTime{900};
+    static constexpr std::chrono::milliseconds bootTime{900};
     /// TI2C_LATENCY_MAX (DS AC table).
-    static constexpr std::chrono::milliseconds CommandLatency{50};
+    static constexpr std::chrono::milliseconds commandLatency{50};
     /// STATE_TIMEOUT, written to the configuration block in whole seconds (TRM 1.5.64).
-    static constexpr std::chrono::seconds StateTimeout{10};
+    static constexpr std::chrono::seconds stateTimeout{10};
 
-    static constexpr std::size_t ConfigBytes = 126;   ///< offsets 0..125, under the CRC
-    static constexpr std::size_t BlockBytes  = 128;   ///< and CONFIG_CRC behind them
+    static constexpr std::size_t configBytes = 126;   ///< offsets 0..125, under the CRC
+    static constexpr std::size_t blockBytes  = 128;   ///< and CONFIG_CRC behind them
 
-    using Block = std::array<std::uint8_t, BlockBytes>;
+    using Block = std::array<std::uint8_t, blockBytes>;
 
     /// The configuration block for an address, CRC included.
-    [[nodiscard]] static constexpr Block configurationFor(std::uint8_t address) {
+    [[nodiscard]] static constexpr Block configurationFor(std::uint8_t addressArg) {
         Block      b{};
         auto const le16 = [&](std::size_t at, std::uint16_t v) {
             b[at]     = static_cast<std::uint8_t>(v & 0xFFU);
             b[at + 1] = static_cast<std::uint8_t>(v >> 8U);
         };
-        le16(RegSensorEn, static_cast<std::uint16_t>(1U << SensorId));   // SENSOR_EN 1.5.1
+        le16(regSensorEn, static_cast<std::uint16_t>(1U << SensorId));   // SENSOR_EN 1.5.1
         // FSS_EN 0x02, TOGGLE_EN 0x04, LED_ON_EN 0x06: 0
-        b[RegSensitivity0]
+        b[regSensitivity0]
           = static_cast<std::uint8_t>(static_cast<unsigned>(Sens) << (2U * SensorId));
         b[0x0C] = 128;     // BASE_THRESHOLD0 (1.5.9)
         b[0x0D] = 128;     // BASE_THRESHOLD1
@@ -259,36 +259,36 @@ struct Cy8cmbr3102 {
         b[0x39] = 30;      // PROX_NEGATIVE_TH0
         b[0x3A] = 30;      // PROX_NEGATIVE_TH1
         // GPO_CFG (1.5.48): host-controlled DC, strong drive, active high while SPO0 is a GPO
-        b[RegGpoCfg] = Spo0Mode == Spo0::gpo ? std::uint8_t{0x0D} : std::uint8_t{0x00};
+        b[regGpoCfg] = Spo0Mode == Spo0::gpo ? std::uint8_t{0x0D} : std::uint8_t{0x00};
         b[0x41]      = 0x0F;   // PWM_DUTYCYCLE_CFG0 (1.5.49)
-        b[RegSpoCfg] = static_cast<std::uint8_t>(Spo0Mode);
+        b[regSpoCfg] = static_cast<std::uint8_t>(Spo0Mode);
         b[0x4D]      = 0x03;   // DEVICE_CFG0: IIR and median filters (1.5.58)
         b[0x4E]      = 0x01;   // DEVICE_CFG1: system diagnostics (1.5.59)
         // DEVICE_CFG2 (1.5.60): both auto-resets, automatic thresholds (ATH_EN, bit 3)
-        b[RegDeviceCfg2] = static_cast<std::uint8_t>((static_cast<unsigned>(Arst) << 6U)
+        b[regDeviceCfg2] = static_cast<std::uint8_t>((static_cast<unsigned>(Arst) << 6U)
                                                      | (static_cast<unsigned>(Arst) << 4U) | 0x08U);
         // DEVICE_CFG3 0x50: 0, the internally regulated 1.8..5.5 V supply (1.5.61)
-        b[RegI2cAddr] = static_cast<std::uint8_t>(address & 0x7FU);
-        b[RegRefreshCtrl]
-          = static_cast<std::uint8_t>(Refresh / std::chrono::milliseconds{20});        // 1.5.63
-        b[0x55] = static_cast<std::uint8_t>(StateTimeout / std::chrono::seconds{1});   // 1.5.64
-        le16(RegConfigCrc, crc(b));
+        b[regI2cAddr] = static_cast<std::uint8_t>(addressArg & 0x7FU);
+        b[regRefreshCtrl]
+          = static_cast<std::uint8_t>(refresh / std::chrono::milliseconds{20});        // 1.5.63
+        b[0x55] = static_cast<std::uint8_t>(stateTimeout / std::chrono::seconds{1});   // 1.5.64
+        le16(regConfigCrc, crc(b));
         return b;
     }
 
     /// The CRC of a block's configuration bytes (0..125).
     [[nodiscard]] static constexpr std::uint16_t crc(Block const& block) {
-        return Cy8cmbr3102Detail::crc16(std::span<std::uint8_t const>{block}.first(ConfigBytes));
+        return Cy8cmbr3102Detail::crc16(std::span<std::uint8_t const>{block}.first(configBytes));
     }
 
-    static constexpr Block         Configuration = configurationFor(Addr);
-    static constexpr std::uint16_t ConfigCrc     = crc(Configuration);
+    static constexpr Block         configuration = configurationFor(Addr);
+    static constexpr std::uint16_t configCrc     = crc(configuration);
 
     /// CTRL_CMD_ERR and SYSTEM_STATUS, FAMILY_ID and DEVICE_ID, then CONFIG_CRC.
-    static constexpr std::array Init{
-      Engine::Step::read({.reg = RegCtrlCmdErr, .count = 2, .offset = 0}),
-      Engine::Step::read({.reg = RegFamilyId, .count = 3, .offset = 2}),
-      Engine::Step::read({.reg = RegConfigCrc, .count = 2, .offset = 5}),
+    static constexpr std::array init{
+      Engine::Step::read({.reg = regCtrlCmdErr, .count = 2, .offset = 0}),
+      Engine::Step::read({.reg = regFamilyId, .count = 3, .offset = 2}),
+      Engine::Step::read({.reg = regConfigCrc, .count = 2, .offset = 5}),
     };
 
     struct State {
@@ -307,8 +307,8 @@ struct Cy8cmbr3102 {
         state.familyId        = data.u8(2);
         state.deviceId        = data.le16(3);
         state.storedCrc       = data.le16(5);
-        state.configured      = state.storedCrc == ConfigCrc;
-        return state.familyId == FamilyId && state.deviceId == DeviceId;
+        state.configured      = state.storedCrc == configCrc;
+        return state.familyId == familyId && state.deviceId == deviceId;
     }
 
     /// What the debug block says about the selected sensor.
@@ -327,7 +327,7 @@ struct Cy8cmbr3102 {
 
     /// The 13 bytes from SYNC_COUNTER1: counter, DEBUG_SENSOR_ID, DEBUG_CP, difference,
     /// baseline, raw and average raw (LE16 each), 0xE6, SYNC_COUNTER2.
-    static constexpr std::uint8_t DebugBytes = 13;
+    static constexpr std::uint8_t debugBytes = 13;
 
     [[nodiscard]] static constexpr Engine::Outcome<Sample> decodeDebug(Bytes data) {
         if((data.u8(0) & 0x0FU) != (data.u8(12) & 0x0FU)) {
@@ -335,7 +335,7 @@ struct Cy8cmbr3102 {
               std::chrono::milliseconds{5});   // the part updated the block under the read
         }
         if(data.u8(1) != SensorId) {
-            return Engine::Outcome<Sample>::retry(CommandLatency);   // SENSOR_ID not taken yet
+            return Engine::Outcome<Sample>::retry(commandLatency);   // SENSOR_ID not taken yet
         }
         return Engine::Outcome<Sample>::ok({.capacitance = Units::picoFarad(data.u8(2)),
                                             .raw         = data.le16(7),
@@ -346,10 +346,10 @@ struct Cy8cmbr3102 {
     /// Cyclic: select the sensor (idempotent, and what brings the selection back after a
     /// reset) and read the debug block.
     struct Moisture {
-        static constexpr auto       Period = ReadPeriod;
-        static constexpr std::array Steps{
-          Engine::Step::write({.reg = RegSensorId, .payload = {SensorId}}),
-          Engine::Step::read({.reg = RegDebugBlock, .count = DebugBytes, .offset = 0}),
+        static constexpr auto       period = readPeriod;
+        static constexpr std::array steps{
+          Engine::Step::write({.reg = regSensorId, .payload = {SensorId}}),
+          Engine::Step::read({.reg = regDebugBlock, .count = debugBytes, .offset = 0}),
         };
 
         using Sample = Cy8cmbr3102::Sample;
@@ -363,12 +363,12 @@ struct Cy8cmbr3102 {
     /// one, each given the command latency, then the block. A disabled sensor is a valid
     /// SENSOR_ID (0 .. sensors - 1, TRM 1.5.79).
     struct Capacitance {
-        static constexpr std::array Steps{
-          Engine::Step::write({.reg     = RegSensorId,
+        static constexpr std::array steps{
+          Engine::Step::write({.reg     = regSensorId,
                                .payload = {static_cast<std::uint8_t>(SensorId == 0 ? 1 : 0)},
-                               .delay   = CommandLatency}),
-          Engine::Step::write({.reg = RegSensorId, .payload = {SensorId}, .delay = CommandLatency}),
-          Engine::Step::read({.reg = RegDebugBlock, .count = DebugBytes, .offset = 0}),
+                               .delay   = commandLatency}),
+          Engine::Step::write({.reg = regSensorId, .payload = {SensorId}, .delay = commandLatency}),
+          Engine::Step::read({.reg = regDebugBlock, .count = debugBytes, .offset = 0}),
         };
 
         using Sample = Cy8cmbr3102::Sample;
@@ -387,23 +387,23 @@ struct Cy8cmbr3102 {
     /// it came back up, and says whether the configuration is there.
     struct Provision {
         using Value                            = std::uint8_t;
-        static constexpr std::size_t Bytes     = BlockBytes;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = blockBytes;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
         encode(Value const&,
                std::span<std::byte> buffer) {
-            for(std::size_t i = 0; i < BlockBytes; ++i) {
-                buffer[i] = static_cast<std::byte>(Configuration[i]);
+            for(std::size_t i = 0; i < blockBytes; ++i) {
+                buffer[i] = static_cast<std::byte>(configuration[i]);
             }
             return {
-              Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = BlockBytes}),
+              Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = blockBytes}),
               Engine::Step::write(
-                {.reg = RegCtrlCmd, .payload = {CmdSaveCheckCrc}, .delay = SaveTime}),
-              Engine::Step::write({.reg     = RegCtrlCmd,
+                {.reg = regCtrlCmd, .payload = {cmdSaveCheckCrc}, .delay = saveTime}),
+              Engine::Step::write({.reg     = regCtrlCmd,
                                    .payload = {static_cast<std::uint8_t>(Operation::reset)},
-                                   .delay   = BootTime}),
+                                   .delay   = bootTime}),
             };
         }
     };
@@ -411,9 +411,9 @@ struct Cy8cmbr3102 {
     /// On demand: CTRL_CMD_ERR and CONFIG_CRC as the part holds them now -- after a Provision,
     /// whether the save took.
     struct Stored {
-        static constexpr std::array Steps{
-          Engine::Step::read({.reg = RegCtrlCmdErr, .count = 1, .offset = 0}),
-          Engine::Step::read({.reg = RegConfigCrc, .count = 2, .offset = 1}),
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = regCtrlCmdErr, .count = 1, .offset = 0}),
+          Engine::Step::read({.reg = regConfigCrc, .count = 2, .offset = 1}),
         };
 
         struct Sample {
@@ -425,7 +425,7 @@ struct Cy8cmbr3102 {
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
             return {.lastError  = static_cast<CommandError>(data.u8(0)),
                     .storedCrc  = data.le16(1),
-                    .configured = data.le16(1) == ConfigCrc};
+                    .configured = data.le16(1) == configCrc};
         }
     };
 
@@ -433,17 +433,17 @@ struct Cy8cmbr3102 {
     /// again, so park the cyclic read first (`period<Moisture>(0ms)`).
     struct Command {
         using Value                            = Operation;
-        static constexpr std::size_t Bytes     = 1;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = 1;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
             return Engine::Step::writeBuffer(
-              {.reg    = RegCtrlCmd,
+              {.reg    = regCtrlCmd,
                .offset = 0,
                .count  = 1,
-               .delay  = value == Operation::reset ? BootTime : CommandLatency});
+               .delay  = value == Operation::reset ? bootTime : commandLatency});
         }
     };
 
@@ -456,8 +456,8 @@ struct Cy8cmbr3102 {
     /// writes `Addr` instead. Transient: a flash write, never replayed.
     struct SetAddress {
         using Value                            = std::uint8_t;
-        static constexpr std::size_t Bytes     = BlockBytes;
-        static constexpr bool        Transient = true;
+        static constexpr std::size_t bytes     = blockBytes;
+        static constexpr bool        transient = true;
 
         [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
@@ -465,16 +465,16 @@ struct Cy8cmbr3102 {
                std::span<std::byte> buffer) {
             auto const block
               = configurationFor(value >= 0x08 && value <= 0x77 ? value : Addr.value);
-            for(std::size_t i = 0; i < BlockBytes; ++i) {
+            for(std::size_t i = 0; i < blockBytes; ++i) {
                 buffer[i] = static_cast<std::byte>(block[i]);
             }
             return {
-              Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = BlockBytes}),
+              Engine::Step::writeBuffer({.reg = 0x00, .offset = 0, .count = blockBytes}),
               Engine::Step::write(
-                {.reg = RegCtrlCmd, .payload = {CmdSaveCheckCrc}, .delay = SaveTime}),
-              Engine::Step::write({.reg     = RegCtrlCmd,
+                {.reg = regCtrlCmd, .payload = {cmdSaveCheckCrc}, .delay = saveTime}),
+              Engine::Step::write({.reg     = regCtrlCmd,
                                    .payload = {static_cast<std::uint8_t>(Operation::reset)},
-                                   .delay   = BootTime}),
+                                   .delay   = bootTime}),
             };
         }
     };

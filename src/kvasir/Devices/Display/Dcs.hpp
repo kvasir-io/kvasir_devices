@@ -9,38 +9,38 @@ namespace Kvasir { namespace Display { namespace Dcs {
 
     /// The shared user command set (CO5300 7.4, ST77916 13.2, ST77922 13.2).
     struct Cmd {
-        static constexpr std::uint8_t Nop       = 0x00;
-        static constexpr std::uint8_t Swreset   = 0x01;
-        static constexpr std::uint8_t Rddid     = 0x04;   // ID1, ID2, ID3
-        static constexpr std::uint8_t Rddpm     = 0x0A;   // power mode
-        static constexpr std::uint8_t Rddcolmod = 0x0C;   // pixel format read-back
-        static constexpr std::uint8_t Slpin     = 0x10;
-        static constexpr std::uint8_t Slpout    = 0x11;
-        static constexpr std::uint8_t Noron     = 0x13;
-        static constexpr std::uint8_t Invoff    = 0x20;
-        static constexpr std::uint8_t Invon     = 0x21;
-        static constexpr std::uint8_t Dispoff   = 0x28;
-        static constexpr std::uint8_t Dispon    = 0x29;
-        static constexpr std::uint8_t Caset     = 0x2A;
-        static constexpr std::uint8_t Raset     = 0x2B;
-        static constexpr std::uint8_t Ramwr     = 0x2C;
-        static constexpr std::uint8_t Teoff     = 0x34;
-        static constexpr std::uint8_t Teon      = 0x35;
-        static constexpr std::uint8_t Madctl    = 0x36;
-        static constexpr std::uint8_t Colmod    = 0x3A;
-        static constexpr std::uint8_t Ramwrc    = 0x3C;
-        static constexpr std::uint8_t Wrdisbv   = 0x51;   // brightness, DBV[7:0]
-        static constexpr std::uint8_t Wrctrld   = 0x53;   // gates brightness control
+        static constexpr std::uint8_t nop       = 0x00;
+        static constexpr std::uint8_t swreset   = 0x01;
+        static constexpr std::uint8_t rddid     = 0x04;   // ID1, ID2, ID3
+        static constexpr std::uint8_t rddpm     = 0x0A;   // power mode
+        static constexpr std::uint8_t rddcolmod = 0x0C;   // pixel format read-back
+        static constexpr std::uint8_t slpin     = 0x10;
+        static constexpr std::uint8_t slpout    = 0x11;
+        static constexpr std::uint8_t noron     = 0x13;
+        static constexpr std::uint8_t invoff    = 0x20;
+        static constexpr std::uint8_t invon     = 0x21;
+        static constexpr std::uint8_t dispoff   = 0x28;
+        static constexpr std::uint8_t dispon    = 0x29;
+        static constexpr std::uint8_t caset     = 0x2A;
+        static constexpr std::uint8_t raset     = 0x2B;
+        static constexpr std::uint8_t ramwr     = 0x2C;
+        static constexpr std::uint8_t teoff     = 0x34;
+        static constexpr std::uint8_t teon      = 0x35;
+        static constexpr std::uint8_t madctl    = 0x36;
+        static constexpr std::uint8_t colmod    = 0x3A;
+        static constexpr std::uint8_t ramwrc    = 0x3C;
+        static constexpr std::uint8_t wrdisbv   = 0x51;   // brightness, DBV[7:0]
+        static constexpr std::uint8_t wrctrld   = 0x53;   // gates brightness control
     };
 
     /// MADCTL (36h) bits.
     struct Madctl {
-        static constexpr std::uint8_t RowOrder    = 0x80;   // MY: bottom to top
-        static constexpr std::uint8_t ColumnOrder = 0x40;   // MX: right to left
-        static constexpr std::uint8_t Exchange    = 0x20;   // MV: rows and columns swapped
-        static constexpr std::uint8_t ScanOrder   = 0x10;   // ML: refresh bottom to top
-        static constexpr std::uint8_t Bgr         = 0x08;   // panel wired BGR
-        static constexpr std::uint8_t Horizontal  = 0x04;   // MH: refresh right to left
+        static constexpr std::uint8_t rowOrder    = 0x80;   // MY: bottom to top
+        static constexpr std::uint8_t columnOrder = 0x40;   // MX: right to left
+        static constexpr std::uint8_t exchange    = 0x20;   // MV: rows and columns swapped
+        static constexpr std::uint8_t scanOrder   = 0x10;   // ML: refresh bottom to top
+        static constexpr std::uint8_t bgr         = 0x08;   // panel wired BGR
+        static constexpr std::uint8_t horizontal  = 0x04;   // MH: refresh right to left
     };
 
     struct Step {

@@ -16,7 +16,7 @@ namespace Kvasir::I2C {
 
 /// An I2C master (a queued chip driver, a WithFeatures over one, the host FakeBus) as the
 /// engine's transport: the master's Request, submit() and features unchanged - so the engine's
-/// port (Engine::detail::PortOf) is the master's own -, plus what the engine asks a transport.
+/// port (Engine::Detail::PortOf) is the master's own -, plus what the engine asks a transport.
 template<typename Master>
 struct Transport : Master {
     /// What the log names a device by: its I2C address (`Config::address`, else the chip's).
@@ -26,7 +26,7 @@ struct Transport : Master {
         if constexpr(requires { Config::address; }) {
             return static_cast<std::uint8_t>(Config::address);
         } else {
-            return static_cast<std::uint8_t>(ChipT::Address);
+            return static_cast<std::uint8_t>(ChipT::address);
         }
     }
 
@@ -37,14 +37,14 @@ struct Transport : Master {
              typename ChipT>
     static constexpr std::uint32_t ownClockHz() {
         if constexpr(requires { Config::busClock; }) {
-            if constexpr(requires { ChipT::I2cMaxClock; }) {
+            if constexpr(requires { ChipT::i2cMaxClock; }) {
                 static_assert(Config::busClock.numerical_value_in(Units::si::hertz)
-                                <= ChipT::I2cMaxClock.numerical_value_in(Units::si::hertz),
+                                <= ChipT::i2cMaxClock.numerical_value_in(Units::si::hertz),
                               "Config::busClock is above the chip's Chip::I2cMaxClock");
             }
             return Config::busClock.numerical_value_in(Units::si::hertz);
-        } else if constexpr(requires { ChipT::I2cMaxClock; }) {
-            return ChipT::I2cMaxClock.numerical_value_in(Units::si::hertz);
+        } else if constexpr(requires { ChipT::i2cMaxClock; }) {
+            return ChipT::i2cMaxClock.numerical_value_in(Units::si::hertz);
         } else {
             return std::uint32_t{0};
         }
@@ -79,9 +79,9 @@ struct Device : Engine::Device<Transport<I2c>, Clock, ChipT, Config, Reset, Gate
 
     static_assert(
       [] {
-          if constexpr(detail::HasAddresses<ChipT>) {
-              for(auto const a : ChipT::Addresses) {
-                  if(a == Device::Address) { return true; }
+          if constexpr(Detail::HasAddresses<ChipT>) {
+              for(auto const a : ChipT::addresses) {
+                  if(a == Device::address) { return true; }
               }
               return false;
           }

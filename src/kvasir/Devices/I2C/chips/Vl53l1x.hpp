@@ -15,7 +15,7 @@
 namespace Kvasir::I2C::Chips {
 namespace Vl53l1xDetail {
     /// The first register the default configuration is written to.
-    constexpr std::uint16_t ConfigFirst = 0x002D;
+    constexpr std::uint16_t configFirst = 0x002D;
 
     /// `VL51L1X_DEFAULT_CONFIGURATION` from ST's Ultra Lite Driver (STSW-IMG009,
     /// `VL53L1X_api.c`): registers 0x2D..0x87 in order, 91 bytes. Taken byte for byte from
@@ -33,7 +33,7 @@ namespace Vl53l1xDetail {
     ///   0x6C  inter-measurement period (32 bit, oscillator units)
     ///   0x72, 0x74  distance thresholds   0x7F  ROI centre 199   0x80  ROI 16 x 16
     ///   0x86  interrupt clear             0x87  mode start (0 here: ranging off)
-    constexpr std::array<std::uint8_t, 91> DefaultConfiguration{
+    constexpr std::array<std::uint8_t, 91> defaultConfiguration{
       0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x02, 0x08,   // 0x2D..0x34
       0x00, 0x08, 0x10, 0x01, 0x01, 0x00, 0x00, 0x00,   // 0x35..0x3C
       0x00, 0xFF, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00,   // 0x3D..0x44
@@ -51,22 +51,22 @@ namespace Vl53l1xDetail {
     /// A Step carries at most eight inline bytes (Step::InlineBytes, enforced by
     /// wellFormed()), and an Init script has no buffer to take a longer payload from, so the
     /// configuration goes out as twelve writes of consecutive registers.
-    constexpr std::size_t ConfigChunks
-      = (DefaultConfiguration.size() + Engine::Step::InlineBytes - 1) / Engine::Step::InlineBytes;
+    constexpr std::size_t configChunks
+      = (defaultConfiguration.size() + Engine::Step::inlineBytes - 1) / Engine::Step::inlineBytes;
 
     constexpr Engine::Step configChunk(std::size_t i) {
-        auto const   first = i * Engine::Step::InlineBytes;
-        auto const   n = std::min(Engine::Step::InlineBytes, DefaultConfiguration.size() - first);
+        auto const   first = i * Engine::Step::inlineBytes;
+        auto const   n = std::min(Engine::Step::inlineBytes, defaultConfiguration.size() - first);
         Engine::Step step = Engine::Step::write(
-          {.reg = static_cast<std::uint16_t>(ConfigFirst + first), .payload = {}});
+          {.reg = static_cast<std::uint16_t>(configFirst + first), .payload = {}});
         step.count = static_cast<std::uint8_t>(n);
-        for(std::size_t k = 0; k < n; ++k) { step.bytes[k] = DefaultConfiguration[first + k]; }
+        for(std::size_t k = 0; k < n; ++k) { step.bytes[k] = defaultConfiguration[first + k]; }
         return step;
     }
 
     /// ULD's `status_rtn`: RESULT__RANGE_STATUS bits 4:0 to the range status the ULD API
     /// reports. 255 is "no mapping".
-    constexpr std::array<std::uint8_t, 24> StatusMap{255, 255, 255, 5,   2,   4,   1,   7,
+    constexpr std::array<std::uint8_t, 24> statusMap{255, 255, 255, 5,   2,   4,   1,   7,
                                                      3,   0,   255, 255, 9,   13,  255, 255,
                                                      255, 255, 10,  6,   255, 255, 11,  12};
 }   // namespace Vl53l1xDetail
@@ -126,39 +126,39 @@ namespace Vl53l1xDetail {
 /// The part's address can be moved (I2C_SLAVE__DEVICE_ADDRESS 0x0001, volatile), but only by
 /// talking to it at 0x29 first, which this description does not do.
 struct Vl53l1x {
-    static constexpr std::string_view Name = "VL53L1X";
+    static constexpr std::string_view name = "VL53L1X";
     /// ST VL53L1X. VL53L1X.md:844..845, Model ID 0x010F = 0xEA and Module Type 0x0110 = 0xCC; the
     /// register address is two bytes.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{   "model-id",
                             0x010F, 1,
                             true, 0xFF,
-                            0xEA, Engine::RegisterCheck::None,
+                            0xEA, Engine::RegisterCheck::none,
                             2},
       Engine::RegisterCheck{"module-type",
                             0x0110, 1,
                             true, 0xFF,
-                            0xCC, Engine::RegisterCheck::None,
+                            0xCC, Engine::RegisterCheck::none,
                             2},
     };
-    static constexpr Address7    Address       = 0x29;
-    static constexpr std::size_t RegisterBytes = 2;
+    static constexpr Address7    address       = 0x29;
+    static constexpr std::size_t registerBytes = 2;
 
-    static constexpr std::array<Address7, 1> Addresses{0x29};
+    static constexpr std::array<Address7, 1> addresses{0x29};
 
     /// ULD polls the boot flag; the datasheet's boot time is well under this.
-    static constexpr auto StartupDelay = std::chrono::milliseconds{10};
+    static constexpr auto startupDelay = std::chrono::milliseconds{10};
 
     /// What the default configuration carries (ULD's SensorInit defaults): the timing budget
     /// and the inter-measurement period, both 100 ms. Not changeable here, see above.
-    static constexpr std::chrono::milliseconds TimingBudget{100};
-    static constexpr std::chrono::milliseconds InterMeasurement{100};
+    static constexpr std::chrono::milliseconds timingBudget{100};
+    static constexpr std::chrono::milliseconds interMeasurement{100};
 
     /// The first ranging, for the VHV calibration: two default timing budgets.
-    static constexpr std::chrono::milliseconds FirstRanging = 2 * TimingBudget;
+    static constexpr std::chrono::milliseconds firstRanging = 2 * timingBudget;
 
-    static constexpr std::array<Engine::Step, 1 + Vl53l1xDetail::ConfigChunks + 11> Init = [] {
-        std::array<Engine::Step, 1 + Vl53l1xDetail::ConfigChunks + 11> s{};
+    static constexpr std::array<Engine::Step, 1 + Vl53l1xDetail::configChunks + 11> init = [] {
+        std::array<Engine::Step, 1 + Vl53l1xDetail::configChunks + 11> s{};
         std::size_t                                                    n = 0;
         s[n++]                                                           = Engine::Step::read(
           {.reg = 0x00E5, .count = 1, .offset = 0});   // FIRMWARE__SYSTEM_STATUS
@@ -167,15 +167,15 @@ struct Vl53l1x {
                                       .payload = {0x00},
                                       .delay   = std::chrono::milliseconds{1}});   // SOFT_RESET
         s[n++] = Engine::Step::write(
-          {.reg = 0x0000, .payload = {0x01}, .delay = StartupDelay});   // boot
-        for(std::size_t i = 0; i < Vl53l1xDetail::ConfigChunks; ++i) {
+          {.reg = 0x0000, .payload = {0x01}, .delay = startupDelay});   // boot
+        for(std::size_t i = 0; i < Vl53l1xDetail::configChunks; ++i) {
             s[n++] = Vl53l1xDetail::configChunk(i);   // 0x2D..0x87
         }
         s[n++]
           = Engine::Step::write({.reg = 0x0086, .payload = {0x01}});   // SYSTEM__INTERRUPT_CLEAR
         s[n++] = Engine::Step::write({.reg     = 0x0087,
                                       .payload = {0x40},
-                                      .delay   = FirstRanging});   // SYSTEM__MODE_START: range once
+                                      .delay   = firstRanging});   // SYSTEM__MODE_START: range once
         s[n++] = Engine::Step::write({.reg = 0x0086, .payload = {0x01}});
         s[n++] = Engine::Step::write({.reg = 0x0087, .payload = {0x00}});   // stop
         s[n++] = Engine::Step::write(
@@ -207,17 +207,17 @@ struct Vl53l1x {
 
     struct Ranging {
         /// One result per inter-measurement period (100 ms).
-        static constexpr auto Period = InterMeasurement;
+        static constexpr auto period = interMeasurement;
 
         /// Retried up to the engine's eight times, so a poll that lands just after the
         /// last clear still finds the next result (120 ms > one period) rather than being
         /// rejected.
-        static constexpr std::chrono::milliseconds RetryAfter{15};
+        static constexpr std::chrono::milliseconds retryAfter{15};
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read(
             {.reg = 0x0030, .count = 2, .offset = 0}),   // GPIO_HV_MUX__CTRL, GPIO__TIO_HV_STATUS
-          Engine::Step::check(RetryAfter),
+          Engine::Step::check(retryAfter),
           Engine::Step::read({.reg    = 0x0089,
                               .count  = 17,
                               .offset = 2}),   // RESULT__RANGE_STATUS .. peak signal rate
@@ -256,8 +256,8 @@ struct Vl53l1x {
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const result = data.sub(2, 17);
             auto const raw    = static_cast<std::uint8_t>(result.u8(0) & 0x1FU);
-            auto const status = raw < Vl53l1xDetail::StatusMap.size()
-                                ? Vl53l1xDetail::StatusMap[raw]
+            auto const status = raw < Vl53l1xDetail::statusMap.size()
+                                ? Vl53l1xDetail::statusMap[raw]
                                 : std::uint8_t{0xFF};
             if(status == 0xFF) { return Engine::Outcome<Sample>::reject(); }
             Sample sample{};
@@ -284,7 +284,7 @@ struct Vl53l1x {
             std::uint8_t centre{199};
         };
 
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr std::uint8_t side(std::uint8_t spads) {
             return std::clamp(spads, std::uint8_t{4}, std::uint8_t{16});

@@ -134,7 +134,7 @@ static_assert([] {
 static_assert([] {
     Nau::State st{};
     st.config.gain    = NauD::Gain::x1;
-    st.config.ldo     = NauD::Ldo::v4_5;
+    st.config.ldo     = NauD::Ldo::v4p5;
     st.config.channel = NauD::Channel::ch2;
     auto const s      = Nau::Conversion::decode(Kvasir::Bytes{frame(0x20, 0x40, 0x00, 0x00)}, st);
     // quarter scale at x1 against 4.5 V: 4.5 V / 4 = 1.125 V
@@ -152,7 +152,7 @@ static_assert([] {
     Ext::State const st{};
     auto const       s = Ext::Conversion::decode(Kvasir::Bytes{frame(0x20, 0xC0, 0x00, 0x00)}, st);
     // -2^22 at x2 against an external 5 V: -5 V / 8
-    return equal(s.voltage(), -625'000) && Ext::Conversion::Period == 105ms
+    return equal(s.voltage(), -625'000) && Ext::Conversion::period == 105ms
         && NauD::puCtrl(NauD::Ldo::external, NauD::Cycle::running) == 0x16
         && NauD::pgaPwr(NauD::FilterCap::absent, NauD::Channel::ch1) == 0;
 }());
@@ -179,10 +179,10 @@ static_assert([] {
 }());
 
 // the register codes against 11.1 .. 11.3, and the periods the rates ask for
-static_assert(NauD::ctrl1(NauD::Ldo::v3_3,
+static_assert(NauD::ctrl1(NauD::Ldo::v3p3,
                           NauD::Gain::x128)
               == 0x27);
-static_assert(NauD::ctrl1(NauD::Ldo::v2_4,
+static_assert(NauD::ctrl1(NauD::Ldo::v2p4,
                           NauD::Gain::x1)
               == 0x38);
 static_assert(NauD::ctrl2(NauD::Channel::ch2,
@@ -190,13 +190,13 @@ static_assert(NauD::ctrl2(NauD::Channel::ch2,
                           NauD::CalMode::systemGain,
                           NauD::Calibration::start)
               == 0xF7);
-static_assert(NauD::puCtrl(NauD::Ldo::v3_3,
+static_assert(NauD::puCtrl(NauD::Ldo::v3p3,
                            NauD::Cycle::running)
               == 0x96);
 static_assert(NauD::readPeriod(NauD::Rate::sps10) == 105ms
               && NauD::readPeriod(NauD::Rate::sps80) == 14ms
               && NauD::readPeriod(NauD::Rate::sps320) == 4ms);
-static_assert(Nau::CalibrationWait == 204ms);
+static_assert(Nau::calibrationWait == 204ms);
 
 void bringUp() {
     I2cCase const testcase{"NAU7802 bring-up"};
@@ -237,7 +237,7 @@ void bringUp() {
         for(auto const& t : FakeBus::log) {
             if(t.sent == std::vector<std::uint8_t>{0x00, 0x96}) { puaAt = t.at; }
         }
-        check(calAt - puaAt >= Nau::AnalogSettle && Nau::AnalogSettle >= 160ms,
+        check(calAt - puaAt >= Nau::analogSettle && Nau::analogSettle >= 160ms,
               "7.3's TRDY -- five conversions and 100 ms -- between PUA and the calibration");
     }
     check(!d.state().calError && !d.state().calibrating, "CAL_ERR and CALS clear");

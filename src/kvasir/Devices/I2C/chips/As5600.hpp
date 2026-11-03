@@ -25,14 +25,14 @@ namespace Kvasir::I2C::Chips {
 /// + RAW ANGLE and ANGLE are still two reads, each addressed where it starts, which holds
 /// whichever way a given part treats the pointer.
 struct As5600 {
-    static constexpr std::string_view        Name    = "AS5600";
-    static constexpr Address7                Address = 0x36;
-    static constexpr std::array<Address7, 1> Addresses{0x36};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "AS5600";
+    static constexpr Address7                address = 0x36;
+    static constexpr std::array<Address7, 1> addresses{0x36};
+    static constexpr std::size_t             registerBytes = 1;
 
     struct Angle {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{20};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x0B, .count = 3, .offset = 0}),    // STATUS, RAW ANGLE
           Engine::Step::read({.reg = 0x0E, .count = 2, .offset = 3})};   // ANGLE
 
@@ -66,8 +66,8 @@ struct As5600 {
     };
 
     struct Gain {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x1A, .count = 1, .offset = 0}),    // AGC
           Engine::Step::read({.reg = 0x1B, .count = 2, .offset = 1})};   // MAGNITUDE
 

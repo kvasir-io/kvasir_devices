@@ -133,12 +133,12 @@ static_assert(
   }(),
   "a payload short of 92 bytes is no solution");
 
-constexpr auto PortFrame = std::array<std::uint8_t, 28>{
+constexpr auto portFrame = std::array<std::uint8_t, 28>{
   0xB5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x84, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x96};
-constexpr auto MsgFrame
+constexpr auto msgFrame
   = std::array<std::uint8_t, 11>{0xB5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x07, 0x01, 0x13, 0x51};
-constexpr auto RateFrame = std::array<std::uint8_t, 14>{0xB5,
+constexpr auto rateFrame = std::array<std::uint8_t, 14>{0xB5,
                                                         0x62,
                                                         0x06,
                                                         0x08,
@@ -176,7 +176,7 @@ void bringUp() {
     check(runUntil(d, [&] { return d.answering() && !d.pending(); }, 500ms), "configured");
     check(
       m.messages
-        == std::vector<std::vector<std::uint8_t>>{vec(PortFrame), vec(MsgFrame), vec(RateFrame)},
+        == std::vector<std::vector<std::uint8_t>>{vec(portFrame), vec(msgFrame), vec(rateFrame)},
       "the three frames, in order, with their checksums");
     check(writes() == m.messages, "and nothing else was written");
 
@@ -206,7 +206,7 @@ void bringUp() {
     check(runUntil(d, [&] { return d.answering() && !d.pending(); }, 3s), "back");
     check(
       m.messages
-        == std::vector<std::vector<std::uint8_t>>{vec(PortFrame), vec(MsgFrame), vec(RateFrame)},
+        == std::vector<std::vector<std::uint8_t>>{vec(portFrame), vec(msgFrame), vec(rateFrame)},
       "the configuration again, the command not");
 }
 
@@ -255,7 +255,7 @@ void navPvt() {
             if(d.fresh()) {
                 ++chunks;
                 ubx.feed(d.latest().data(), [&](Gnss::UbxMessage const& msg) {
-                    if(msg.is(M8::NavPvtClass, M8::NavPvtId)) {
+                    if(msg.is(M8::navPvtClass, M8::navPvtId)) {
                         ++pvts;
                         last = M8::decodeNavPvt(msg.payload);
                     }
@@ -265,7 +265,7 @@ void navPvt() {
     };
     std::vector<std::uint8_t> nmea{'$', 'G', 'N', 'G', 'G', 'A', '*', '0', '0', '\r', '\n'};
     m.queue(nmea);   // what the part sent before the port was configured
-    m.queue(Gnss::ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload()));
+    m.queue(Gnss::ubxFrame(M8::navPvtClass, M8::navPvtId, navPvtPayload()));
     pump(300);
     checkEq(chunks, 2, "64 + 47 bytes: two chunks");
     checkEq(pvts, 1, "one NAV-PVT");
@@ -275,7 +275,7 @@ void navPvt() {
     check(equal(last.lat, -47376900) && equal(last.lon, 8541700), "at the position");
 
     testcase.step("UBX: a bad checksum is counted, not handed on, and the next frame still is");
-    auto broken = Gnss::ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload());
+    auto broken = Gnss::ubxFrame(M8::navPvtClass, M8::navPvtId, navPvtPayload());
     broken[30] ^= 0x01U;   // a payload byte
     m.queue(broken);
     m.queue(
@@ -287,7 +287,7 @@ void navPvt() {
 
     testcase.step("UBX: a frame longer than MaxPayload is counted and dropped");
     Gnss::Ubx<16> small{};
-    auto const    frame = Gnss::ubxFrame(M8::NavPvtClass, M8::NavPvtId, navPvtPayload());
+    auto const    frame = Gnss::ubxFrame(M8::navPvtClass, M8::navPvtId, navPvtPayload());
     std::array<std::byte, frame.size()> bytes{};
     for(std::size_t i = 0; i < frame.size(); ++i) { bytes[i] = std::byte{frame[i]}; }
     int handed = 0;

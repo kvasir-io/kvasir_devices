@@ -12,7 +12,7 @@ using namespace Kvasir::Test;
 namespace {
 
 /// The states of one forward detent of a whole-cycle encoder, (A << 1) | B, from rest to rest.
-constexpr unsigned Forward[4] = {0b10, 0b11, 0b01, 0b00};
+constexpr unsigned forward[4] = {0b10, 0b11, 0b01, 0b00};
 
 template<typename D>
 constexpr int feed(D&                              d,
@@ -34,7 +34,7 @@ void cleanTurns() {
     Kvasir::QuadratureDecoder<> d{};
     int                         total{};
     for(int i = 0; i < 24; ++i) {
-        int const got = feed(d, {Forward[0], Forward[1], Forward[2], Forward[3]});
+        int const got = feed(d, {forward[0], forward[1], forward[2], forward[3]});
         checkEq(got, 1, "each forward detent counts one");
         total += got;
     }
@@ -57,7 +57,7 @@ void bounce() {
     int  total{};
     auto prev = 0U;
     for(int detent = 0; detent < 10; ++detent) {
-        for(auto const s : Forward) {
+        for(auto const s : forward) {
             for(int k = 0; k < 3; ++k) { total += feed(d, {s, prev}); }
             total += feed(d, {s});
             prev = s;
@@ -112,14 +112,14 @@ void randomWalk() {
     unsigned                    pos{};   // quarter steps, mod 4 is the index into the Gray cycle
     int                         counted{};
     int                         quarter{};   // quarter steps from the start
-    constexpr unsigned          Cycle[4] = {0b00, 0b10, 0b11, 0b01};
+    constexpr unsigned          cycle[4] = {0b00, 0b10, 0b11, 0b01};
 
     for(int i = 0; i < 20000; ++i) {
         int const      step = dir(rng) == 0 ? -1 : 1;
-        unsigned const from = Cycle[pos % 4];
+        unsigned const from = cycle[pos % 4];
         pos                 = static_cast<unsigned>(static_cast<int>(pos) + step);
         quarter += step;
-        unsigned const to = Cycle[pos % 4];
+        unsigned const to = cycle[pos % 4];
         for(int k = chatter(rng); k > 0; --k) { counted += feed(d, {to, from}); }
         counted += feed(d, {to});
     }
@@ -127,7 +127,7 @@ void randomWalk() {
     while(pos % 4 != 0) {
         ++pos;
         ++quarter;
-        counted += feed(d, {Cycle[pos % 4]});
+        counted += feed(d, {cycle[pos % 4]});
     }
     checkEq(counted, quarter / 4, "the detents the walk went through");
     checkEq(d.skipped(), 0, "nothing skipped");

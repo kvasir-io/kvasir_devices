@@ -75,10 +75,10 @@ struct FastConfig {
 
 using FastRail = PowerRail<FakeClock, Supply, FastConfig>;
 
-static_assert(FastRail::OffTime == 20ms && FastRail::SettleTime == 7ms
-              && FastRail::AbsentBeforeCycle == 1500ms && FastRail::CycleIntervalMax == 4000ms);
-static_assert(Rail::OffTime == PowerRailDefaults::offTime
-              && Rail::CycleIntervalMax == PowerRailDefaults::cycleIntervalMax);
+static_assert(FastRail::offTime == 20ms && FastRail::settleTime == 7ms
+              && FastRail::absentBeforeCycle == 1500ms && FastRail::cycleIntervalMax == 4000ms);
+static_assert(Rail::offTime == PowerRailDefaults::offTime
+              && Rail::cycleIntervalMax == PowerRailDefaults::cycleIntervalMax);
 
 /// A switch that claims its pin hands the claim to the rail; one that does not still is one.
 struct ClaimingSupply : Supply {
@@ -133,15 +133,15 @@ void powerRail() {
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
           if(!Supply::isOn) { talkedWhileOff = true; }
-          if(farDead && a == Far::Address) { return FakeBusResult::nack; }
+          if(farDead && a == Far::address) { return FakeBusResult::nack; }
           return zeros(a, s, r);
       }};
 
     testCase("PowerRail: off first, then on, and nothing on the bus before it settled");
-    runFor(powered, Rail::OffTime);
+    runFor(powered, Rail::offTime);
     check(Supply::switched == std::vector<bool>{false}, "the first thing it does is switch off");
     checkEq(busEntries(), std::size_t{0}, "and nothing is said while it is off");
-    runFor(powered, Rail::SettleTime + 5ms);
+    runFor(powered, Rail::settleTime + 5ms);
     check((Supply::switched == std::vector<bool>{false, true}), "then on");
     check(runUntil(
             powered,
@@ -158,11 +158,11 @@ void powerRail() {
     checkEq(rail.cycles(), 0U, "which alone cycles nothing");
     auto const parkedAt = FakeClock::now();
     check(runUntil(powered, [&] { return rail.cycles() == 1; }, 10s), "the rail is cycled for it");
-    check(FakeClock::now() - parkedAt >= Rail::AbsentBeforeCycle, "not before AbsentBeforeCycle");
+    check(FakeClock::now() - parkedAt >= Rail::absentBeforeCycle, "not before AbsentBeforeCycle");
     auto const firstCycleAt = FakeClock::now();
     check(!Supply::isOn && !rail.powered(), "off");
     check(!bus.get<Near>().answering(), "and the part that was fine starts over too");
-    runFor(powered, Rail::OffTime + Rail::SettleTime + 5ms);
+    runFor(powered, Rail::offTime + Rail::settleTime + 5ms);
     check(Supply::isOn, "on again");
     check(runUntil(
             powered,
@@ -173,10 +173,10 @@ void powerRail() {
 
     testCase("PowerRail: a part that never comes back is cycled for at a growing interval");
     check(runUntil(powered, [&] { return rail.cycles() == 2; }, 60s), "a second cycle comes");
-    check(FakeClock::now() - firstCycleAt >= 2 * Rail::AbsentBeforeCycle, "after twice the wait");
+    check(FakeClock::now() - firstCycleAt >= 2 * Rail::absentBeforeCycle, "after twice the wait");
     auto const secondCycleAt = FakeClock::now();
     check(runUntil(powered, [&] { return rail.cycles() == 3; }, 120s), "and a third");
-    check(FakeClock::now() - secondCycleAt >= 4 * Rail::AbsentBeforeCycle, "after four times");
+    check(FakeClock::now() - secondCycleAt >= 4 * Rail::absentBeforeCycle, "after four times");
 
     testCase("PowerRail: the part is back, the cycling stops and the wait is the first one again");
     farDead = false;
@@ -211,7 +211,7 @@ void configured() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> s, std::span<std::byte> r) {
-          if(farDead && a == Far::Address) { return FakeBusResult::nack; }
+          if(farDead && a == Far::address) { return FakeBusResult::nack; }
           return zeros(a, s, r);
       }};
 

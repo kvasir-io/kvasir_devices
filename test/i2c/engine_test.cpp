@@ -36,15 +36,15 @@ namespace PresenceTest {
 
     /// The smallest chip: one register read at bring-up, one cyclic read.
     struct Probe {
-        static constexpr std::string_view Name          = "PROBE";
-        static constexpr Address7         Address       = 0x21;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "PROBE";
+        static constexpr Address7         address       = 0x21;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Value {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -60,9 +60,9 @@ namespace PresenceTest {
 
     /// Probe without an Init: nothing is sent at bring-up, so its first read is what answers.
     struct NoInit {
-        static constexpr std::string_view Name          = "NOINIT";
-        static constexpr Address7         Address       = 0x22;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "NOINIT";
+        static constexpr Address7         address       = 0x22;
+        static constexpr std::size_t      registerBytes = 1;
 
         using Value = Probe::Value;
         using Reads = Kvasir::Engine::List<Value>;
@@ -242,14 +242,14 @@ void presence() {
     FakeBus::respond = zeros;
     Dev<Probe> re{};
     check(runUntil(re, [&] { return re.valid(); }, 500ms), "up");
-    checkEq(readsOf(Probe::Address, 0x00), std::size_t{1}, "one bring-up so far");
+    checkEq(readsOf(Probe::address, 0x00), std::size_t{1}, "one bring-up so far");
     FakeBus::respond = alwaysFault;
     check(runUntil(re, [&] { return !re.answering(); }, 2s), "no longer up after the faults");
-    checkEq(readsOf(Probe::Address, 0x00), std::size_t{1}, "nothing re-read while the bus faults");
+    checkEq(readsOf(Probe::address, 0x00), std::size_t{1}, "nothing re-read while the bus faults");
     check(!re.absent(), "faults did not park it");
     FakeBus::respond = zeros;
     check(runUntil(re, [&] { return re.valid(); }, 500ms), "up again once the bus answers");
-    checkEq(readsOf(Probe::Address, 0x00), std::size_t{2}, "through the Init script");
+    checkEq(readsOf(Probe::address, 0x00), std::size_t{2}, "through the Init script");
     checkEq(Log::warnings, 0, "with nothing to warn about");
 }
 
@@ -260,13 +260,13 @@ namespace LinkTest {
     /// Two cyclic read groups and no Init: nothing is sent to come up, so only an acknowledged
     /// read makes the device answering.
     struct TwoGroups {
-        static constexpr std::string_view Name          = "LINK";
-        static constexpr Address7         Address       = 0x2A;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "LINK";
+        static constexpr Address7         address       = 0x2A;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Fast {
-            static constexpr auto       Period = std::chrono::milliseconds{10};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{10};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -274,8 +274,8 @@ namespace LinkTest {
         };
 
         struct Slow {
-            static constexpr auto       Period = std::chrono::milliseconds{50};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{50};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -291,7 +291,7 @@ namespace LinkTest {
 namespace FeaturesTest {
     using Kvasir::Engine::EngineFeatures;
     using Kvasir::Engine::WithFeatures;
-    namespace D = Kvasir::Engine::detail;
+    namespace D = Kvasir::Engine::Detail;
 
     /// The fake with every feature off, and one with only the in-flight net off.
     using MinBus = Kvasir::Engine::WithFeatures<
@@ -316,7 +316,7 @@ namespace FeaturesTest {
                   "other features, another port");
     static_assert(
       std::is_same_v<D::PortOf<Kvasir::Engine::WithFeatures<FakeBus,
-                                                            Kvasir::Engine::AllEngineFeatures>>,
+                                                            Kvasir::Engine::allEngineFeatures>>,
                      D::PortOf<FakeBus>>,
       "the same features, the same port: one engine");
     // What a feature that is off leaves out of every device's state.
@@ -567,7 +567,7 @@ void linkState() {
 
     I2cCase const testcase{
       "Link: a chip without Init is starting until its part acknowledges something"};
-    RegisterModel<1, 1> model{TwoGroups::Address};
+    RegisterModel<1, 1> model{TwoGroups::address};
     model.set(0x00, {7, 9});
     bool             answer = false;
     ScopedHook const answering{
@@ -620,12 +620,12 @@ namespace TicketTest {
     /// An on-demand read with a check step whose flag the model controls, and two write groups:
     /// a plain state, and one whose every set is a command.
     struct OnDemand {
-        static constexpr std::string_view Name          = "TICKET";
-        static constexpr Address7         Address       = 0x2B;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "TICKET";
+        static constexpr Address7         address       = 0x2B;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Page {
-            static constexpr std::array Steps{
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
               Kvasir::Engine::Step::check(2ms),
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1})};
@@ -640,7 +640,7 @@ namespace TicketTest {
 
         struct Level {
             using Value                        = std::uint8_t;
-            static constexpr std::size_t Bytes = 1;
+            static constexpr std::size_t bytes = 1;
 
             [[nodiscard]] static constexpr Kvasir::Engine::Step
             encode(Value const&         value,
@@ -652,8 +652,8 @@ namespace TicketTest {
 
         struct Clear {
             using Value                              = std::uint8_t;
-            static constexpr std::size_t Bytes       = 1;
-            static constexpr bool        AlwaysWrite = true;
+            static constexpr std::size_t bytes       = 1;
+            static constexpr bool        alwaysWrite = true;
 
             [[nodiscard]] static constexpr Kvasir::Engine::Step
             encode(Value const&         value,
@@ -676,7 +676,7 @@ void ticketsAndWrites() {
     using C = OnDemand::Clear;
 
     I2cCase testcase{"request: a ticket is pending until its run ends, then says how it went"};
-    RegisterModel<1, 1> model{OnDemand::Address};
+    RegisterModel<1, 1> model{OnDemand::address};
     model.set(0x00, {0x01, 42});
     bool             nak = false;
     ScopedHook const answering{
@@ -777,7 +777,7 @@ void ticketsAndWrites() {
 
     testcase.next(
       "StallWatch: a part that answers and delivers nothing new is caught, and not every turn");
-    RegisterModel<1, 1> quietModel{OnDemand::Address};
+    RegisterModel<1, 1> quietModel{OnDemand::address};
     quietModel.set(0x00, {0x01, 7});
     FakeBus::respond = std::ref(quietModel);
     Dev<OnDemand> quiet{};
@@ -854,16 +854,16 @@ void ticketsAndWrites() {
 /// it reads and one config register it writes and checks. Nothing of a real chip's
 /// character is in the way.
 struct VerifyChip {
-    static constexpr std::string_view Name          = "VERIFY";
-    static constexpr Address7         Address       = 0x40;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "VERIFY";
+    static constexpr Address7         address       = 0x40;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Status {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Sample {
@@ -875,9 +875,9 @@ struct VerifyChip {
 
     struct Config {
         using Value                                 = std::uint8_t;
-        static constexpr std::size_t Bytes          = 1;
-        static constexpr auto        VerifyDelay    = std::chrono::milliseconds{10};
-        static constexpr auto        VerifyInterval = std::chrono::milliseconds{500};
+        static constexpr std::size_t bytes          = 1;
+        static constexpr auto        verifyDelay    = std::chrono::milliseconds{10};
+        static constexpr auto        verifyInterval = std::chrono::milliseconds{500};
 
         static constexpr Kvasir::Engine::Step encode(Value const&         v,
                                                      std::span<std::byte> buf) {
@@ -893,17 +893,17 @@ struct VerifyChip {
 /// The same, but the top bit of the register is a status flag the chip owns, so a
 /// read-back that differs only there is not a mismatch.
 struct VerifyMaskChip {
-    static constexpr std::string_view Name          = "VERIFYMASK";
-    static constexpr Address7         Address       = 0x41;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "VERIFYMASK";
+    static constexpr Address7         address       = 0x41;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
     struct Config {
         using Value                              = std::uint8_t;
-        static constexpr std::size_t Bytes       = 1;
-        static constexpr auto        VerifyDelay = std::chrono::milliseconds{10};
+        static constexpr std::size_t bytes       = 1;
+        static constexpr auto        verifyDelay = std::chrono::milliseconds{10};
 
         static constexpr Kvasir::Engine::Step encode(Value const&         v,
                                                      std::span<std::byte> buf) {
@@ -924,9 +924,9 @@ struct VerifyMaskChip {
 /// A memory whose read length is part of the request: one description serves a four-byte
 /// and a sixty-four-byte read.
 struct MemChip {
-    static constexpr std::string_view Name          = "MEM";
-    static constexpr Address7         Address       = 0x50;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "MEM";
+    static constexpr Address7         address       = 0x50;
+    static constexpr std::size_t      registerBytes = 1;
 
     struct Page {
         struct Request {
@@ -934,7 +934,7 @@ struct MemChip {
             std::uint8_t length{4};
         };
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Kvasir::Engine::Step::readIndirect({.regOffset = 0, .count = 64, .offset = 1})};
 
         static constexpr std::size_t prepare(Request const&       r,
@@ -961,7 +961,7 @@ struct MemChip {
 
 /// The page's gap in the test that asks for one.
 struct FiveMsGap {
-    static constexpr auto Gap = 5ms;
+    static constexpr auto gap = 5ms;
 };
 
 /// A display page written as two transactions: the window command, then the RAM data
@@ -971,24 +971,24 @@ struct FiveMsGap {
 /// show that nothing gets between the two transactions of a page.
 template<typename Timing = Kvasir::Engine::DefaultTiming>
 struct PageChip {
-    static constexpr std::chrono::milliseconds Gap = [] {
-        if constexpr(requires { Timing::Gap; }) {
-            return Kvasir::asDuration(Timing::Gap);
+    static constexpr std::chrono::milliseconds gap = [] {
+        if constexpr(requires { Timing::gap; }) {
+            return Kvasir::asDuration(Timing::gap);
         } else {
             return std::chrono::milliseconds::zero();
         }
     }();
 
-    static constexpr std::string_view Name          = "PAGE";
-    static constexpr Address7         Address       = 0x3C;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "PAGE";
+    static constexpr Address7         address       = 0x3C;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr std::array Init{Kvasir::Engine::Step::command({.payload = {0xAE}}),
+    static constexpr std::array init{Kvasir::Engine::Step::command({.payload = {0xAE}}),
                                      Kvasir::Engine::Step::command({.payload = {0xAF}})};
 
     struct Status {
-        static constexpr auto       Period = std::chrono::milliseconds{2};
-        static constexpr std::array Steps{Kvasir::Engine::Step::receive({.count = 1})};
+        static constexpr auto       period = std::chrono::milliseconds{2};
+        static constexpr std::array steps{Kvasir::Engine::Step::receive({.count = 1})};
 
         struct Sample {
             std::uint8_t v{};
@@ -999,8 +999,8 @@ struct PageChip {
 
     struct Page {
         using Value                        = std::array<std::uint8_t, 8>;
-        static constexpr std::size_t Items = 2;
-        static constexpr std::size_t Bytes = 4 + 1 + 8;
+        static constexpr std::size_t items = 2;
+        static constexpr std::size_t bytes = 4 + 1 + 8;
 
         static constexpr std::array<Kvasir::Engine::Step,
                                     2>
@@ -1013,14 +1013,14 @@ struct PageChip {
             buf[3] = std::byte{0x10};                        // column, high nibble
             buf[4] = std::byte{0x40};                        // the data stream
             for(std::size_t i = 0; i < 8; ++i) { buf[5 + i] = std::byte{v[i]}; }
-            return {Kvasir::Engine::Step::commandBuffer({.offset = 0, .count = 4, .delay = Gap}),
+            return {Kvasir::Engine::Step::commandBuffer({.offset = 0, .count = 4, .delay = gap}),
                     Kvasir::Engine::Step::commandBuffer({.offset = 4, .count = 9})};
         }
     };
 
     struct Contrast {
         using Value                        = std::uint8_t;
-        static constexpr std::size_t Bytes = 3;
+        static constexpr std::size_t bytes = 3;
 
         static constexpr Kvasir::Engine::Step encode(Value const&         v,
                                                      std::span<std::byte> buf) {
@@ -1037,10 +1037,10 @@ struct PageChip {
 
 // A chip whose writes are one transaction each carries no script store at all: the empty
 // [[no_unique_address]] member, the same trick verify_ uses on a chip that does not verify.
-static_assert(std::is_empty_v<Kvasir::Engine::detail::WriteScript<false,
+static_assert(std::is_empty_v<Kvasir::Engine::Detail::WriteScript<false,
                                                                   1>>);
-static_assert(Dev<Chips::Ht16k33>::MaxWriteSteps == 1);
-static_assert(Dev<PageChip<>>::MaxWriteSteps == 2);
+static_assert(Dev<Chips::Ht16k33>::maxWriteSteps == 1);
+static_assert(Dev<PageChip<>>::maxWriteSteps == 2);
 
 /// Acks anything at 0x3C and answers a bare read with 0x5A.
 FakeBus::Result pageOk(std::uint8_t               addr,
@@ -1152,7 +1152,7 @@ void engine() {
       }};
     Dev<Chips::Mcp9808> t{};
     check(runUntil(t, [&] { return t.valid(); }, 500ms), "up");
-    t.set<Chips::Mcp9808::Limits>(Chips::Mcp9808::High,
+    t.set<Chips::Mcp9808::Limits>(Chips::Mcp9808::high,
                                   Units::centiDegC(3000));   // 30.00 degC -> 0x01E0
     check(runUntil(t, [&] { return lim.word(0x02) == 0x01E0; }, 200ms), "upper limit written");
 
@@ -1166,7 +1166,7 @@ void engine() {
             [&] { return lim.word(0x02) == 0x01E0; },
             200ms),
           "and the limit the application set is on the chip again");
-    checkEq(centiOf(t.value<Chips::Mcp9808::Limits>(Chips::Mcp9808::High)),
+    checkEq(centiOf(t.value<Chips::Mcp9808::Limits>(Chips::Mcp9808::high)),
             3000,
             "value<W>() agrees");
 
@@ -1471,17 +1471,17 @@ namespace NetTest {
 
     /// Three Init steps, so a NAK on a later one can be told from one on the first.
     struct ThreeStep {
-        static constexpr std::string_view Name          = "THREE";
-        static constexpr Address7         Address       = 0x2D;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "THREE";
+        static constexpr Address7         address       = 0x2D;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
           Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0x11}}),
           Kvasir::Engine::Step::write({.reg = 0x02, .payload = {0x22}})};
 
         struct Value {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x03, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -1493,13 +1493,13 @@ namespace NetTest {
 
     /// A decode that always asks to be run again: a busy bit that never clears.
     struct Retrying {
-        static constexpr std::string_view Name          = "RETRY";
-        static constexpr Address7         Address       = 0x2E;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "RETRY";
+        static constexpr Address7         address       = 0x2E;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Data {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -1517,18 +1517,18 @@ namespace NetTest {
 
     /// Four registers the application may set one at a time, with no Initial.
     struct Levels {
-        static constexpr std::string_view Name          = "LEVELS";
-        static constexpr Address7         Address       = 0x2F;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "LEVELS";
+        static constexpr Address7         address       = 0x2F;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         using Value = Probe::Value;
 
         struct Level {
             using Value                        = std::uint8_t;
-            static constexpr std::size_t Items = 4;
-            static constexpr std::size_t Bytes = 1;
+            static constexpr std::size_t items = 4;
+            static constexpr std::size_t bytes = 1;
 
             [[nodiscard]] static constexpr Kvasir::Engine::Step
             encode(Value const&         value,
@@ -1546,19 +1546,19 @@ namespace NetTest {
 
     /// The same four registers with an Initial every item starts from.
     struct InitialLevels {
-        static constexpr std::string_view Name          = "INITLEVELS";
-        static constexpr Address7         Address       = 0x2C;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "INITLEVELS";
+        static constexpr Address7         address       = 0x2C;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         using Value = Probe::Value;
 
         struct Level {
             using Value                        = std::uint8_t;
-            static constexpr std::size_t Items = 4;
-            static constexpr std::size_t Bytes = 1;
-            static constexpr Value       Initial{0x55};
+            static constexpr std::size_t items = 4;
+            static constexpr std::size_t bytes = 1;
+            static constexpr Value       initial{0x55};
 
             [[nodiscard]] static constexpr Kvasir::Engine::Step
             encode(Value const&         value,
@@ -1576,15 +1576,15 @@ namespace NetTest {
 
     /// A bus type that says what its callback slot holds, so the engine's check of it is on.
     struct SizedBus : FakeBus {
-        static constexpr std::size_t CallbackSize = 32;
+        static constexpr std::size_t callbackSize = 32;
     };
 
-    static_assert(Dev<Probe>::CallbackBytes >= sizeof(void*) + sizeof(std::uint32_t),
+    static_assert(Dev<Probe>::callbackBytes >= sizeof(void*) + sizeof(std::uint32_t),
                   "the completion lambda carries the device and a generation");
     static_assert(Device<SizedBus,
                          FakeClock,
-                         Probe>::CallbackBytes
-                    <= SizedBus::CallbackSize,
+                         Probe>::callbackBytes
+                    <= SizedBus::callbackSize,
                   "and fits a bus that says what it holds");
 
     /// The fault backoff knobs (EngineDefaults::faultBackoff, faultBackoffLongest, faultBackoffResetOn).
@@ -1614,7 +1614,7 @@ namespace NetTest {
 
     template<typename Config>
     std::vector<std::chrono::milliseconds> bringUpPauses(int naks) {
-        RegisterModel<1> model{ThreeStep::Address};
+        RegisterModel<1> model{ThreeStep::address};
         ScopedHook const failing{
           FakeBus::respond,
           [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
@@ -1667,7 +1667,7 @@ void nets() {
 
     I2cCase testcase{
       "engine: a NAK on a later Init step starts the bring-up over, after FaultBackoff"};
-    RegisterModel<1> three{ThreeStep::Address};
+    RegisterModel<1> three{ThreeStep::address};
     int              nakLeft = 1;
     ScopedHook const answering{
       FakeBus::respond,
@@ -1684,7 +1684,7 @@ void nets() {
     check(runUntil(d, [&] { return d.answering(); }, 500ms), "up despite the NAK");
     check(writes() == std::vector<std::vector<std::uint8_t>>{{0x01, 0x11}, {0x02, 0x22}, {0x01, 0x11}, {0x02, 0x22}},
           "the script again from its first step, not from the step that failed");
-    checkEq(readsOf(ThreeStep::Address, 0x00),
+    checkEq(readsOf(ThreeStep::address, 0x00),
             std::size_t{2},
             "the first step's read went out twice");
     {
@@ -1754,7 +1754,7 @@ void nets() {
     check(r.answer<Retrying::Data>(ticket) == Kvasir::Engine::Answer::rejected, "rejected");
     checkEq(r.rejected(), 1U, "counted once");
     checkEq(r.samples(), 0U, "no sample");
-    checkEq(readsOf(Retrying::Address, 0x00),
+    checkEq(readsOf(Retrying::address, 0x00),
             std::size_t{Kvasir::Engine::EngineDefaults::maxRetries} + 1,
             "the run, then MaxRetries runs again, a millisecond apart");
     runFor(r, 100ms);
@@ -1764,7 +1764,7 @@ void nets() {
         FakeBus::respond = zeros;
         Dev<Retrying, TwoRetries> two{};
         check(runUntil(two, [&] { return two.rejected() == 1; }, 200ms), "rejected");
-        checkEq(readsOf(Retrying::Address, 0x00),
+        checkEq(readsOf(Retrying::address, 0x00),
                 std::size_t{3},
                 "the run and two retries: Config::MaxRetries");
     }
@@ -1805,14 +1805,14 @@ void nets() {
     Dev<Probe> full{};
     check(runUntil(full, [&] { return full.valid(); }, 500ms), "up");
     checkEq(FakeBus::refused, 3, "three submits were refused");
-    checkEq(readsOf(Probe::Address, 0x00),
+    checkEq(readsOf(Probe::address, 0x00),
             std::size_t{1},
             "the bring-up's read went out once, on the fourth try");
     checkEq(full.errors(), 0U, "none of the refusals was an error");
     checkEq(Log::warnings, 0, "nor a line");
 
     testcase.next("engine: a bring-up again writes the items the application set, and only those");
-    RegisterModel<1> levels{Levels::Address};
+    RegisterModel<1> levels{Levels::address};
     bool             away = false;
     ScopedHook const answeringAgain{
       FakeBus::respond,
@@ -1835,7 +1835,7 @@ void nets() {
           "items 1 and 3 again, and neither of the two the application never set");
 
     testcase.next("engine: one item set before the bring-up leaves the others their Initial");
-    RegisterModel<1> initial{InitialLevels::Address};
+    RegisterModel<1> initial{InitialLevels::address};
     FakeBus::respond = std::ref(initial);
     Dev<InitialLevels> il{};
     il.set<InitialLevels::Level>(2, 0x2C);
@@ -1879,7 +1879,7 @@ void knobs() {
             500ms),
           "request()");
     {
-        RegisterModel<1> model{Levels::Address};
+        RegisterModel<1> model{Levels::address};
         FakeBus::respond = std::ref(model);
         Dev<Levels> l{};
         check(l.set(Levels::Level{}, 2, 0x22), "set(W{}, item, value)");
@@ -1957,13 +1957,13 @@ namespace CountedTest {
     /// One-byte count at 0x10, then at most four bytes of 0x20; a two-byte count at 0x30, then
     /// a bare read of at most 200.
     struct Counted {
-        static constexpr std::string_view Name          = "COUNTED";
-        static constexpr Address7         Address       = 0x33;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "COUNTED";
+        static constexpr Address7         address       = 0x33;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Short {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
               Kvasir::Engine::Step::readCounted(
                 {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 4, .offset = 1})};
@@ -1979,8 +1979,8 @@ namespace CountedTest {
         };
 
         struct Long {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x30, .count = 2, .offset = 0}),
               Kvasir::Engine::Step::receiveCounted(
                 {.countOffset = 0, .countBytes = 2, .maxCount = 200, .offset = 2})};
@@ -1998,56 +1998,56 @@ namespace CountedTest {
     };
 
     static_assert(Kvasir::Engine::bufferBytes(std::span<Kvasir::Engine::Step const>{
-                    Counted::Short::Steps})
+                    Counted::Short::steps})
                     == 5,
                   "a counted read's buffer is reckoned at its most");
-    static_assert(detail::stepBits(Counted::Long::Steps[1],
+    static_assert(Detail::stepBits(Counted::Long::steps[1],
                                    1)
                     == (1 + 200) * 9 + 2,
                   "and so is its bus load");
 
     // What the script checks turn down.
-    constexpr std::array WideCount{
+    constexpr std::array wideCount{
       Kvasir::Engine::Step::read({.reg = 0x10, .count = 3, .offset = 0}),
       Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 3, .maxCount = 4, .offset = 3})};
-    constexpr std::array CountNotRead{
+    constexpr std::array countNotRead{
       Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
       Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 1, .countBytes = 1, .maxCount = 4, .offset = 2})};
-    constexpr std::array CountAfter{
+    constexpr std::array countAfter{
       Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 4, .offset = 1}),
       Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0})};
-    constexpr std::array CountFromCounted{
+    constexpr std::array countFromCounted{
       Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
       Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 4, .offset = 1}),
       Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 1, .countBytes = 1, .maxCount = 4, .offset = 5})};
-    constexpr std::array PastBuffer{
+    constexpr std::array pastBuffer{
       Kvasir::Engine::Step::read({.reg = 0x10, .count = 1, .offset = 0}),
       Kvasir::Engine::Step::readCounted(
         {.reg = 0x20, .countOffset = 0, .countBytes = 1, .maxCount = 250, .offset = 10})};
-    static_assert(Kvasir::Engine::scriptFault(WideCount,
+    static_assert(Kvasir::Engine::scriptFault(wideCount,
                                               1)
                   == Kvasir::Engine::ScriptFault::countWidth);
-    static_assert(Kvasir::Engine::scriptFault(CountNotRead,
+    static_assert(Kvasir::Engine::scriptFault(countNotRead,
                                               1)
                   == Kvasir::Engine::ScriptFault::countNotReadBefore);
-    static_assert(Kvasir::Engine::scriptFault(CountAfter,
+    static_assert(Kvasir::Engine::scriptFault(countAfter,
                                               1)
                   == Kvasir::Engine::ScriptFault::countNotReadBefore);
-    static_assert(Kvasir::Engine::scriptFault(CountFromCounted,
+    static_assert(Kvasir::Engine::scriptFault(countFromCounted,
                                               1)
                     == Kvasir::Engine::ScriptFault::countNotReadBefore,
                   "a counted read may not have filled the bytes a later count names");
-    static_assert(Kvasir::Engine::scriptFault(PastBuffer,
+    static_assert(Kvasir::Engine::scriptFault(pastBuffer,
                                               1)
                   == Kvasir::Engine::ScriptFault::countedPastBuffer);
-    static_assert(Kvasir::Engine::wellFormed(Counted::Short::Steps,
+    static_assert(Kvasir::Engine::wellFormed(Counted::Short::steps,
                                              1)
-                  && Kvasir::Engine::wellFormed(Counted::Long::Steps,
+                  && Kvasir::Engine::wellFormed(Counted::Long::steps,
                                                 1));
 
 }   // namespace CountedTest
@@ -2064,7 +2064,7 @@ void countedReads() {
     ScopedHook const answering{
       FakeBus::respond,
       [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
-          if(a != Counted::Address) { return FakeBus::Result::nack; }
+          if(a != Counted::address) { return FakeBus::Result::nack; }
           auto const reg = sent.empty() ? -1 : static_cast<int>(static_cast<std::uint8_t>(sent[0]));
           if(reg == 0x10) { recv[0] = std::byte{shortCount}; }
           if(reg == 0x30) {
@@ -2156,17 +2156,17 @@ void countedReads() {
 namespace WakeTest {
 
     struct Sleepy {
-        static constexpr std::string_view Name           = "SLEEPY";
-        static constexpr Address7         Address        = 0x37;
-        static constexpr std::size_t      RegisterBytes  = 1;
-        static constexpr std::uint8_t     WakeRetries    = 3;
-        static constexpr auto             WakeRetryDelay = std::chrono::milliseconds{4};
-        static constexpr std::array       Init{
+        static constexpr std::string_view name           = "SLEEPY";
+        static constexpr Address7         address        = 0x37;
+        static constexpr std::size_t      registerBytes  = 1;
+        static constexpr std::uint8_t     wakeRetries    = 3;
+        static constexpr auto             wakeRetryDelay = std::chrono::milliseconds{4};
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
 
         struct Value {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -2176,7 +2176,7 @@ namespace WakeTest {
         using Reads = Kvasir::Engine::List<Value>;
     };
 
-    static_assert(Dev<Sleepy>::WakeRetries == 3 && Dev<PresenceTest::Probe>::WakeRetries == 0);
+    static_assert(Dev<Sleepy>::wakeRetries == 3 && Dev<PresenceTest::Probe>::wakeRetries == 0);
 
 }   // namespace WakeTest
 
@@ -2252,10 +2252,10 @@ namespace MayNakTest {
     /// A part whose soft reset (0x00 = 0x10) is never acknowledged: the probe read, the reset
     /// that may NAK, then a configuration write.
     struct Resets {
-        static constexpr std::string_view Name          = "RESETS";
-        static constexpr Address7         Address       = 0x24;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "RESETS";
+        static constexpr Address7         address       = 0x24;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x06, .count = 1, .offset = 0}),
           Kvasir::Engine::Step::write({.reg     = 0x00,
                                        .payload = {0x10},
@@ -2264,8 +2264,8 @@ namespace MayNakTest {
           Kvasir::Engine::Step::write({.reg = 0x04, .payload = {0x22}})};
 
         struct Value {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -2275,15 +2275,15 @@ namespace MayNakTest {
         using Reads = Kvasir::Engine::List<Value>;
     };
 
-    constexpr std::array ProbeMayNak{
+    constexpr std::array probeMayNak{
       Kvasir::Engine::Step::write({.reg = 0x00, .payload = {0x10}, .mayNak = true}),
       Kvasir::Engine::Step::read({.reg = 0x06, .count = 1})};
-    static_assert(Kvasir::Engine::scriptFault(ProbeMayNak,
+    static_assert(Kvasir::Engine::scriptFault(probeMayNak,
                                               1,
                                               false)
                     == Kvasir::Engine::ScriptFault::mayNakProbe,
                   "Init's first transaction is the probe and may not be one that NAKs");
-    static_assert(Kvasir::Engine::scriptFault(ProbeMayNak,
+    static_assert(Kvasir::Engine::scriptFault(probeMayNak,
                                               1,
                                               true)
                     == Kvasir::Engine::ScriptFault::none,
@@ -2291,10 +2291,10 @@ namespace MayNakTest {
 
     /// A two-step Init with a 1 ms gap, for the rounding of a delay to the clock's tick.
     struct OneMs {
-        static constexpr std::string_view Name          = "ONEMS";
-        static constexpr Address7         Address       = 0x25;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "ONEMS";
+        static constexpr Address7         address       = 0x25;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::write(
             {.reg = 0x00, .payload = {0x01}, .delay = std::chrono::milliseconds{1}}),
           Kvasir::Engine::Step::write({.reg = 0x01, .payload = {0x02}})};
@@ -2302,10 +2302,10 @@ namespace MayNakTest {
 
     /// A WHO_AM_I read, identify, then configuration writes.
     struct Identifies {
-        static constexpr std::string_view Name          = "IDENT";
-        static constexpr Address7         Address       = 0x26;
-        static constexpr std::size_t      RegisterBytes = 1;
-        static constexpr std::array       Init{
+        static constexpr std::string_view name          = "IDENT";
+        static constexpr Address7         address       = 0x26;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
           Kvasir::Engine::Step::read({.reg = 0x0F, .count = 1, .offset = 0}),
           Kvasir::Engine::Step::identify(),
           Kvasir::Engine::Step::write({.reg = 0x20, .payload = {0x57}})};
@@ -2321,9 +2321,9 @@ namespace MayNakTest {
         }
     };
 
-    constexpr std::array IdentifyInRead{Kvasir::Engine::Step::read({.reg = 0x06, .count = 1}),
+    constexpr std::array identifyInRead{Kvasir::Engine::Step::read({.reg = 0x06, .count = 1}),
                                         Kvasir::Engine::Step::identify()};
-    static_assert(Kvasir::Engine::scriptFault(IdentifyInRead,
+    static_assert(Kvasir::Engine::scriptFault(identifyInRead,
                                               1,
                                               true)
                     == Kvasir::Engine::ScriptFault::identifyOutsideInit,
@@ -2420,14 +2420,14 @@ namespace ConfirmTest {
 
     /// An input port: one byte, read every 100 ms, a changed value confirmed by the next read.
     struct Port {
-        static constexpr std::string_view Name          = "PORT";
-        static constexpr Address7         Address       = 0x24;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "PORT";
+        static constexpr Address7         address       = 0x24;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Pins {
-            static constexpr auto         Period        = std::chrono::milliseconds{100};
-            static constexpr std::uint8_t ConfirmChange = 3;
-            static constexpr std::array   Steps{
+            static constexpr auto         period        = std::chrono::milliseconds{100};
+            static constexpr std::uint8_t confirmChange = 3;
+            static constexpr std::array   steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -2461,13 +2461,13 @@ namespace ConfirmTest {
 
     /// Two read groups: a level register worth confirming and a count the Config leaves alone.
     struct TwoGroups {
-        static constexpr std::string_view Name          = "TWO";
-        static constexpr Address7         Address       = 0x25;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "TWO";
+        static constexpr Address7         address       = 0x25;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Levels {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -2475,8 +2475,8 @@ namespace ConfirmTest {
         };
 
         struct Count {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0})};
             using Sample = std::uint8_t;
 
@@ -2492,8 +2492,8 @@ namespace ConfirmTest {
     };
 
     // What a Config may say, as the Device's static_asserts see it.
-    using Kvasir::Engine::detail::checkConfirmConfig;
-    using Kvasir::Engine::detail::ConfirmConfig;
+    using Kvasir::Engine::Detail::checkConfirmConfig;
+    using Kvasir::Engine::Detail::ConfirmConfig;
 
     struct Unnamed {
         static constexpr std::uint8_t confirmChange = 3;
@@ -2533,10 +2533,10 @@ namespace ConfirmTest {
                     == ConfirmConfig::counted,
                   "a GNSS stream is a counted read: never read twice");
     static_assert(Dev<TwoGroups,
-                      LevelsOnly>::ConfirmChange<TwoGroups::Levels>
+                      LevelsOnly>::confirmChange<TwoGroups::Levels>
                   == 2);
     static_assert(Dev<TwoGroups,
-                      LevelsOnly>::ConfirmChange<TwoGroups::Count>
+                      LevelsOnly>::confirmChange<TwoGroups::Count>
                     == 0,
                   "a group the Config does not name is read once");
 
@@ -2801,19 +2801,19 @@ void resting() {
     check(runUntil(d, [&] { return d.valid(); }, 50ms), "up");
     {
         auto const turns = d.turns();
-        auto const reads = readsOf(Probe::Address, 0x01);
+        auto const reads = readsOf(Probe::address, 0x01);
         runFor(d, 1000ms);   // a turn a millisecond, a read every 100 ms
-        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{10}, "ten reads in a second");
+        checkEq(readsOf(Probe::address, 0x01) - reads, std::size_t{10}, "ten reads in a second");
         check(d.turns() - turns <= 30, "a few full turns per read, not a thousand");
     }
 
     testcase.step("resting: a request from outside the turn is served on the very next turn");
     {
-        auto const reads = readsOf(Probe::Address, 0x01);
+        auto const reads = readsOf(Probe::address, 0x01);
         runFor(d, 20ms);   // well inside the period
         auto const t = d.request<Probe::Value>();
         turn(d);
-        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "on the wire at once");
+        checkEq(readsOf(Probe::address, 0x01) - reads, std::size_t{1}, "on the wire at once");
         check(runUntil(
                 d,
                 [&] { return d.answer<Probe::Value>(t) == Kvasir::Engine::Answer::ok; },
@@ -2825,9 +2825,9 @@ void resting() {
     {
         runFor(d, 5ms);
         d.period<Probe::Value>(10ms);
-        auto const reads = readsOf(Probe::Address, 0x01);
+        auto const reads = readsOf(Probe::address, 0x01);
         runFor(d, 100ms);
-        check(readsOf(Probe::Address, 0x01) - reads >= 9, "every 10 ms from now on");
+        check(readsOf(Probe::address, 0x01) - reads >= 9, "every 10 ms from now on");
         d.period<Probe::Value>(100ms);
     }
 
@@ -2835,17 +2835,17 @@ void resting() {
       "resting: a clock that jumps past several periods gets one read, then the period");
     {
         runFor(d, 5ms);
-        auto const reads = readsOf(Probe::Address, 0x01);
+        auto const reads = readsOf(Probe::address, 0x01);
         FakeClock::current += 1s;
         turn(d);
-        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "one read");
+        checkEq(readsOf(Probe::address, 0x01) - reads, std::size_t{1}, "one read");
         runFor(d, 50ms);
-        checkEq(readsOf(Probe::Address, 0x01) - reads, std::size_t{1}, "not a burst");
+        checkEq(readsOf(Probe::address, 0x01) - reads, std::size_t{1}, "not a burst");
     }
 
     testcase.next("resting: set() on a resting device is written on the next turn");
     {
-        RegisterModel<1, 1> model{OnDemand::Address};
+        RegisterModel<1, 1> model{OnDemand::address};
         model.set(0x00, {0x01, 7});
         FakeBus::respond = std::ref(model);
         Dev<OnDemand> w{};
@@ -2961,14 +2961,14 @@ namespace OpsKindsTest {
     struct DirectTag {};
 
     using DirectBus = Kvasir::Engine::WithFeatures<FakeBusFor<DirectTag>, [] {
-        auto f      = Kvasir::Engine::AllEngineFeatures;
+        auto f      = Kvasir::Engine::allEngineFeatures;
         f.directOps = true;
         return f;
     }()>;
 
     /// Limits read back 100 ms after a write and every second: the verify path on both kinds.
     struct VerifiedLimits {
-        static constexpr std::chrono::seconds LimitsVerifyInterval{1};
+        static constexpr std::chrono::seconds limitsVerifyInterval{1};
     };
 
     using Tmp = Chips::Tmp1075<VerifiedLimits>;
@@ -3003,8 +3003,8 @@ namespace OpsKindsTest {
 
         Kvasir::I2C::Device<Bus, FakeClock, Tmp> d{};
         check(runUntil<Tag>(d, [&] { return d.samples() == 1; }, 500ms), "first sample");
-        d.template set<Tmp::Limits>(Tmp::Low, Units::centiDegC(7500));
-        d.template set<Tmp::Limits>(Tmp::High, Units::centiDegC(8000));
+        d.template set<Tmp::Limits>(Tmp::low, Units::centiDegC(7500));
+        d.template set<Tmp::Limits>(Tmp::high, Units::centiDegC(8000));
         d.template modify<Tmp::Config>([](auto& c) { c.rate = Tmp::Rate::ms220; });
         check(runUntil<Tag>(
                 d,
@@ -3060,13 +3060,13 @@ namespace InjectedFaults {
 
     /// One four-byte cyclic read: a partly landed one can be told from a whole one.
     struct Wide {
-        static constexpr std::string_view Name          = "WIDE";
-        static constexpr Address7         Address       = 0x23;
-        static constexpr std::size_t      RegisterBytes = 1;
+        static constexpr std::string_view name          = "WIDE";
+        static constexpr Address7         address       = 0x23;
+        static constexpr std::size_t      registerBytes = 1;
 
         struct Value {
-            static constexpr auto       Period = std::chrono::milliseconds{100};
-            static constexpr std::array Steps{
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
               Kvasir::Engine::Step::read({.reg = 0x02, .count = 4, .offset = 0})};
             using Sample = std::uint32_t;
 
@@ -3082,7 +3082,7 @@ namespace InjectedFaults {
     FakeBus::Result answer(std::uint8_t a,
                            std::span<std::byte const>,
                            std::span<std::byte> recv) {
-        if(a != Wide::Address && a != PresenceTest::Probe::Address) {
+        if(a != Wide::address && a != PresenceTest::Probe::address) {
             return FakeBus::Result::nack;
         }
         std::array<std::byte, 4> const v{std::byte{0x11},
@@ -3142,7 +3142,7 @@ void injectedFaults() {
         auto const before  = FakeClock::now();
         check(FakeBus::timeout(), "the bus's transfer timeout");
         checkEq(FakeClock::now() - before,
-                FakeClock::duration{FakeBus::TransferTimeout},
+                FakeClock::duration{FakeBus::transferTimeout},
                 "after 25 ms");
         d.turn();
         checkEq(d.errors(), errors + 1, "one error");

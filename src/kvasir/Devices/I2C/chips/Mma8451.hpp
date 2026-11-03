@@ -32,18 +32,18 @@ namespace Kvasir::I2C::Chips {
 /// three transactions (standby, FS, active), a driver rather than an encode().
 /// 0x1D with SA0 high (the Adafruit breakout), 0x1C low.
 struct Mma8451 {
-    static constexpr std::string_view Name = "MMA8451";
+    static constexpr std::string_view name = "MMA8451";
     /// NXP MMA8451Q. MMA8451Q.md:742, :1048: WHO_AM_I (0x0D) is 0x1A.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0D, 1, true, 0xFF, 0x1A},
     };
-    static constexpr Address7                Address = 0x1D;
-    static constexpr std::array<Address7, 2> Addresses{0x1C, 0x1D};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x1D;
+    static constexpr std::array<Address7, 2> addresses{0x1C, 0x1D};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// WHO_AM_I first, and checked before anything is written (Step::identify): 0x1C and 0x1D
     /// are shared with other parts, such as the ADXL345's alternate address.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x2B, .payload = {0x40}}),   // RST
       Engine::Step::wait(std::chrono::milliseconds{10}),   // the reset; nothing answers during it
       Engine::Step::write({.reg = 0x2A, .payload = {0x00}}),
@@ -62,8 +62,8 @@ struct Mma8451 {
     }
 
     struct Motion {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{20};
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 7})};   // STATUS, OUT_X_MSB .. OUT_Z_LSB
 
         struct Sample {

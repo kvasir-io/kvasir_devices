@@ -21,21 +21,21 @@ namespace Kvasir::I2C::Chips {
 /// GND 0x0F. The 14-lead TSSOP is 0b001_A3A2A1A0 by ADDR2 and ADDR1 (Table 10): 0x10, 0x12,
 /// 0x13, 0x18, 0x1A, 0x1B, 0x1C, 0x1E, 0x1F.
 struct Ad5665 {
-    static constexpr std::string_view Name          = "AD5665R";
-    static constexpr Address7         Address       = 0x0F;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "AD5665R";
+    static constexpr Address7         address       = 0x0F;
+    static constexpr std::size_t      registerBytes = 0;
 
     static constexpr std::array<Address7, 12>
-      Addresses{0x0C, 0x0E, 0x0F, 0x10, 0x12, 0x13, 0x18, 0x1A, 0x1B, 0x1C, 0x1E, 0x1F};
+      addresses{0x0C, 0x0E, 0x0F, 0x10, 0x12, 0x13, 0x18, 0x1A, 0x1B, 0x1C, 0x1E, 0x1F};
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{50};
+    static constexpr auto startupDelay = std::chrono::milliseconds{50};
 
     /// A read returns only the last command written, nothing that identifies the part, so
     /// the bring-up is the software reset alone -- command 101 with DB0 = 1, which also resets
     /// the LDAC, power-down and internal-reference settings (Table 16) that a warm part would
     /// otherwise keep -- and it is what an absent device is probed with. Level's Initial and
     /// a set InternalReference follow it.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x28, 0x00, 0x01}}
       )
     };
@@ -43,9 +43,9 @@ struct Ad5665 {
     /// One item per channel: set<Level>(Ad5665::B, 0x8000).
     struct Level {
         using Value                          = std::uint16_t;
-        static constexpr std::size_t Items   = 4;
-        static constexpr std::size_t Bytes   = 3;
-        static constexpr Value       Initial = 0;
+        static constexpr std::size_t items   = 4;
+        static constexpr std::size_t bytes   = 3;
+        static constexpr Value       initial = 0;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         code,
                                                            std::size_t          item,
@@ -63,7 +63,7 @@ struct Ad5665 {
 
     struct InternalReference {
         using Value                        = Reference;
-        static constexpr std::size_t Bytes = 3;
+        static constexpr std::size_t bytes = 3;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         reference,
                                                            std::span<std::byte> buffer) {
@@ -74,10 +74,10 @@ struct Ad5665 {
         }
     };
 
-    static constexpr std::size_t A = 0;
-    static constexpr std::size_t B = 1;
-    static constexpr std::size_t C = 2;
-    static constexpr std::size_t D = 3;
+    static constexpr std::size_t a = 0;
+    static constexpr std::size_t b = 1;
+    static constexpr std::size_t c = 2;
+    static constexpr std::size_t d = 3;
 
     using Writes = Engine::List<Level, InternalReference>;
 };

@@ -52,16 +52,16 @@ struct SizedCatalogue {
     /// `Addresses` it can be strapped to.
     template<typename C>
     [[nodiscard]] static constexpr bool answersAt(std::uint8_t address) {
-        if(static_cast<std::uint8_t>(C::Address) == address) { return true; }
-        if constexpr(detail::HasAddresses<C>) {
-            for(auto const a : C::Addresses) {
+        if(static_cast<std::uint8_t>(C::address) == address) { return true; }
+        if constexpr(Detail::HasAddresses<C>) {
+            for(auto const a : C::addresses) {
                 if(a == address) { return true; }
             }
         }
         return false;
     }
 
-    static constexpr std::size_t AddressCount = 0x78;
+    static constexpr std::size_t addressCount = 0x78;
 
     /// The hints as the compiler puts them together, a fixed-width Entry an address. Only ever
     /// read in constant expressions (Packed below is what goes into the image): 120 entries of
@@ -69,9 +69,9 @@ struct SizedCatalogue {
     /// Packed.
     /// Which of the chips answers at each address, folded once over chips x addresses: the tables
     /// below read it instead of folding again.
-    static constexpr std::array<std::array<bool, sizeof...(Cs)>, AddressCount> Answers = [] {
-        std::array<std::array<bool, sizeof...(Cs)>, AddressCount> t{};
-        for(std::size_t a = 0; a < AddressCount; ++a) {
+    static constexpr std::array<std::array<bool, sizeof...(Cs)>, addressCount> answers = [] {
+        std::array<std::array<bool, sizeof...(Cs)>, addressCount> t{};
+        for(std::size_t a = 0; a < addressCount; ++a) {
             std::size_t c = 0;
             ((t[a][c++] = answersAt<Cs>(static_cast<std::uint8_t>(a))), ...);
             static_cast<void>(c);
@@ -79,91 +79,91 @@ struct SizedCatalogue {
         return t;
     }();
 
-    static constexpr std::array<Entry, AddressCount> Table = [] {
-        std::array<Entry, AddressCount> t{};
+    static constexpr std::array<Entry, addressCount> table = [] {
+        std::array<Entry, addressCount> t{};
         for(std::size_t a = 0; a < t.size(); ++a) {
             std::size_t c = 0;
-            ((Answers[a][c++] ? t[a].append(Cs::Name) : void()), ...);
+            ((answers[a][c++] ? t[a].append(Cs::name) : void()), ...);
             static_cast<void>(c);
         }
         return t;
     }();
 
     /// The characters of all hints together.
-    static constexpr std::size_t HintBytes = [] {
+    static constexpr std::size_t hintBytes = [] {
         std::size_t n = 0;
-        for(auto const& e : Table) { n += e.length; }
+        for(auto const& e : table) { n += e.length; }
         return n;
     }();
 
     /// The hints back to back, and where each address's starts: what is in the image.
     struct PackedHints {
-        std::array<char, HintBytes == 0 ? 1 : HintBytes> text{};
-        std::array<std::uint16_t, AddressCount + 1>      start{};
+        std::array<char, hintBytes == 0 ? 1 : hintBytes> text{};
+        std::array<std::uint16_t, addressCount + 1>      start{};
     };
 
-    static constexpr PackedHints Packed = [] {
+    static constexpr PackedHints packed = [] {
         PackedHints   p{};
         std::uint16_t n = 0;
-        for(std::size_t a = 0; a < AddressCount; ++a) {
+        for(std::size_t a = 0; a < addressCount; ++a) {
             p.start[a] = n;
-            for(std::size_t i = 0; i < Table[a].length; ++i) { p.text[n++] = Table[a].text[i]; }
+            for(std::size_t i = 0; i < table[a].length; ++i) { p.text[n++] = table[a].text[i]; }
         }
-        p.start[AddressCount] = n;
+        p.start[addressCount] = n;
         return p;
     }();
-    static_assert(HintBytes <= 0xFFFF);
+    static_assert(hintBytes <= 0xFFFF);
 
     /// How many (address, chip) pairs there are in all: the size of the name table.
-    static constexpr std::size_t EntryCount = [] {
+    static constexpr std::size_t entryCount = [] {
         std::size_t n = 0;
-        for(auto const& at : Answers) {
-            for(bool const answers : at) { n += answers ? 1U : 0U; }
+        for(auto const& at : answers) {
+            for(bool const answersHere : at) { n += answersHere ? 1U : 0U; }
         }
         return n;
     }();
 
     /// Every name, address by address; `Offsets[a]` is where address a's names start.
-    static constexpr std::array<std::string_view, EntryCount == 0 ? 1 : EntryCount> Names = [] {
-        std::array<std::string_view, EntryCount == 0 ? 1 : EntryCount> names{};
+    static constexpr std::array<std::string_view, entryCount == 0 ? 1 : entryCount> names = [] {
+        std::array<std::string_view, entryCount == 0 ? 1 : entryCount> namesHere{};
         std::size_t                                                    n = 0;
-        for(std::size_t a = 0; a < AddressCount; ++a) {
+        for(std::size_t a = 0; a < addressCount; ++a) {
             std::size_t c = 0;
-            ((Answers[a][c++] ? void(names[n++] = Cs::Name) : void()), ...);
+            ((answers[a][c++] ? void(namesHere[n++] = Cs::name) : void()), ...);
             static_cast<void>(c);
         }
-        return names;
+        return namesHere;
     }();
 
-    static constexpr std::array<std::uint16_t, AddressCount + 1> Offsets = [] {
-        std::array<std::uint16_t, AddressCount + 1> o{};
+    static constexpr std::array<std::uint16_t, addressCount + 1> offsets = [] {
+        std::array<std::uint16_t, addressCount + 1> o{};
         std::uint16_t                               n = 0;
-        for(std::size_t a = 0; a < AddressCount; ++a) {
+        for(std::size_t a = 0; a < addressCount; ++a) {
             o[a] = n;
-            for(bool const answers : Answers[a]) {
-                n = static_cast<std::uint16_t>(n + (answers ? 1U : 0U));
+            for(bool const answersHere : answers[a]) {
+                n = static_cast<std::uint16_t>(n + (answersHere ? 1U : 0U));
             }
         }
-        o[AddressCount] = n;
+        o[addressCount] = n;
         return o;
     }();
 
     /// What answers at an address in this build: the names, or "unknown".
     [[nodiscard]] static constexpr std::string_view hint(std::uint8_t address) {
-        if(address >= AddressCount || Packed.start[address] == Packed.start[address + 1]) {
+        if(address >= addressCount || packed.start[address] == packed.start[address + 1]) {
             return "unknown";
         }
-        return {Packed.text.data() + Packed.start[address],
-                static_cast<std::size_t>(Packed.start[address + 1] - Packed.start[address])};
+        return {packed.text.data() + packed.start[address],
+                static_cast<std::size_t>(packed.start[address + 1] - packed.start[address])};
     }
 
     /// The same, one name at a time and never truncated; empty for an address nothing
     /// in this build answers at.
     [[nodiscard]] static constexpr std::span<std::string_view const> namesAt(std::uint8_t address) {
-        if(address >= AddressCount) { return {}; }
-        return std::span<std::string_view const>{Names}.subspan(
-          Offsets[address],
-          static_cast<std::size_t>(Offsets[address + 1] - Offsets[address]));
+        if(address >= addressCount) { return {}; }
+        return std::span<std::string_view const>{names}.subspan(
+          offsets[address],
+          static_cast<std::size_t>(offsets[address + 1] - offsets[address]));
     }
 };
 

@@ -25,12 +25,12 @@ namespace Kvasir { namespace SPI {
     namespace Chips {
         namespace Max7219Detail {
             // Table 2, Register Address Map (MAX7219.md:252)
-            inline constexpr std::uint8_t RegDigit0     = 0x01;
-            inline constexpr std::uint8_t RegDecodeMode = 0x09;
-            inline constexpr std::uint8_t RegIntensity  = 0x0A;
-            inline constexpr std::uint8_t RegScanLimit  = 0x0B;
-            inline constexpr std::uint8_t RegShutdown   = 0x0C;
-            inline constexpr std::uint8_t RegTest       = 0x0F;
+            inline constexpr std::uint8_t regDigit0     = 0x01;
+            inline constexpr std::uint8_t regDecodeMode = 0x09;
+            inline constexpr std::uint8_t regIntensity  = 0x0A;
+            inline constexpr std::uint8_t regScanLimit  = 0x0B;
+            inline constexpr std::uint8_t regShutdown   = 0x0C;
+            inline constexpr std::uint8_t regTest       = 0x0F;
         }   // namespace Max7219Detail
 
         /// A frame is one word per chip, the last chip's first, latched on LOAD's rising edge after
@@ -43,14 +43,14 @@ namespace Kvasir { namespace SPI {
         struct Max7219 {
             static_assert(Modules >= 1 && Modules <= 8,
                           "1..8 cascaded chips");
-            static constexpr std::string_view Name = "MAX7219";
+            static constexpr std::string_view name = "MAX7219";
             /// Mode 0 (:189, :194), 10 MHz max (:194), tCP 100 ns (:139).
-            static constexpr Hal::ClockMode Mode          = Hal::ClockMode::mode0;
-            static constexpr Units::Hertz   MaxClock      = Units::hertz(10'000'000);
-            static constexpr std::size_t    RegisterBytes = 0;
-            static constexpr std::size_t    Frame         = 2 * Modules;
+            static constexpr Hal::ClockMode mode          = Hal::ClockMode::mode0;
+            static constexpr Units::Hertz   maxClock      = Units::hertz(10'000'000);
+            static constexpr std::size_t    registerBytes = 0;
+            static constexpr std::size_t    frame         = 2 * Modules;
             /// No DOUT: answering() means the frames went out.
-            static constexpr bool WriteOnly = true;
+            static constexpr bool writeOnly = true;
 
             static constexpr void word(std::span<std::byte> out,
                                        std::uint8_t         reg,
@@ -63,15 +63,15 @@ namespace Kvasir { namespace SPI {
 
             /// Shutdown while the configuration and the digits go in, so stale digits are never shown
             /// (where the frame fits an inline payload).
-            static constexpr auto Init = [] {
-                if constexpr(Frame <= 8) {
-                    std::array<std::uint8_t, Frame> w{};
+            static constexpr auto init = [] {
+                if constexpr(frame <= 8) {
+                    std::array<std::uint8_t, frame> w{};
                     for(std::size_t m = 0; m < Modules; ++m) {
-                        w[2 * m] = Max7219Detail::RegShutdown;
+                        w[2 * m] = Max7219Detail::regShutdown;
                     }
                     Engine::Step s = Engine::Step::command({.payload = {}});
-                    s.count        = static_cast<std::uint8_t>(Frame);
-                    for(std::size_t i = 0; i < Frame; ++i) { s.bytes[i] = w[i]; }
+                    s.count        = static_cast<std::uint8_t>(frame);
+                    for(std::size_t i = 0; i < frame; ++i) { s.bytes[i] = w[i]; }
                     return std::array{s};
                 } else {
                     return std::array<Engine::Step, 0>{};
@@ -80,34 +80,34 @@ namespace Kvasir { namespace SPI {
 
             struct State {};
 
-            static constexpr auto Refresh = std::chrono::milliseconds{RefreshMs};
+            static constexpr auto refresh = std::chrono::milliseconds{RefreshMs};
 
             /// The control registers a brown-out resets, rewritten every Refresh.
             struct Control {
                 using Value                          = std::uint8_t;
-                static constexpr std::size_t Bytes   = 3 * Frame;
-                static constexpr Value       Initial = 0;
-                static constexpr auto        Period  = Refresh;
+                static constexpr std::size_t bytes   = 3 * frame;
+                static constexpr Value       initial = 0;
+                static constexpr auto        period  = refresh;
 
                 [[nodiscard]] static constexpr std::array<Engine::Step,
                                                           3>
                 encode(Value const&,
                        std::span<std::byte> buffer) {
-                    word(buffer.subspan(0, Frame), Max7219Detail::RegTest, 0);
-                    word(buffer.subspan(Frame, Frame), Max7219Detail::RegScanLimit, ScanLimit);
-                    word(buffer.subspan(2 * Frame, Frame), Max7219Detail::RegDecodeMode, Decode);
-                    return {Engine::Step::commandBuffer({.offset = 0, .count = Frame}),
-                            Engine::Step::commandBuffer({.offset = Frame, .count = Frame}),
-                            Engine::Step::commandBuffer({.offset = 2 * Frame, .count = Frame})};
+                    word(buffer.subspan(0, frame), Max7219Detail::regTest, 0);
+                    word(buffer.subspan(frame, frame), Max7219Detail::regScanLimit, ScanLimit);
+                    word(buffer.subspan(2 * frame, frame), Max7219Detail::regDecodeMode, Decode);
+                    return {Engine::Step::commandBuffer({.offset = 0, .count = frame}),
+                            Engine::Step::commandBuffer({.offset = frame, .count = frame}),
+                            Engine::Step::commandBuffer({.offset = 2 * frame, .count = frame})};
                 }
             };
 
             struct Digits {
                 using Value                          = std::array<std::uint8_t, Modules>;
-                static constexpr std::size_t Items   = 8;
-                static constexpr std::size_t Bytes   = Frame;
-                static constexpr Value       Initial = {};
-                static constexpr auto        Period  = Refresh;
+                static constexpr std::size_t items   = 8;
+                static constexpr std::size_t bytes   = frame;
+                static constexpr Value       initial = {};
+                static constexpr auto        period  = refresh;
 
                 [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                                    std::size_t          digit,
@@ -115,38 +115,38 @@ namespace Kvasir { namespace SPI {
                     for(std::size_t m = 0; m < Modules; ++m) {
                         // the last chip in the chain gets the first word
                         buffer[2 * m]
-                          = std::byte{static_cast<std::uint8_t>(Max7219Detail::RegDigit0 + digit)};
+                          = std::byte{static_cast<std::uint8_t>(Max7219Detail::regDigit0 + digit)};
                         buffer[2 * m + 1] = std::byte{value[Modules - 1 - m]};
                     }
-                    return Engine::Step::commandBuffer({.offset = 0, .count = Frame});
+                    return Engine::Step::commandBuffer({.offset = 0, .count = frame});
                 }
             };
 
             struct IntensityGroup {
                 using Value                          = std::uint8_t;
-                static constexpr std::size_t Bytes   = Frame;
-                static constexpr Value       Initial = Intensity;
-                static constexpr auto        Period  = Refresh;
+                static constexpr std::size_t bytes   = frame;
+                static constexpr Value       initial = Intensity;
+                static constexpr auto        period  = refresh;
 
                 [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                                    std::span<std::byte> buffer) {
                     word(buffer,
-                         Max7219Detail::RegIntensity,
+                         Max7219Detail::regIntensity,
                          static_cast<std::uint8_t>(value & 0x0FU));
-                    return Engine::Step::commandBuffer({.offset = 0, .count = Frame});
+                    return Engine::Step::commandBuffer({.offset = 0, .count = frame});
                 }
             };
 
             struct Power {
                 using Value                          = std::uint8_t;
-                static constexpr std::size_t Bytes   = Frame;
-                static constexpr Value       Initial = 1;
-                static constexpr auto        Period  = Refresh;
+                static constexpr std::size_t bytes   = frame;
+                static constexpr Value       initial = 1;
+                static constexpr auto        period  = refresh;
 
                 [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                                    std::span<std::byte> buffer) {
-                    word(buffer, Max7219Detail::RegShutdown, value);
-                    return Engine::Step::commandBuffer({.offset = 0, .count = Frame});
+                    word(buffer, Max7219Detail::regShutdown, value);
+                    return Engine::Step::commandBuffer({.offset = 0, .count = frame});
                 }
             };
 
@@ -169,24 +169,24 @@ namespace Kvasir { namespace SPI {
              typename Config      = Max7219Defaults>
     class Max7219 {
     public:
-        static constexpr std::string_view Name         = "MAX7219";
-        static constexpr std::size_t      DigitCount   = 8;
-        static constexpr std::uint8_t     Dash         = 0x0A;   ///< BCD decode (Table 5)
-        static constexpr std::uint8_t     Blank        = 0x0F;
-        static constexpr std::uint8_t     Point        = 0x80;
-        static constexpr std::uint8_t     MaxIntensity = 15;
+        static constexpr std::string_view name         = "MAX7219";
+        static constexpr std::size_t      digitCount   = 8;
+        static constexpr std::uint8_t     dash         = 0x0A;   ///< BCD decode (Table 5)
+        static constexpr std::uint8_t     blank        = 0x0F;
+        static constexpr std::uint8_t     point        = 0x80;
+        static constexpr std::uint8_t     maxIntensity = 15;
 
-        static constexpr std::uint8_t IntensityDefault = static_cast<std::uint8_t>(
-          KVASIR_CONFIG_OR(Config, intensity, Max7219Defaults::intensity) & MaxIntensity);
-        static constexpr std::uint8_t ScanLimit = static_cast<std::uint8_t>(
+        static constexpr std::uint8_t intensityDefault = static_cast<std::uint8_t>(
+          KVASIR_CONFIG_OR(Config, intensity, Max7219Defaults::intensity) & maxIntensity);
+        static constexpr std::uint8_t scanLimit = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, scanLimit, Max7219Defaults::scanLimit) & 0x07);
-        static constexpr std::chrono::milliseconds RefreshPeriod = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds refreshPeriod = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            refreshPeriod,
                            std::chrono::milliseconds{Max7219Defaults::refreshPeriod}));
 
         using Chip
-          = Chips::Max7219<Modules, Decode, ScanLimit, IntensityDefault, RefreshPeriod.count()>;
+          = Chips::Max7219<Modules, Decode, scanLimit, intensityDefault, refreshPeriod.count()>;
         using DeviceT = Device<Master, Clock, Chip, Cs, Config>;
 
         Max7219() { clear(); }
@@ -207,7 +207,7 @@ namespace Kvasir { namespace SPI {
         void setDigit(std::size_t  module,
                       std::size_t  digit,
                       std::uint8_t value) {
-            if(module >= Modules || digit >= DigitCount) { return; }
+            if(module >= Modules || digit >= digitCount) { return; }
             if(shadow_[digit][module] == value) { return; }
             shadow_[digit][module] = value;
             device_.template set<typename Chip::Digits>(digit, shadow_[digit]);
@@ -222,31 +222,31 @@ namespace Kvasir { namespace SPI {
         /// A decimal number on module `module`'s digits, right aligned, blank leading digits.
         void setNumber(std::size_t   module,
                        std::uint32_t value,
-                       std::uint8_t  digits = DigitCount) {
-            for(std::uint8_t d = 0; d < digits && d < DigitCount; ++d) {
+                       std::uint8_t  digits = digitCount) {
+            for(std::uint8_t d = 0; d < digits && d < digitCount; ++d) {
                 setDigit(module,
                          d,
-                         (value == 0 && d != 0) ? Blank : static_cast<std::uint8_t>(value % 10));
+                         (value == 0 && d != 0) ? blank : static_cast<std::uint8_t>(value % 10));
                 value /= 10;
             }
         }
 
         void setIntensity(std::uint8_t level) {
-            intensity_ = static_cast<std::uint8_t>(level & MaxIntensity);
+            intensity_ = static_cast<std::uint8_t>(level & maxIntensity);
             device_.template set<typename Chip::IntensityGroup>(intensity_);
         }
 
         [[nodiscard]] std::uint8_t intensity() const { return intensity_; }
 
         void clear() {
-            for(std::size_t d = 0; d < DigitCount; ++d) {
+            for(std::size_t d = 0; d < digitCount; ++d) {
                 for(auto& v : shadow_[d]) { v = blankFor(d); }
                 device_.template set<typename Chip::Digits>(d, shadow_[d]);
             }
         }
 
         [[nodiscard]] static constexpr std::uint8_t blankFor(std::size_t digit) {
-            return ((Decode >> digit) & 1U) != 0 ? Blank : std::uint8_t{0};
+            return ((Decode >> digit) & 1U) != 0 ? blank : std::uint8_t{0};
         }
 
         [[nodiscard]] bool pending() const { return device_.pending(); }
@@ -263,8 +263,8 @@ namespace Kvasir { namespace SPI {
 
     private:
         DeviceT                                                   device_{};
-        std::array<std::array<std::uint8_t, Modules>, DigitCount> shadow_{};
-        std::uint8_t                                              intensity_{IntensityDefault};
+        std::array<std::array<std::uint8_t, Modules>, digitCount> shadow_{};
+        std::uint8_t                                              intensity_{intensityDefault};
     };
 
 }}   // namespace Kvasir::SPI

@@ -18,9 +18,9 @@ namespace Tc74Detail {
     /// answers (TC74.md:225, Table 4-2 :317, Table 3-1 :229-232).
     enum class Mode : std::uint8_t { normal, standby };
 
-    inline constexpr std::uint8_t ConfigStandby  = 0x80;   ///< D7, read/write
-    inline constexpr std::uint8_t ConfigReady    = 0x40;   ///< D6 DATA_RDY, read only
-    inline constexpr std::uint8_t ConfigReserved = 0x3F;   ///< D5..D0 "always returns zero"
+    inline constexpr std::uint8_t configStandby  = 0x80;   ///< D7, read/write
+    inline constexpr std::uint8_t configReady    = 0x40;   ///< D6 DATA_RDY, read only
+    inline constexpr std::uint8_t configReserved = 0x3F;   ///< D5..D0 "always returns zero"
 
     /// TEMP is an 8-bit two's complement temperature, one degree C per count (4.1, TC74.md:334-343,
     /// Table 4-4 :345-364: 0x7F +127, 0xE7 -25, 0xC9 -55).
@@ -51,19 +51,19 @@ struct Tc74 {
     static_assert(Variant <= 7,
                   "the TC74 is ordered as A0..A7 (TC74.md:402-411)");
 
-    static constexpr std::string_view Name          = "TC74";
-    static constexpr Address7         Address       = static_cast<Address7>(0x48 + Variant);
-    static constexpr auto             Addresses     = addressRun<0x48, 8>();
-    static constexpr std::size_t      RegisterBytes = 1;
-    static constexpr Units::Hertz     I2cMaxClock   = Units::hertz(100'000);
+    static constexpr std::string_view name          = "TC74";
+    static constexpr Address7         address       = static_cast<Address7>(0x48 + Variant);
+    static constexpr auto             addresses     = addressRun<0x48, 8>();
+    static constexpr std::size_t      registerBytes = 1;
+    static constexpr Units::Hertz     i2cMaxClock   = Units::hertz(100'000);
 
-    static constexpr std::uint8_t Rtr  = 0x00;   ///< read TEMP
-    static constexpr std::uint8_t Rwcr = 0x01;   ///< read/write CONFIG
+    static constexpr std::uint8_t rtr  = 0x00;   ///< read TEMP
+    static constexpr std::uint8_t rwcr = 0x01;   ///< read/write CONFIG
 
     using Mode = Tc74Detail::Mode;
 
-    static constexpr std::array Init{
-      Engine::Step::read({.reg = Rwcr, .count = 1, .offset = 0}),
+    static constexpr std::array init{
+      Engine::Step::read({.reg = rwcr, .count = 1, .offset = 0}),
       Engine::Step::identify(),
     };
 
@@ -75,14 +75,14 @@ struct Tc74 {
     [[nodiscard]] static constexpr bool setup(Bytes  data,
                                               State& state) {
         state.configuration = data.u8(0);
-        return (state.configuration & Tc74Detail::ConfigReserved) == 0;
+        return (state.configuration & Tc74Detail::configReserved) == 0;
     }
 
     struct Temperature {
-        static constexpr auto       Period = std::chrono::milliseconds{250};
-        static constexpr std::array Steps{
-          Engine::Step::read({.reg = Rwcr, .count = 1, .offset = 0}),   // CONFIG: DATA_RDY, SHDN
-          Engine::Step::read({.reg = Rtr, .count = 1, .offset = 1}),    // TEMP
+        static constexpr auto       period = std::chrono::milliseconds{250};
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = rwcr, .count = 1, .offset = 0}),   // CONFIG: DATA_RDY, SHDN
+          Engine::Step::read({.reg = rtr, .count = 1, .offset = 1}),    // TEMP
         };
 
         struct Sample {
@@ -93,10 +93,10 @@ struct Tc74 {
         /// DATA_RDY, or in standby (TEMP frozen, 3.1.1): nothing new.
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data) {
             auto const config = data.u8(0);
-            if((config & Tc74Detail::ConfigReserved) != 0) {
+            if((config & Tc74Detail::configReserved) != 0) {
                 return Engine::Outcome<Sample>::reject();
             }
-            if((config & Tc74Detail::ConfigStandby) != 0 || (config & Tc74Detail::ConfigReady) == 0)
+            if((config & Tc74Detail::configStandby) != 0 || (config & Tc74Detail::configReady) == 0)
             {
                 return Engine::Outcome<Sample>::unchanged();
             }
@@ -108,14 +108,14 @@ struct Tc74 {
     /// note), so readings stop until normal mode is back and a conversion is done.
     struct Power {
         using Value                        = Mode;
-        static constexpr std::size_t Bytes = 1;
-        static constexpr Value       Initial{Mode::normal};
+        static constexpr std::size_t bytes = 1;
+        static constexpr Value       initial{Mode::normal};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         mode,
                                                            std::span<std::byte> buffer) {
             buffer[0]
-              = std::byte{mode == Mode::standby ? Tc74Detail::ConfigStandby : std::uint8_t{0}};
-            return Engine::Step::writeBuffer({.reg = Rwcr, .offset = 0, .count = 1});
+              = std::byte{mode == Mode::standby ? Tc74Detail::configStandby : std::uint8_t{0}};
+            return Engine::Step::writeBuffer({.reg = rwcr, .offset = 0, .count = 1});
         }
     };
 

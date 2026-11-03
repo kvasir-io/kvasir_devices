@@ -38,7 +38,7 @@ namespace Lsm303agrDetail {
     /// High-resolution mode: 12 significant bits, so the raw word is shifted by four and
     /// then scaled. ST's factors at +-2/4/8/16 g, in micro-g per count of the *shifted*
     /// value: 0.98, 1.95, 3.9 and 11.72 mg.
-    inline constexpr std::array<MicroG, 4> AccelPerCount{Units::microG(980),
+    inline constexpr std::array<MicroG, 4> accelPerCount{Units::microG(980),
                                                          Units::microG(1950),
                                                          Units::microG(3900),
                                                          Units::microG(11720)};
@@ -87,35 +87,35 @@ namespace Lsm303agrDetail {
 template<Lsm303agrDetail::AccelRange Fs  = Lsm303agrDetail::AccelRange::g2,
          Lsm303agrDetail::AccelOdr   Odr = Lsm303agrDetail::AccelOdr::hz50>
 struct Lsm303agrAccel {
-    static constexpr std::string_view Name = "LSM303AGR-A";
+    static constexpr std::string_view name = "LSM303AGR-A";
     /// ST LSM303AGR. LSM303AGR.md:1654 (WHO_AM_I_A 0Fh = 33h) and :1713 (WHO_AM_I_M 4Fh = 40h).
     /// Configuration: TEMP_CFG_REG_A (1Fh) TEMP_EN[1:0] = 11b, the temperature sensor on
     /// (LSM303AGR.md:1298).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x33},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"temp-en", 0x1F, 1, true, 0xC0, 0xC0},
     };
-    static constexpr Address7                Address = 0x19;
-    static constexpr std::array<Address7, 1> Addresses{0x19};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x19;
+    static constexpr std::array<Address7, 1> addresses{0x19};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::array<MicroG, 4> AccelPerCount = Lsm303agrDetail::AccelPerCount;
+    static constexpr std::array<MicroG, 4> accelPerCount = Lsm303agrDetail::accelPerCount;
 
-    static constexpr std::uint8_t FsCode = static_cast<std::uint8_t>(Fs);
+    static constexpr std::uint8_t fsCode = static_cast<std::uint8_t>(Fs);
 
-    static constexpr std::uint8_t Ctrl1
+    static constexpr std::uint8_t ctrl1
       = static_cast<std::uint8_t>((static_cast<unsigned>(Odr) << 4) | 0x07U);   // XYZ enabled
-    static constexpr std::uint8_t Ctrl4
-      = static_cast<std::uint8_t>(0x80U | (FsCode << 4) | 0x08U);   // BDU, FS, HR
+    static constexpr std::uint8_t ctrl4
+      = static_cast<std::uint8_t>(0x80U | (fsCode << 4) | 0x08U);   // BDU, FS, HR
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{20};
+    static constexpr auto startupDelay = std::chrono::milliseconds{20};
 
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = 0x20, .payload = {Ctrl1}}),
-      Engine::Step::write({.reg = 0x23, .payload = {Ctrl4}}),
+    static constexpr std::array init{
+      Engine::Step::write({.reg = 0x20, .payload = {ctrl1}}),
+      Engine::Step::write({.reg = 0x23, .payload = {ctrl4}}),
       // TEMP_EN; then the high-resolution turn-on time, 7/ODR (Table 14): the samples before
       // it are not settled.
       Engine::Step::write(
@@ -128,17 +128,17 @@ struct Lsm303agrAccel {
     /// `state().deviceId` is the part's own word, read once.
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
-        state.fs       = FsCode;
+        state.fs       = fsCode;
         state.deviceId = static_cast<std::uint16_t>(ids[0]);
     }
 
     struct Motion {
-        static constexpr auto Period = std::chrono::milliseconds{50};
+        static constexpr auto period = std::chrono::milliseconds{50};
         /// So the frames that said nothing new are counted (unchanged<Motion>()).
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// 0xA7 and 0x8C: the MSB is what turns a burst into an auto-incrementing read.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read(
             {.reg = 0xA7, .count = 7, .offset = 0}),   // STATUS_REG_A, OUT_X_L_A ..
           Engine::Step::read({.reg = 0x8C, .count = 2, .offset = 7})};   // OUT_TEMP_L_A
@@ -154,7 +154,7 @@ struct Lsm303agrAccel {
         [[nodiscard]] static constexpr std::int32_t accel(std::int16_t raw,
                                                           std::uint8_t fs) {
             return static_cast<std::int32_t>(static_cast<std::int64_t>(raw >> 4)
-                                             * Units::value(AccelPerCount[fs & 0x03U]));
+                                             * Units::value(accelPerCount[fs & 0x03U]));
         }
 
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
@@ -176,8 +176,8 @@ struct Lsm303agrAccel {
     /// CTRL_REG4_A's FS (5:4), with BDU and HR kept; changeable at run time.
     struct Range {
         using Value                          = Lsm303agrDetail::AccelRange;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Fs;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Fs;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -205,39 +205,39 @@ struct Lsm303agrAccel {
 /// Outcome::unchanged().
 template<Lsm303agrDetail::MagOdr Odr = Lsm303agrDetail::MagOdr::hz50>
 struct Lsm303agrMag {
-    static constexpr std::string_view Name = "LSM303AGR-M";
+    static constexpr std::string_view name = "LSM303AGR-M";
     /// Configuration: CFG_REG_A_M (60h) MD[1:0] = 00b continuous; CFG_REG_B_M (61h) OFF_CANC, which
     /// the offset specification assumes (LSM303AGR.md:852..887); CFG_REG_C_M (62h) BDU.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x4F, 1, true, 0xFF, 0x40},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{         "continuous", 0x60, 1, true, 0x03, 0x00},
       Engine::RegisterCheck{"offset-cancellation", 0x61, 1, true, 0x02, 0x02},
       Engine::RegisterCheck{                "bdu", 0x62, 1, true, 0x10, 0x10},
     };
-    static constexpr Address7                Address = 0x1E;
-    static constexpr std::array<Address7, 1> Addresses{0x1E};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x1E;
+    static constexpr std::array<Address7, 1> addresses{0x1E};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// 1.5 mgauss per count, and 1 gauss is 100000 nT, so 150 nT per count.
-    static constexpr NanoTesla FieldPerCount = Units::nanoTesla(150);
+    static constexpr NanoTesla fieldPerCount = Units::nanoTesla(150);
 
     /// Continuous mode with temperature compensation on.
-    static constexpr std::uint8_t CfgA
+    static constexpr std::uint8_t cfgA
       = static_cast<std::uint8_t>(0x80U | (static_cast<unsigned>(Odr) << 2));
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{20};
+    static constexpr auto startupDelay = std::chrono::milliseconds{20};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x62, .payload = {0x10}}),   // CFG_REG_C_M: BDU
       // CFG_REG_B_M: OFF_CANC -- the magnetic offset of +-60 mgauss (M_TyOff) is specified
       // with offset cancellation on (4.1.2)
       Engine::Step::write({.reg = 0x61, .payload = {0x02}}),
       Engine::Step::write(
         {.reg     = 0x60,
-         .payload = {CfgA},
+         .payload = {cfgA},
          .delay
          = std::chrono::milliseconds{20}}),   // CFG_REG_A_M: out of power-down into continuous
     };
@@ -252,12 +252,12 @@ struct Lsm303agrMag {
     }
 
     struct Field {
-        static constexpr auto Period = std::chrono::milliseconds{50};
+        static constexpr auto period = std::chrono::milliseconds{50};
         /// STATUS_REG_M, then the six output bytes. Addressed at 0x67 without the MSB: the
         /// datasheet's I2C section gives every register the MSB as the increment bit, but ST's
         /// own lsm303agr_reg.c and Linux (st_magn, multi_read_bit false for this part) both
         /// read the magnetometer's bursts without it, and 0xE7 is not a register of this half.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x67, .count = 7, .offset = 0})};
 
         struct Sample {
@@ -267,7 +267,7 @@ struct Lsm303agrMag {
         };
 
         [[nodiscard]] static constexpr NanoTesla field(std::int16_t raw) {
-            return Units::nanoTesla(static_cast<std::int64_t>(raw) * Units::value(FieldPerCount));
+            return Units::nanoTesla(static_cast<std::int64_t>(raw) * Units::value(fieldPerCount));
         }
 
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes data,

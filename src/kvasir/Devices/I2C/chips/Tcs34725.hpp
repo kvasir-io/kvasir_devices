@@ -16,7 +16,7 @@ namespace Tcs34725Detail {
     /// ATIME: the integration time counts down from 256 in 2.4 ms cycles; the datasheet's
     /// named values.
     enum class Integration : std::uint8_t {
-        ms2_4 = 0xFF,   ///< 1 cycle
+        ms2p4 = 0xFF,   ///< 1 cycle
         ms24  = 0xF6,   ///< 10 cycles
         ms101 = 0xD5,   ///< 43 cycles, 103 ms
         ms154 = 0xC0,   ///< 64 cycles
@@ -53,39 +53,39 @@ namespace Tcs34725Detail {
 template<Tcs34725Detail::Integration Integration = Tcs34725Detail::Integration::ms101,
          Tcs34725Detail::Gain        Gain        = Tcs34725Detail::Gain::x4>
 struct Tcs34725X {
-    static constexpr std::string_view Name = "TCS34725";
+    static constexpr std::string_view name = "TCS34725";
     /// ams TCS3472x. TCS34725.md:848..858: ID (0x12) is 0x44 for the TCS34721/34725 and 0x4D for the
     /// TCS34723/34727. Through the command register: CMD, bit 7 (:632).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x80 | 0x12, 1, true, 0xFF, 0x44, 0x4D},
     };
-    static constexpr Address7                Address = 0x29;
-    static constexpr std::array<Address7, 1> Addresses{0x29};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x29;
+    static constexpr std::array<Address7, 1> addresses{0x29};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static constexpr std::uint8_t Cmd     = 0x80;
-    static constexpr std::uint8_t CmdAuto = 0xA0;
+    static constexpr std::uint8_t cmd     = 0x80;
+    static constexpr std::uint8_t cmdAuto = 0xA0;
 
-    static constexpr std::uint8_t              Atime   = static_cast<std::uint8_t>(Integration);
-    static constexpr std::uint8_t              Control = static_cast<std::uint8_t>(Gain);
-    static constexpr std::chrono::milliseconds IntegrationTime
-      = Tcs34725Detail::integrationTime(Atime);
+    static constexpr std::uint8_t              atimeValue = static_cast<std::uint8_t>(Integration);
+    static constexpr std::uint8_t              control    = static_cast<std::uint8_t>(Gain);
+    static constexpr std::chrono::milliseconds integrationTime
+      = Tcs34725Detail::integrationTime(atimeValue);
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
-        {.reg = Cmd | 0x00, .payload = {0x01}, .delay = std::chrono::milliseconds{3}}),   // PON
-      Engine::Step::write({.reg = Cmd | 0x01, .payload = {Atime}}),
-      Engine::Step::write({.reg = Cmd | 0x0F, .payload = {Control}}),
+        {.reg = cmd | 0x00, .payload = {0x01}, .delay = std::chrono::milliseconds{3}}),   // PON
+      Engine::Step::write({.reg = cmd | 0x01, .payload = {atimeValue}}),
+      Engine::Step::write({.reg = cmd | 0x0F, .payload = {control}}),
       Engine::Step::write(
-        {.reg     = Cmd | 0x00,
+        {.reg     = cmd | 0x00,
          .payload = {0x03},
-         .delay   = IntegrationTime + std::chrono::milliseconds{10}}),   // PON | AEN
+         .delay   = integrationTime + std::chrono::milliseconds{10}}),   // PON | AEN
     };
 
     struct State {
         std::uint8_t deviceId{};
-        std::uint8_t atime{Atime};
-        std::uint8_t gain{Control};
+        std::uint8_t atime{atimeValue};
+        std::uint8_t gain{control};
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs: the
@@ -93,8 +93,8 @@ struct Tcs34725X {
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
         state.deviceId = static_cast<std::uint8_t>(ids[0]);
-        state.atime    = Atime;
-        state.gain     = Control;
+        state.atime    = atimeValue;
+        state.gain     = control;
     }
 
     /// Twice the integration time, so every poll finds a new result; never under 100 ms.
@@ -104,9 +104,9 @@ struct Tcs34725X {
     }
 
     struct Colour {
-        static constexpr auto       Period = readPeriod(Atime);
-        static constexpr std::array Steps{
-          Engine::Step::read({.reg = CmdAuto | 0x13, .count = 9})};   // STATUS, then the channels
+        static constexpr auto       period = readPeriod(atimeValue);
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = cmdAuto | 0x13, .count = 9})};   // STATUS, then the channels
 
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return readPeriod(state.atime);
@@ -129,14 +129,14 @@ struct Tcs34725X {
     /// ATIME, changeable at run time.
     struct IntegrationSetting {
         using Value                          = Tcs34725Detail::Integration;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Integration;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Integration;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
             return Engine::Step::writeBuffer(
-              {.reg    = Cmd | 0x01,
+              {.reg    = cmd | 0x01,
                .offset = 0,
                .count  = 1,
                .delay  = 2 * Tcs34725Detail::integrationTime(static_cast<std::uint8_t>(value))
@@ -152,8 +152,8 @@ struct Tcs34725X {
     /// CONTROL: AGAIN in 1:0.
     struct GainSetting {
         using Value                          = Tcs34725Detail::Gain;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Gain;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Gain;
 
         [[nodiscard]] static constexpr std::array<Engine::Step,
                                                   3>
@@ -161,9 +161,9 @@ struct Tcs34725X {
                std::span<std::byte> buffer) {
             buffer[0] = static_cast<std::byte>(value);
             return {
-              Engine::Step::writeBuffer({.reg = Cmd | 0x0F, .offset = 0, .count = 1}),
-              Engine::Step::write({.reg = Cmd | 0x00, .payload = {0x01}}),    // PON: RGBC stopped
-              Engine::Step::write({.reg = Cmd | 0x00, .payload = {0x03}})};   // PON | AEN again
+              Engine::Step::writeBuffer({.reg = cmd | 0x0F, .offset = 0, .count = 1}),
+              Engine::Step::write({.reg = cmd | 0x00, .payload = {0x01}}),    // PON: RGBC stopped
+              Engine::Step::write({.reg = cmd | 0x00, .payload = {0x03}})};   // PON | AEN again
         }
 
         static constexpr void applied(Value const& value,

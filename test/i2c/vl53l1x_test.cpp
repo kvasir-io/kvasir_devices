@@ -27,20 +27,20 @@ using Tof = Device<FakeBus, FakeClock, Chips::Vl53l1x>;
 static_assert(
   [] {
       std::size_t longest = 0;
-      for(auto const& s : Tof::InitSteps) {
+      for(auto const& s : Tof::initSteps) {
           if(s.kind == Kvasir::Engine::Step::Kind::write && s.count > longest) {
               longest = s.count;
           }
       }
       return longest;
   }()
-    == Kvasir::Engine::Step::InlineBytes,
+    == Kvasir::Engine::Step::inlineBytes,
   "no write over eight bytes");
 static_assert(
-  Tof::InitSteps.size() == 27,
+  Tof::initSteps.size() == 27,
   "the engine's two identity reads and their comparison, then the description's own: the "
   "boot state, the identify step, the soft reset pair, twelve config writes, eight ULD steps");
-static_assert(Tof::RegisterBytes == 2,
+static_assert(Tof::registerBytes == 2,
               "sixteen-bit register indices");
 
 /// Index of the first write whose bytes are exactly `bytes`, from `from`; log size if none.
@@ -118,7 +118,7 @@ void vl53l1x() {
         checkEq(chunks, std::size_t{12}, "twelve config writes");
         bool same = true;
         for(std::size_t i = 0; i < got.size(); ++i) {
-            same = same && got[i] == Chips::Vl53l1xDetail::DefaultConfiguration[i];
+            same = same && got[i] == Chips::Vl53l1xDetail::defaultConfiguration[i];
         }
         check(same, "every byte of ULD's default configuration, at its register");
     }
@@ -132,7 +132,7 @@ void vl53l1x() {
     check(firstStart < stop && stop < vhv && vhv < vhvTemp && vhvTemp < start
             && start < FakeBus::log.size(),
           "start, stop, VHV bound 0x09, 0x000B = 0, start");
-    check(FakeBus::log[stop].at - FakeBus::log[firstStart].at >= Chips::Vl53l1x::FirstRanging,
+    check(FakeBus::log[stop].at - FakeBus::log[firstStart].at >= Chips::Vl53l1x::firstRanging,
           "and the first ranging is given its time");
 
     check(d.latest().distance == Kvasir::Units::milliMetre(1234),

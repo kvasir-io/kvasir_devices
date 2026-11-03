@@ -20,14 +20,14 @@ namespace Nau7802Detail {
     /// 4.2V, and 4.5V" -- eight levels counting off, without 3.9 V; 11.2's table has 010 = 3.9 V,
     /// which is what this follows (verify on a part).
     enum class Ldo : std::uint8_t {
-        v4_5     = 0,
-        v4_2     = 1,
-        v3_9     = 2,
-        v3_6     = 3,
-        v3_3     = 4,
-        v3_0     = 5,
-        v2_7     = 6,
-        v2_4     = 7,
+        v4p5     = 0,
+        v4p2     = 1,
+        v3p9     = 2,
+        v3p6     = 3,
+        v3p3     = 4,
+        v3p0     = 5,
+        v2p7     = 6,
+        v2p4     = 7,
         external = 8,
     };
 
@@ -63,17 +63,17 @@ namespace Nau7802Detail {
 
     /// The LDO's output in millivolts by VLDO code (11.2).
     inline constexpr std::array<std::int32_t, 8>
-      LdoMilliVolt{4500, 4200, 3900, 3600, 3300, 3000, 2700, 2400};
+      ldoMilliVolt{4500, 4200, 3900, 3600, 3300, 3000, 2700, 2400};
 
     /// Conversions per second by CRS code; 0 for the codes the table leaves out.
-    inline constexpr std::array<std::uint16_t, 8> RateSps{10, 20, 40, 80, 0, 0, 0, 320};
+    inline constexpr std::array<std::uint16_t, 8> rateSps{10, 20, 40, 80, 0, 0, 0, 320};
 
     [[nodiscard]] constexpr unsigned gainFactor(Gain gain) {
         return 1U << static_cast<unsigned>(gain);
     }
 
     [[nodiscard]] constexpr std::uint16_t sps(Rate rate) {
-        return RateSps[static_cast<std::size_t>(rate) & 0x07U];
+        return rateSps[static_cast<std::size_t>(rate) & 0x07U];
     }
 
     /// One conversion, rounded up: 100, 50, 25, 13 and 4 ms.
@@ -246,17 +246,17 @@ namespace Nau7802Detail {
 ///
 /// Tare and counts-per-unit are the application's, kept per load cell, so there is no helper
 /// for them here.
-template<Nau7802Detail::Ldo       LdoV      = Nau7802Detail::Ldo::v3_3,
+template<Nau7802Detail::Ldo       LdoV      = Nau7802Detail::Ldo::v3p3,
          Nau7802Detail::Gain      GainV     = Nau7802Detail::Gain::x128,
          Nau7802Detail::Rate      RateV     = Nau7802Detail::Rate::sps80,
          Nau7802Detail::Channel   ChannelV  = Nau7802Detail::Channel::ch1,
          Nau7802Detail::FilterCap Cfilter   = Nau7802Detail::FilterCap::fitted,
          MilliVolt                Reference = Units::milliVolt(3300)>
 struct Nau7802 {
-    static constexpr std::string_view        Name    = "NAU7802";
-    static constexpr Address7                Address = 0x2A;
-    static constexpr std::array<Address7, 1> Addresses{0x2A};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr std::string_view        name    = "NAU7802";
+    static constexpr Address7                address = 0x2A;
+    static constexpr std::array<Address7, 1> addresses{0x2A};
+    static constexpr std::size_t             registerBytes = 1;
 
     static_assert(Nau7802Detail::sps(RateV) != 0,
                   "a CRS code from the table: 10, 20, 40, 80 or 320 SPS");
@@ -274,20 +274,20 @@ struct Nau7802 {
         return ldo == Ldo::external
                ? Reference
                : Units::milliVolt(
-                   Nau7802Detail::LdoMilliVolt[static_cast<std::size_t>(ldo) & 0x07U]);
+                   Nau7802Detail::ldoMilliVolt[static_cast<std::size_t>(ldo) & 0x07U]);
     }
 
     /// What an internal calibration is given before CTRL2 is read back (not a datasheet figure).
-    static constexpr std::chrono::milliseconds CalibrationWait
+    static constexpr std::chrono::milliseconds calibrationWait
       = 8 * Nau7802Detail::conversionTime(RateV) + std::chrono::milliseconds{100};
 
     /// The analog part and the LDO after PUA (7.3: TRDY is five conversions plus 100 ms).
-    static constexpr std::chrono::milliseconds AnalogSettle
+    static constexpr std::chrono::milliseconds analogSettle
       = 5 * Nau7802Detail::conversionTime(RateV) + std::chrono::milliseconds{100};
 
-    static constexpr auto StartupDelay = std::chrono::milliseconds{1};
+    static constexpr auto startupDelay = std::chrono::milliseconds{1};
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg     = 0x00,
                            .payload = {0x01},
                            .delay   = std::chrono::milliseconds{1}}),   // RR (9.1 step 1)
@@ -304,13 +304,13 @@ struct Nau7802 {
       Engine::Step::write({.reg = 0x1C, .payload = {Nau7802Detail::pgaPwr(Cfilter, ChannelV)}}),
       Engine::Step::write({.reg     = 0x00,
                            .payload = {Nau7802Detail::puCtrl(LdoV, Nau7802Detail::Cycle::running)},
-                           .delay   = AnalogSettle}),
+                           .delay   = analogSettle}),
       Engine::Step::write({.reg     = 0x02,
                            .payload = {Nau7802Detail::ctrl2(ChannelV,
                                                             RateV,
                                                             CalMode::internalOffset,
                                                             Nau7802Detail::Calibration::start)},
-                           .delay   = CalibrationWait}),
+                           .delay   = calibrationWait}),
       Engine::Step::read({.reg = 0x00, .count = 1, .offset = 1}),   // PU_CTRL: PUR
       Engine::Step::read({.reg = 0x02, .count = 1, .offset = 2}),   // CTRL2: CALS, CAL_ERR
     };
@@ -336,22 +336,22 @@ struct Nau7802 {
     }
 
     struct Conversion {
-        static constexpr auto Period = Nau7802Detail::readPeriod(RateV);
+        static constexpr auto period = Nau7802Detail::readPeriod(RateV);
 
         /// The rate CTRL2 holds now, which a Settings write changes.
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return Nau7802Detail::readPeriod(state.config.rate);
         }
 
-        static constexpr std::chrono::milliseconds RetryAfter = [] {
+        static constexpr std::chrono::milliseconds retryAfter = [] {
             auto const q = std::chrono::ceil<std::chrono::milliseconds>(
               Nau7802Detail::conversionTime(RateV) / 4.0);
             return q < std::chrono::milliseconds{2} ? std::chrono::milliseconds{2} : q;
         }();
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0}),
-          Engine::Step::check(RetryAfter),
+          Engine::Step::check(retryAfter),
           Engine::Step::read({.reg = 0x12, .count = 3, .offset = 1})};
 
         /// CR, PU_CTRL bit 5.
@@ -380,7 +380,7 @@ struct Nau7802 {
 
     /// CTRL2 and both channels' calibration registers, 0x02..0x10, on request.
     struct Calibration {
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x02, .count = 15, .offset = 0})};
 
         struct Sample {
@@ -401,7 +401,7 @@ struct Nau7802 {
 
     struct Settings {
         using Value                        = Config;
-        static constexpr std::size_t Bytes = 4;
+        static constexpr std::size_t bytes = 4;
 
         /// CTRL1, CTRL2, PGA_PWR, then CS cleared and set: 11.1's CS synchronises conversion to
         /// its rising edge, so the conversions from here on are at the new settings; six of
@@ -450,9 +450,9 @@ struct Nau7802 {
 
     struct Calibrate {
         using Value                              = CalibrationRun;
-        static constexpr std::size_t Bytes       = 1;
-        static constexpr bool        Transient   = true;
-        static constexpr auto        VerifyDelay = CalibrationWait;
+        static constexpr std::size_t bytes       = 1;
+        static constexpr bool        transient   = true;
+        static constexpr auto        verifyDelay = calibrationWait;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -476,8 +476,8 @@ struct Nau7802 {
     /// OCAL and GCAL of one channel (item 0: 0x03..0x09, item 1: 0x0A..0x10) in one burst.
     struct RestoreCalibration {
         using Value                        = Nau7802Detail::ChannelCalibration;
-        static constexpr std::size_t Items = 2;
-        static constexpr std::size_t Bytes = 7;
+        static constexpr std::size_t items = 2;
+        static constexpr std::size_t bytes = 7;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::size_t          item,

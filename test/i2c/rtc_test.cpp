@@ -150,7 +150,7 @@ static_assert([] {
 static_assert([] {
     std::array<std::byte, 7> buf{};
     auto const               steps
-      = Chips::Rv8803<Chips::Rv8803Detail::ClockOut::khz32_768,
+      = Chips::Rv8803<Chips::Rv8803Detail::ClockOut::khz32p768,
                       Chips::Rv8803Detail::EventInterrupt::on>::SetTime::encode({}, buf);
     return steps[0].bytes[0] == 0x05 && steps[3].bytes[0] == 0x04;
 }());
@@ -173,7 +173,7 @@ static_assert([] {
     auto const fd = static_cast<std::uint8_t>(b[0]);
     static_cast<void>(Rv::EventControl::encode({.capture = Rv::Capture::on,
                                                 .level   = Rv::EventLevel::high,
-                                                .filter  = Rv::EventFilter::ms15_6},
+                                                .filter  = Rv::EventFilter::ms15p6},
                                                b));
     return fd == 0x08 && static_cast<std::uint8_t>(b[0]) == 0xE0;
 }());

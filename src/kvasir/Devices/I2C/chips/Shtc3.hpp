@@ -19,14 +19,14 @@ namespace Kvasir::I2C::Chips {
 /// normal mode, temperature first, no clock stretching; 12.1 ms max (Table 5). Same
 /// conversion as the SHT3x (5.11).
 struct Shtc3 {
-    static constexpr std::string_view        Name    = "SHTC3";
-    static constexpr Address7                Address = 0x70;
-    static constexpr std::array<Address7, 1> Addresses{0x70};
-    static constexpr std::size_t             RegisterBytes = 0;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{1};
+    static constexpr std::string_view        name    = "SHTC3";
+    static constexpr Address7                address = 0x70;
+    static constexpr std::array<Address7, 1> addresses{0x70};
+    static constexpr std::size_t             registerBytes = 0;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{1};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::command({.payload = {0x80, 0x5D}, .delay = std::chrono::milliseconds{1}}),
       Engine::Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}),
@@ -47,9 +47,9 @@ struct Shtc3 {
     }
 
     struct Measurement {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
         // clang-format off
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::command({.payload = {0x35, 0x17}, .delay = std::chrono::milliseconds{1}}),
           Engine::Step::command({.payload = {0x78, 0x66}, .delay = std::chrono::milliseconds{13}}),
           Engine::Step::receive({.count = 6, .offset = 0}),

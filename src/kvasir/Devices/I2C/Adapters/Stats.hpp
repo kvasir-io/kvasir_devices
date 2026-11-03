@@ -47,7 +47,7 @@ public:
     /// and returns false; every later one returns true.
     bool update(BusT const&                   bus,
                 std::chrono::duration<double> interval) {
-        std::array<typename BusT::Counters, BusT::Count> now{};
+        std::array<typename BusT::Counters, BusT::count> now{};
         bus.snapshot(now);
         segments_         = {};
         std::size_t index = 0;
@@ -90,9 +90,9 @@ public:
     [[nodiscard]] Segment const& segment(std::size_t s) const { return segments_[s]; }
 
 private:
-    std::array<typename BusT::Counters, BusT::Count> last_{};
-    std::array<Part, BusT::Count>                    parts_{};
-    std::array<Segment, BusT::Segments>              segments_{};
+    std::array<typename BusT::Counters, BusT::count> last_{};
+    std::array<Part, BusT::count>                    parts_{};
+    std::array<Segment, BusT::segments>              segments_{};
     bool                                             primed_{};
 };
 

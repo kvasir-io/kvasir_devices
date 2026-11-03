@@ -22,20 +22,20 @@ namespace Kvasir::I2C::Chips {
 /// number; MCP3221A5 (0x4D) is the common one, and what MikroE fits to Vibra Sense 2 Click.
 template<MilliVolt Supply = Units::milliVolt(3300)>
 struct Mcp3221 {
-    static constexpr std::string_view Name          = "MCP3221";
-    static constexpr Address7         Address       = 0x4D;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "MCP3221";
+    static constexpr Address7         address       = 0x4D;
+    static constexpr std::size_t      registerBytes = 0;
 
-    static constexpr auto Addresses = addressRun<0x48, 8>();
+    static constexpr auto addresses = addressRun<0x48, 8>();
 
     static_assert(Supply > Units::milliVolt(0),
                   "the supply is the reference every code is scaled by; it may not be zero");
 
-    static constexpr std::uint16_t FullScale = 4096;
+    static constexpr std::uint16_t fullScale = 4096;
 
     struct Conversion {
-        static constexpr auto       Period = std::chrono::milliseconds{20};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 2})};
+        static constexpr auto       period = std::chrono::milliseconds{20};
+        static constexpr std::array steps{Engine::Step::receive({.count = 2})};
 
         struct Sample {
             std::uint16_t code{};   ///< 0..4095 of VDD
@@ -43,7 +43,7 @@ struct Mcp3221 {
             /// The input, against the supply the part runs on.
             [[nodiscard]] constexpr MilliVolt voltage(MilliVolt vdd) const {
                 return Units::milliVolt(static_cast<std::int32_t>(code) * Units::value(vdd)
-                                        / FullScale);
+                                        / fullScale);
             }
 
             /// Against the `Supply` parameter.

@@ -19,8 +19,8 @@ enum class Model : std::uint8_t { bmp280, bme280 };
 /// What a data register holds for a measurement that was skipped (oversampling 000) or has
 /// not run yet since the reset: 0x80000 in the 20-bit pressure and temperature fields,
 /// 0x8000 in the humidity word (5.4.7 to 5.4.9, the reset values of 0xF7..0xFE).
-inline constexpr std::int32_t  Skipped20 = 0x80000;
-inline constexpr std::uint16_t Skipped16 = 0x8000;
+inline constexpr std::int32_t  skipped20 = 0x80000;
+inline constexpr std::uint16_t skipped16 = 0x8000;
 
 struct Trim {
     std::uint16_t               t1{};
@@ -120,7 +120,7 @@ struct Trim {
 
 // A real part's trimming with the decode of one of its frames (0xF7.. = 65 5A C0 7E ED 00
 // 80 00): 25.08 degC and 100653 Pa, the numbers the I2C description's test checks too.
-namespace detail {
+namespace Detail {
     constexpr Trim exampleTrim() {
         Trim t{};
         t.t1 = 27504;
@@ -166,6 +166,6 @@ namespace detail {
     }
 
     static_assert(humidityTrim().h4 == -16 && humidityTrim().h5 == -16);
-}   // namespace detail
+}   // namespace Detail
 
 }   // namespace Kvasir::Bme280Compensation

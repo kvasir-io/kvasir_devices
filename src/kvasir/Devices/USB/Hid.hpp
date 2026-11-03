@@ -52,19 +52,19 @@ enum class Request : std::uint8_t {
 };
 
 // Class descriptor types (HID 1.11, 7.1, hid1_11.md l.1625-1626).
-inline constexpr std::uint8_t HidDescriptorType    = 0x21;
-inline constexpr std::uint8_t ReportDescriptorType = 0x22;
+inline constexpr std::uint8_t hidDescriptorType    = 0x21;
+inline constexpr std::uint8_t reportDescriptorType = 0x22;
 
 /// The HID descriptor with its one class descriptor, the report descriptor (HID 1.11, 6.2.1,
 /// hid1_11.md l.705-713: bcdHID at offset 2, bCountryCode 4, bNumDescriptors 5, the class
 /// descriptor's type 6 and wDescriptorLength 7; 9 bytes).
 struct [[gnu::packed]] ClassDescriptor {
     std::uint8_t  bLength{9};
-    std::uint8_t  bDescriptorType{HidDescriptorType};
+    std::uint8_t  bDescriptorType{hidDescriptorType};
     std::uint16_t bcdHID{0x0111};
     std::uint8_t  bCountryCode{0};   // not localized
     std::uint8_t  bNumDescriptors{1};
-    std::uint8_t  bClassDescriptorType{ReportDescriptorType};
+    std::uint8_t  bClassDescriptorType{reportDescriptorType};
     std::uint16_t wDescriptorLength{};
 };
 
@@ -81,46 +81,46 @@ private:
     friend Derived;
     friend struct Kvasir::USB::MixinTraits;
 
-    static constexpr std::size_t InterfaceCount = 1;
-    static constexpr std::size_t EndpointCount  = 1;
+    static constexpr std::size_t interfaceCount = 1;
+    static constexpr std::size_t endpointCount  = 1;
 
-    static constexpr std::size_t ReportDescriptorSize = Traits::ReportDescriptor.size();
-    static constexpr std::size_t InputReportSize      = Traits::InputReportSize;
-    static_assert(InputReportSize != 0 && InputReportSize <= MaxPacketSize,
+    static constexpr std::size_t reportDescriptorSize = Traits::reportDescriptor.size();
+    static constexpr std::size_t inputReportSize      = Traits::inputReportSize;
+    static_assert(inputReportSize != 0 && inputReportSize <= maxPacketSize,
                   "an input report has to fit one 64-byte packet");
 
-    static constexpr std::uint8_t PollIntervalMs
+    static constexpr std::uint8_t pollIntervalMs
       = static_cast<std::uint8_t>(KVASIR_CONFIG_OR(Traits, pollIntervalMs, std::uint8_t{10}));
 
     // Interface, the HID descriptor (HID 1.11, 6.2.1: bcdHID 1.11, no country, one class
     // descriptor - the report descriptor and its length), the endpoint.
-    static constexpr auto InterfaceDescriptor = USB::Descriptors::generateArray(
+    static constexpr auto interfaceDescriptor = USB::Descriptors::generateArray(
       USB::Descriptors::Interface{.bInterfaceNumber   = FirstInterfaceNumber,
                                   .bAlternateSetting  = 0,
                                   .bNumEndpoints      = 1,
                                   .bInterfaceClass    = 3,
                                   .bInterfaceSubClass = 0,
                                   .bInterfaceProtocol = 0},
-      ClassDescriptor{.wDescriptorLength = static_cast<std::uint16_t>(ReportDescriptorSize)},
-      USB::Descriptors::endpoint(EndpointDirection::In,
+      ClassDescriptor{.wDescriptorLength = static_cast<std::uint16_t>(reportDescriptorSize)},
+      USB::Descriptors::endpoint(EndpointDirection::in,
                                  FirstEndpointNumber,
-                                 EndpointTransferType::Interrupt,
-                                 InputReportSize,
-                                 PollIntervalMs));
+                                 EndpointTransferType::interrupt,
+                                 inputReportSize,
+                                 pollIntervalMs));
 
-    static constexpr auto ReportDescriptorBytes = [] {
-        std::array<std::byte, ReportDescriptorSize> bytes{};
+    static constexpr auto reportDescriptorBytes = [] {
+        std::array<std::byte, reportDescriptorSize> bytes{};
         for(std::size_t i = 0; i != bytes.size(); ++i) {
-            bytes[i] = static_cast<std::byte>(Traits::ReportDescriptor[i]);
+            bytes[i] = static_cast<std::byte>(Traits::reportDescriptor[i]);
         }
         return bytes;
     }();
 
-    using In = detail::InterruptInEndpoint<Derived, FirstEndpointNumber, InputReportSize>;
+    using In = Detail::InterruptInEndpoint<Derived, FirstEndpointNumber, inputReportSize>;
 
     // State
     static inline std::uint8_t                         idleRate{};
-    static inline std::array<std::byte, MaxPacketSize> controlReport{};
+    static inline std::array<std::byte, maxPacketSize> controlReport{};
     static inline std::uint8_t                         pendingType{};
     static inline std::uint8_t                         pendingId{};
     static inline std::uint16_t                        pendingLength{};   // 0: no SET_REPORT open
@@ -141,9 +141,9 @@ private:
             if(pkt.type() == SetupPacket::Type::standard) {
                 // GET_DESCRIPTOR(report) goes to the interface (HID 1.11, 7.1.1).
                 if(in && pkt.bRequest == SetupPacket::Request::getDescriptor
-                   && (pkt.wValue >> 8) == ReportDescriptorType)
+                   && (pkt.wValue >> 8) == reportDescriptorType)
                 {
-                    return Derived::ep0INDataPhase(ReportDescriptorBytes, pkt.wLength);
+                    return Derived::ep0INDataPhase(reportDescriptorBytes, pkt.wLength);
                 }
                 return false;
             }
@@ -181,7 +181,7 @@ private:
                              Traits::setReport(type, id, data);
                          })
             {
-                if(in || pkt.wLength == 0 || pkt.wLength > MaxPacketSize) { return false; }
+                if(in || pkt.wLength == 0 || pkt.wLength > maxPacketSize) { return false; }
                 pendingType   = type;
                 pendingId     = id;
                 pendingLength = pkt.wLength;
@@ -260,8 +260,8 @@ template<template<typename, typename> class BackendT,
 using Hid = Device<BackendT,
                    Clock,
                    Config,
-                   DeviceClass::UseInterfaceClass,
-                   DeviceClass::UseInterfaceClass,
+                   DeviceClass::useInterfaceClass,
+                   DeviceClass::useInterfaceClass,
                    0,   // FirstInterfaceNumber
                    1,   // FirstEndpointNumber
                    Mixins...>;

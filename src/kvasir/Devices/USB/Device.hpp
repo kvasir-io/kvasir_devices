@@ -40,16 +40,16 @@
 ///
 /// and Usb in the Startup list. Config.hpp has the optional config members.
 namespace Kvasir::USB {
-namespace detail {
+namespace Detail {
     // The backend's Startup members, passed on where it has them (Features.hpp).
     template<typename B>
     struct BackendStartup
-      : Kvasir::detail::ForwardProvides<B>
-      , Kvasir::detail::ForwardClaims<B>
-      , Kvasir::detail::ForwardPowerClockEnable<B>
-      , Kvasir::detail::ForwardPinConfig<B>
-      , Kvasir::detail::ForwardPeripheryConfig<B>
-      , Kvasir::detail::ForwardInterruptConfig<B> {};
+      : Kvasir::Detail::ForwardProvides<B>
+      , Kvasir::Detail::ForwardClaims<B>
+      , Kvasir::Detail::ForwardPowerClockEnable<B>
+      , Kvasir::Detail::ForwardPinConfig<B>
+      , Kvasir::Detail::ForwardPeripheryConfig<B>
+      , Kvasir::Detail::ForwardInterruptConfig<B> {};
 
     // A string of the config (manufacturerString, ...): text, or a callable that gives it at run
     // time.
@@ -61,7 +61,7 @@ namespace detail {
             return Kvasir::USB::DescriptorString{SC_LIFT(S)};
         }
     }
-}   // namespace detail
+}   // namespace Detail
 
 template<template<typename, typename> class BackendT,
          typename Clock,
@@ -84,7 +84,7 @@ struct Device
                                Mixins...>,
                         std::make_index_sequence<sizeof...(Mixins)>,
                         Mixins...>::template Bases<FirstInterfaceNumber, FirstEndpointNumber>
-  , detail::BackendStartup<BackendT<Clock, ConfigT>> {
+  , Detail::BackendStartup<BackendT<Clock, ConfigT>> {
     /// The chip's half. Its endpoints carry whatever more the chip can do than Backend.hpp asks.
     using Backend = BackendT<Clock, ConfigT>;
 
@@ -105,27 +105,27 @@ private:
     using SetupPacket = Kvasir::USB::SetupPacket;
     using Traits      = ConfigTraits<ConfigT>;
 
-    static_assert(detail::Controller<Backend>,
+    static_assert(Detail::Controller<Backend>,
                   "the backend lacks part of what kvasir/Devices/USB/Backend.hpp lists for the "
                   "controller");
-    static_assert(Backend::maxPacketSize == MaxPacketSize,
+    static_assert(Backend::maxPacketSize == maxPacketSize,
                   "the backend's MaxPacketSize differs from the 64 bytes the descriptors promise");
-    static_assert(1 + Layout::EndpointCount <= Backend::endpointCount,
+    static_assert(1 + Layout::endpointCount <= Backend::endpointCount,
                   "the mixins use more endpoint numbers than the controller has");
 
     using Ep0In =
-      typename Backend::template Endpoint<0, EndpointDirection::In, EndpointTransferType::Control>;
+      typename Backend::template Endpoint<0, EndpointDirection::in, EndpointTransferType::control>;
     using Ep0Out =
-      typename Backend::template Endpoint<0, EndpointDirection::Out, EndpointTransferType::Control>;
-    static_assert(detail::InEndpoint<Ep0In> && detail::OutEndpoint<Ep0Out>,
+      typename Backend::template Endpoint<0, EndpointDirection::out, EndpointTransferType::control>;
+    static_assert(Detail::InEndpoint<Ep0In> && Detail::OutEndpoint<Ep0Out>,
                   "the backend's endpoints lack part of what kvasir/Devices/USB/Backend.hpp lists");
 
-    static constexpr std::tuple DescriptorStrings{
-      detail::descriptorString<ConfigT::manufacturerString>(),
-      detail::descriptorString<ConfigT::productString>(),
-      detail::descriptorString<ConfigT::serialNumberString>()};
+    static constexpr std::tuple descriptorStrings{
+      Detail::descriptorString<ConfigT::manufacturerString>(),
+      Detail::descriptorString<ConfigT::productString>(),
+      Detail::descriptorString<ConfigT::serialNumberString>()};
 
-    static constexpr auto DeviceDescriptor{
+    static constexpr auto deviceDescriptor{
       USB::Descriptors::makeDeviceDescriptorArray<ConfigT::productVersionBcd,
                                                   ConfigT::vendorId,
                                                   ConfigT::productId,
@@ -134,12 +134,12 @@ private:
                                                   3,
                                                   Class,
                                                   SubClass,
-                                                  Layout::BcdUSB>()};
+                                                  Layout::bcdUSB>()};
 
-    static constexpr auto ConfigDescriptor
-      = Descriptors::makeConfigDescriptorArray(Traits::BusPower,
-                                               Traits::BusPowered,
-                                               static_cast<std::uint8_t>(Layout::InterfaceCount),
+    static constexpr auto configDescriptor
+      = Descriptors::makeConfigDescriptorArray(Traits::busPower,
+                                               Traits::busPowered,
+                                               static_cast<std::uint8_t>(Layout::interfaceCount),
                                                MixinsBase::interfaceDescriptors());
 
     // State
@@ -148,7 +148,7 @@ private:
     static inline bool                       pendingAddressSet{false};
     static inline std::span<std::byte const> remainingControlData{};
     static inline bool                       endOfTransferPending{false};
-    static inline detail::EP0ControlState    ep0Control{};
+    static inline Detail::EP0ControlState    ep0Control{};
 
     enum class Fault : std::uint8_t {
         unhandledBufferDone = 1,
@@ -195,7 +195,7 @@ private:
         static void resume() { handleSuspend(false); }
 
         static void startOfFrame([[maybe_unused]] std::uint16_t frame) {
-            if constexpr(Traits::UseSof) { ConfigT::startOfFrameCallback(frame); }
+            if constexpr(Traits::useSof) { ConfigT::startOfFrameCallback(frame); }
         }
     };
 
@@ -243,12 +243,12 @@ private:
                 // The status stage went out from the old address; from here on the new one.
                 Backend::setAddress(deviceBusAddr);
                 pendingAddressSet = false;
-                ep0Control.transition(ControlStage::Idle);
+                ep0Control.transition(ControlStage::idle);
                 return true;
             }
             if(!remainingControlData.empty() || endOfTransferPending) {
                 auto const chunk = remainingControlData.first(
-                  std::min(remainingControlData.size(), MaxPacketSize));
+                  std::min(remainingControlData.size(), maxPacketSize));
                 remainingControlData = remainingControlData.subspan(chunk.size());
                 if(chunk.empty()) { endOfTransferPending = false; }
                 if(remainingControlData.empty() && !endOfTransferPending) {
@@ -258,20 +258,20 @@ private:
                 }
                 return true;
             }
-            if(ep0Control.stage() == ControlStage::Data) {
-                ep0Control.transition(ControlStage::Status);
+            if(ep0Control.stage() == ControlStage::data) {
+                ep0Control.transition(ControlStage::status);
                 ep0OUT<true>(0);
                 return true;
             }
-            if(ep0Control.stage() == ControlStage::Status) {
-                ep0Control.transition(ControlStage::Idle);
+            if(ep0Control.stage() == ControlStage::status) {
+                ep0Control.transition(ControlStage::idle);
                 return true;
             }
             return false;
         }
         if(epNum == 0 && !in) {
-            if(ep0Control.stage() == ControlStage::Status) {
-                ep0Control.transition(ControlStage::Idle);
+            if(ep0Control.stage() == ControlStage::status) {
+                ep0Control.transition(ControlStage::idle);
                 return true;
             }
         }
@@ -304,31 +304,31 @@ private:
     }
 
     static bool handleDeviceDescriptor(SetupPacket const& pkt) {
-        return ep0INDataPhase(Self::DeviceDescriptor, pkt.wLength);
+        return ep0INDataPhase(Self::deviceDescriptor, pkt.wLength);
     }
 
     static bool handleConfigDescriptor(SetupPacket const& pkt) {
         // The only configuration has index 0.
         if((pkt.wValue & 0xff) != 0) { return false; }
-        return ep0INDataPhase(Self::ConfigDescriptor, pkt.wLength);
+        return ep0INDataPhase(Self::configDescriptor, pkt.wLength);
     }
 
     // A string given as a literal is a finished descriptor in flash; only one that is made at
     // run time (a serial number read from the chip) needs a buffer to be put together in.
     template<std::size_t I>
-    static constexpr bool IsRuntimeString = requires { std::get<I>(DescriptorStrings).f; };
+    static constexpr bool isRuntimeString = requires { std::get<I>(descriptorStrings).f; };
 
-    static constexpr std::size_t StringCount = std::tuple_size_v<decltype(DescriptorStrings)>;
+    static constexpr std::size_t stringCount = std::tuple_size_v<decltype(descriptorStrings)>;
 
-    static constexpr bool AnyRuntimeString = []<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return (IsRuntimeString<Ns> || ...);
-    }(std::make_index_sequence<StringCount>{});
+    static constexpr bool anyRuntimeString = []<std::size_t... Ns>(std::index_sequence<Ns...>) {
+        return (isRuntimeString<Ns> || ...);
+    }(std::make_index_sequence<stringCount>{});
 
-    static inline std::array<std::byte, AnyRuntimeString ? 256 : 0> stringDescriptorBuffer{};
+    static inline std::array<std::byte, anyRuntimeString ? 256 : 0> stringDescriptorBuffer{};
 
     template<std::size_t I>
-    static constexpr auto FlashString = [] {
-        constexpr auto const&                         text = std::get<I>(DescriptorStrings);
+    static constexpr auto flashString = [] {
+        constexpr auto const&                         text = std::get<I>(descriptorStrings);
         std::array<std::byte, 2 + text.buffer.size()> descriptor{};
         descriptor[0] = static_cast<std::byte>(descriptor.size());
         descriptor[1] = static_cast<std::byte>(DescriptorType::string);
@@ -338,24 +338,24 @@ private:
 
     template<std::size_t I>
     static bool sendString(SetupPacket const& pkt) {
-        if constexpr(IsRuntimeString<I>) {
+        if constexpr(isRuntimeString<I>) {
             auto&      buffer = stringDescriptorBuffer;
             auto const start  = buffer.begin() + 2;
             auto const end
-              = insertStringDescriptor(std::get<I>(DescriptorStrings).get(), start, buffer.end());
+              = insertStringDescriptor(std::get<I>(descriptorStrings).get(), start, buffer.end());
             if(end == start) { return false; }
             auto const len = static_cast<std::size_t>(std::distance(buffer.begin(), end));
             buffer[0]      = std::byte(len);
             buffer[1]      = std::byte(DescriptorType::string);
             return ep0INDataPhase(std::span{buffer.data(), len}, pkt.wLength);
         } else {
-            return ep0INDataPhase(FlashString<I>, pkt.wLength);
+            return ep0INDataPhase(flashString<I>, pkt.wLength);
         }
     }
 
     static bool handleStringDescriptor(SetupPacket const& pkt) {
         // String 0: the languages, of which there is one (English US).
-        static constexpr std::array<std::byte, 4> Languages{std::byte{4},
+        static constexpr std::array<std::byte, 4> languages{std::byte{4},
                                                             std::byte(DescriptorType::string),
                                                             std::byte{0x09},
                                                             std::byte{0x04}};
@@ -363,15 +363,15 @@ private:
         auto const index = static_cast<std::size_t>(pkt.wValue & 0xff);
 
         // Windows probes for a Microsoft OS 1.0 descriptor on every enumeration.
-        static constexpr std::size_t MsOs10StringIndex = 0xEE;
-        if(index == MsOs10StringIndex) { return stallQuietly(); }
+        static constexpr std::size_t msOs10StringIndex = 0xEE;
+        if(index == msOs10StringIndex) { return stallQuietly(); }
 
-        if(index == 0) { return ep0INDataPhase(Languages, pkt.wLength); }
+        if(index == 0) { return ep0INDataPhase(languages, pkt.wLength); }
 
         bool handled = false;
         [&]<std::size_t... Ns>(std::index_sequence<Ns...>) {
             static_cast<void>(((Ns + 1 == index && (handled = sendString<Ns>(pkt), true)) || ...));
-        }(std::make_index_sequence<StringCount>{});
+        }(std::make_index_sequence<stringCount>{});
         return handled;
     }
 
@@ -400,7 +400,7 @@ private:
 
         case SetupPacket::Request::getStatus:
             {
-                std::array<std::byte, 2> const status{std::byte{Traits::BusPowered ? 0 : 1}};
+                std::array<std::byte, 2> const status{std::byte{Traits::busPowered ? 0 : 1}};
                 return ep0INDataPhase(status, pkt.wLength);
             }
 
@@ -440,7 +440,7 @@ private:
         }
     }
 
-    static constexpr std::size_t TotalInterfaceCount = Layout::InterfaceCount;
+    static constexpr std::size_t totalInterfaceCount = Layout::interfaceCount;
 
     // Standard requests no mixin claimed: interfaces without endpoints of their own always
     // run alternate setting 0, and EP0 is never halted.
@@ -450,19 +450,19 @@ private:
         bool const in   = pkt.direction() == SetupPacket::Direction::deviceToHost;
 
         if(pkt.recipient() == Recipient::interface) {
-            if(configuration == 0 || pkt.wIndex >= TotalInterfaceCount) { return false; }
+            if(configuration == 0 || pkt.wIndex >= totalInterfaceCount) { return false; }
             switch(pkt.bRequest) {
             case Request::getStatus:
                 {
                     if(!in) { return false; }
-                    static constexpr std::array<std::byte, 2> Status{};
-                    return ep0INDataPhase(Status, pkt.wLength);
+                    static constexpr std::array<std::byte, 2> status{};
+                    return ep0INDataPhase(status, pkt.wLength);
                 }
             case Request::getInterface:
                 {
                     if(!in) { return false; }
-                    static constexpr std::array<std::byte, 1> AlternateSetting{};
-                    return ep0INDataPhase(AlternateSetting, pkt.wLength);
+                    static constexpr std::array<std::byte, 1> alternateSetting{};
+                    return ep0INDataPhase(alternateSetting, pkt.wLength);
                 }
             case Request::setInterface:
                 if(in || pkt.wValue != 0) { return false; }
@@ -474,8 +474,8 @@ private:
         if(pkt.recipient() == Recipient::endpoint && (pkt.wIndex & 0x7f) == 0
            && pkt.bRequest == Request::getStatus && in)
         {
-            static constexpr std::array<std::byte, 2> Status{};
-            return ep0INDataPhase(Status, pkt.wLength);
+            static constexpr std::array<std::byte, 2> status{};
+            return ep0INDataPhase(status, pkt.wLength);
         }
         return false;
     }
@@ -483,7 +483,7 @@ private:
     static void handleSetupPacket(SetupPacket const& pkt) {
         remainingControlData = {};
         endOfTransferPending = false;
-        ep0Control.transition(ControlStage::Setup);
+        ep0Control.transition(ControlStage::setup);
 
         // Whatever the last transfer left armed is dropped, and the data stage starts at DATA1.
         Backend::beginControlTransfer();
@@ -538,10 +538,10 @@ public:
         data = data.first(std::min<std::size_t>(data.size(), wLength));
         // A short reply that ends on a packet boundary needs a zero-length packet.
         bool const endsOnPacketBoundary
-          = !data.empty() && data.size() < wLength && data.size() % MaxPacketSize == 0;
-        auto const first = data.first(std::min(data.size(), MaxPacketSize));
+          = !data.empty() && data.size() < wLength && data.size() % maxPacketSize == 0;
+        auto const first = data.first(std::min(data.size(), maxPacketSize));
 
-        ep0Control.transition(ControlStage::Data);
+        ep0Control.transition(ControlStage::data);
         remainingControlData = data.subspan(first.size());
         endOfTransferPending = endsOnPacketBoundary;
         if(remainingControlData.empty() && !endOfTransferPending) {
@@ -554,16 +554,16 @@ public:
 
     // Whole configuration descriptor, for mixins describing other mixins' interfaces.
     // Only usable where the device type is complete, i.e. inside a callback body.
-    static constexpr std::span<std::byte const> configDescriptorBytes() { return ConfigDescriptor; }
+    static constexpr std::span<std::byte const> configDescriptorBytes() { return configDescriptor; }
 
     static void ep0OUTDataPhase(std::size_t size) {
-        assert(MaxPacketSize >= size);
-        ep0Control.transition(ControlStage::Data);
+        assert(maxPacketSize >= size);
+        ep0Control.transition(ControlStage::data);
         ep0OUT<true>(size);
     }
 
     static bool ep0OUTGetData(std::span<std::byte> data) {
-        if(ep0Control.stage() == ControlStage::Data) {
+        if(ep0Control.stage() == ControlStage::data) {
             std::size_t const len = Ep0Out::readCurrentBuffer(data);
             if(len != data.size()) {
                 KVASIR_LOG_LIMITED(faults.note(Fault::invalidOutData),
@@ -582,7 +582,7 @@ public:
     }
 
     static void acknowledgeSetupRequest() {
-        ep0Control.transition(ControlStage::Status);
+        ep0Control.transition(ControlStage::status);
         ep0IN<true>(std::span<std::byte const>{});
     }
 
@@ -590,7 +590,7 @@ public:
     static void stallControlRequest() {
         Ep0In::stall();
         Ep0Out::stall();
-        ep0Control.transition(ControlStage::Stall);
+        ep0Control.transition(ControlStage::stall);
     }
 
     // Runs f with the USB interrupt masked, for thread code touching endpoint state the

@@ -74,9 +74,9 @@ namespace Tmag5273Detail {
 
     /// How many magnetic conversions one set of `c` is (XYX is three).
     [[nodiscard]] constexpr unsigned conversions(Channels c) {
-        static constexpr std::array<std::uint8_t, 12> N{0, 1, 1, 2, 1, 2, 2, 3, 3, 3, 3, 3};
+        static constexpr std::array<std::uint8_t, 12> n{0, 1, 1, 2, 1, 2, 2, 3, 3, 3, 3, 3};
         auto const                                    i = static_cast<std::size_t>(c);
-        return i < N.size() ? N[i] : 0;
+        return i < n.size() ? n[i] : 0;
     }
 
     [[nodiscard]] constexpr bool hasX(Channels c) {
@@ -191,26 +191,26 @@ template<Tmag5273Detail::Averaging Avg     = Tmag5273Detail::Averaging::x32,
          Tmag5273Detail::AnglePair Angle   = Tmag5273Detail::AnglePair::xy,
          Tmag5273Detail::Mode      OpMode  = Tmag5273Detail::Mode::continuous>
 struct Tmag5273 {
-    static constexpr std::string_view Name = "TMAG5273";
+    static constexpr std::string_view name = "TMAG5273";
     /// TI TMAG5273. TMAG5273.md:2177, :2203: MANUFACTURER_ID_LSB (Eh) 49h and _MSB (Fh) 54h.
     /// DEVICE_ID (Dh) VER, bits 1:0, is 1h (the 40 / 80 mT part) or 2h (133 / 266 mT); 0h and 3h are
     /// reserved (TMAG5273.md:2162..2173).
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"device-id", 0x0D, 1, true, 0x03, 0x01, 0x02},
       Engine::RegisterCheck{"manufacturer-id-lsb", 0x0E, 1, true, 0xFF, 0x49},
       Engine::RegisterCheck{"manufacturer-id-msb", 0x0F, 1, true, 0xFF, 0x54},
     };
-    static constexpr Address7                Address = 0x22;
-    static constexpr std::array<Address7, 4> Addresses{0x22, 0x35, Address7::reserved(0x78), 0x44};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x22;
+    static constexpr std::array<Address7, 4> addresses{0x22, 0x35, Address7::reserved(0x78), 0x44};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// tstart_power_up, 270 us (5.11), rounded up.
-    static constexpr auto StartupDelay = std::chrono::milliseconds{1};
+    static constexpr auto startupDelay = std::chrono::milliseconds{1};
 
     /// A part left in sleep mode by earlier firmware does not acknowledge the first address
     /// it is woken by (5.11 note 1; Linux tmag5273.c makes a throw-away read and waits before
     /// probing), so a NAK is put back on the wire rather than counted.
-    static constexpr std::uint8_t WakeRetries = 2;
+    static constexpr std::uint8_t wakeRetries = 2;
 
     using AveragingCount = Tmag5273Detail::Averaging;
     using ChannelSet     = Tmag5273Detail::Channels;
@@ -219,26 +219,26 @@ struct Tmag5273 {
     using OperatingMode  = Tmag5273Detail::Mode;
     using RangeConfig    = Tmag5273Detail::Ranges;
 
-    static constexpr std::uint16_t ManufacturerId = 0x5449;
+    static constexpr std::uint16_t manufacturerId = 0x5449;
 
-    static constexpr std::uint8_t Config1
+    static constexpr std::uint8_t config1
       = static_cast<std::uint8_t>(static_cast<unsigned>(Avg) << 2U);
-    static constexpr std::uint8_t SensorConfig1
+    static constexpr std::uint8_t sensorConfig1
       = static_cast<std::uint8_t>(static_cast<unsigned>(Ch) << 4U);
-    static constexpr std::uint8_t SensorConfig2
+    static constexpr std::uint8_t sensorConfig2
       = Tmag5273Detail::sensorConfig2(RangeConfig{XyRange, ZRange, Angle});
-    static constexpr std::uint8_t Config2 = static_cast<std::uint8_t>(OpMode);
+    static constexpr std::uint8_t config2 = static_cast<std::uint8_t>(OpMode);
 
-    static constexpr std::chrono::milliseconds ReadPeriod = Tmag5273Detail::readPeriod(Avg, Ch);
+    static constexpr std::chrono::milliseconds readPeriod = Tmag5273Detail::readPeriod(Avg, Ch);
 
     // clang-format off
-    static constexpr std::array Init{
-      Engine::Step::write({.reg = 0x00, .payload = {Config1}}),   // CONV_AVG
+    static constexpr std::array init{
+      Engine::Step::write({.reg = 0x00, .payload = {config1}}),   // CONV_AVG
       Engine::Step::write(
-        {.reg = 0x02, .payload = {SensorConfig1, SensorConfig2}}),   // channels; angle and ranges
+        {.reg = 0x02, .payload = {sensorConfig1, sensorConfig2}}),   // channels; angle and ranges
       Engine::Step::write({.reg = 0x07, .payload = {0x01}}),         // T_CH_EN
       Engine::Step::write({.reg = 0x18, .payload = {0x10}}),         // CONV_STATUS: clear POR
-      Engine::Step::write({.reg = 0x01, .payload = {Config2}}),      // the operating mode, last
+      Engine::Step::write({.reg = 0x01, .payload = {config2}}),      // the operating mode, last
     };
     // clang-format on
 
@@ -267,17 +267,17 @@ struct Tmag5273 {
 
     /// T, X, Y, Z, CONV_STATUS, ANGLE and MAGNITUDE: 0x10..0x1B in one burst.
     struct Field {
-        static constexpr auto Period = ReadPeriod;
+        static constexpr auto period = readPeriod;
         /// Keeps stamp<Field>(), takeGaps<Field>() and unchanged<Field>(): a frame polled
         /// before RESULT_STATUS says the set is complete is counted, not dropped silently.
-        static constexpr bool Timestamped = true;
+        static constexpr bool timestamped = true;
 
         /// The conversion time of the averaging and channels the part holds now.
         [[nodiscard]] static constexpr std::chrono::milliseconds periodNow(State const& state) {
             return Tmag5273Detail::readPeriod(state.averaging, state.channels);
         }
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x10, .count = 12, .offset = 0})};
 
         struct Sample {
@@ -330,7 +330,7 @@ struct Tmag5273 {
     /// written 0 with it.
     struct Averaging {
         using Value                        = AveragingCount;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -348,7 +348,7 @@ struct Tmag5273 {
     /// wake-up-and-sleep).
     struct MagneticChannels {
         using Value                        = ChannelSet;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -365,7 +365,7 @@ struct Tmag5273 {
     /// X_Y_RANGE, Z_RANGE and ANGLE_EN (SENSOR_CONFIG_2).
     struct Ranges {
         using Value                        = RangeConfig;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -385,7 +385,7 @@ struct Tmag5273 {
     /// `period<Field>(0ms)`, and give it its period back with continuous or standby.
     struct Operating {
         using Value                        = OperatingMode;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

@@ -20,7 +20,7 @@ namespace Lis3dhDetail {
 
     /// Micro-g per digit of the twelve-bit high-resolution reading (Table 3: 1, 2, 4 and
     /// 12 mg/digit).
-    inline constexpr std::array<MicroG, 4> AccelPerDigit{Units::microG(1000),
+    inline constexpr std::array<MicroG, 4> accelPerDigit{Units::microG(1000),
                                                          Units::microG(2000),
                                                          Units::microG(4000),
                                                          Units::microG(12000)};
@@ -36,51 +36,51 @@ namespace Lis3dhDetail {
 /// 0x18 (SA0 low) or 0x19.
 template<Lis3dhDetail::Range Range = Lis3dhDetail::Range::g2>
 struct Lis3dhX {
-    static constexpr std::string_view Name = "LIS3DH";
+    static constexpr std::string_view name = "LIS3DH";
     /// ST LIS3DH. LIS3DH.md:1059: WHO_AM_I (0Fh) is 33h.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"who-am-i", 0x0F, 1, true, 0xFF, 0x33},
     };
-    static constexpr Address7                Address = 0x18;
-    static constexpr std::array<Address7, 2> Addresses{0x18, 0x19};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = 0x18;
+    static constexpr std::array<Address7, 2> addresses{0x18, 0x19};
+    static constexpr std::size_t             registerBytes = 1;
 
     /// Table 5 gives a turn-on time of 1 ms at 100 Hz; the 5 ms wait after power-up is margin.
-    static constexpr auto StartupDelay = std::chrono::milliseconds{5};
+    static constexpr auto startupDelay = std::chrono::milliseconds{5};
 
-    static constexpr std::uint8_t RangeCode = static_cast<std::uint8_t>(Range);
+    static constexpr std::uint8_t rangeCode = static_cast<std::uint8_t>(Range);
     /// BDU, HR, the range.
-    static constexpr std::uint8_t Ctrl4 = static_cast<std::uint8_t>(0x88U | (RangeCode << 4U));
+    static constexpr std::uint8_t ctrl4 = static_cast<std::uint8_t>(0x88U | (rangeCode << 4U));
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x20, .payload = {0x57}}),
-      Engine::Step::write({.reg = 0x23, .payload = {Ctrl4}}),
+      Engine::Step::write({.reg = 0x23, .payload = {ctrl4}}),
     };
 
     struct State : Engine::Groups::DeviceId {
-        std::uint8_t range{RangeCode};   ///< CTRL_REG4 FS as written now
+        std::uint8_t range{rangeCode};   ///< CTRL_REG4 FS as written now
     };
 
     /// What the engine read of the Identity above, once it matched and before Init runs:
     /// `state().deviceId` is the part's own word, read once.
     static constexpr void identified(std::span<std::uint32_t const> ids,
                                      State&                         state) {
-        state.range    = RangeCode;
+        state.range    = rangeCode;
         state.deviceId = static_cast<std::uint16_t>(ids[0]);
     }
 
     struct Motion {
-        static constexpr auto Period = std::chrono::milliseconds{20};
+        static constexpr auto period = std::chrono::milliseconds{20};
         /// STATUS_REG (0x27) first, then the outputs: a frame is a sample only with ZYXDA (bit 3, "a new set of data is
         /// available", LIS3DH datasheet 8.15 Table 40/41; the converted table merges two cells, the bit is the fifth
         /// of eight from bit 7).
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x27, .count = 1, .offset = 6}),   // STATUS_REG
           Engine::Step::read(
             {.reg = 0x80 | 0x28, .count = 6, .offset = 0}),   // OUT_X_L.., auto-increment
         };
 
-        static constexpr std::uint8_t Zyxda = 0x08U;
+        static constexpr std::uint8_t zyxda = 0x08U;
 
         struct Sample {
             MicroG x{}, y{}, z{};
@@ -90,8 +90,8 @@ struct Lis3dhX {
         /// conversion, whose outputs read 0, or one between two samples - is Outcome::unchanged().
         [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
                                                                       State const& state) {
-            if((data.u8(6) & Zyxda) == 0) { return Engine::Outcome<Sample>::unchanged(); }
-            auto const perDigit = Units::value(Lis3dhDetail::AccelPerDigit[state.range & 0x03U]);
+            if((data.u8(6) & zyxda) == 0) { return Engine::Outcome<Sample>::unchanged(); }
+            auto const perDigit = Units::value(Lis3dhDetail::accelPerDigit[state.range & 0x03U]);
             auto const axis     = [&](std::size_t i) {
                 return Units::microG(static_cast<std::int32_t>(data.s16le(2 * i) >> 4) * perDigit);
             };
@@ -102,8 +102,8 @@ struct Lis3dhX {
     /// CTRL_REG4's FS (5:4), with BDU and HR kept; changeable at run time.
     struct RangeSetting {
         using Value                          = Lis3dhDetail::Range;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Range;
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Range;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

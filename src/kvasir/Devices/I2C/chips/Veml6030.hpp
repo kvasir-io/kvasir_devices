@@ -105,27 +105,27 @@ struct Veml6030 {
     using Gain        = Veml6030Detail::Gain;
     using Integration = Veml6030Detail::Integration;
 
-    static constexpr std::string_view Name = "VEML6030";
+    static constexpr std::string_view name = "VEML6030";
     /// Vishay VEML6030. VEML6030.md:480..487: command code 07h, low byte first; the low byte is the
     /// device ID code 81h, the high byte follows the address option.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"id", 0x07, 2, false, 0x00FF, 0x0081},
     };
-    static constexpr Address7                Address = 0x10;
-    static constexpr std::array<Address7, 2> Addresses{0x10, 0x48};
-    static constexpr std::size_t             RegisterBytes = 1;
-    static constexpr auto StartupDelay = std::chrono::milliseconds{3};   // >= 2.5 ms
+    static constexpr Address7                address = 0x10;
+    static constexpr std::array<Address7, 2> addresses{0x10, 0x48};
+    static constexpr std::size_t             registerBytes = 1;
+    static constexpr auto startupDelay = std::chrono::milliseconds{3};   // >= 2.5 ms
 
-    static constexpr MicroLux Resolution = Veml6030Detail::resolution(G, IT);
+    static constexpr MicroLux resolutionValue = Veml6030Detail::resolution(G, IT);
 
-    static constexpr std::uint16_t Conf = Veml6030Detail::conf(G, IT);
+    static constexpr std::uint16_t conf = Veml6030Detail::conf(G, IT);
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x03, .payload = {0x00, 0x00}}),
       Engine::Step::write(
         {.reg     = 0x00,
-         .payload = {static_cast<std::uint8_t>(Conf & 0xFF), static_cast<std::uint8_t>(Conf >> 8)},
+         .payload = {static_cast<std::uint8_t>(conf & 0xFF), static_cast<std::uint8_t>(conf >> 8)},
          .delay   = Veml6030Detail::integrationTime(IT) + std::chrono::milliseconds{50}}),
     };
     // clang-format on
@@ -153,8 +153,8 @@ struct Veml6030 {
     }
 
     struct Light {
-        static constexpr auto       Period = readPeriod(IT);
-        static constexpr std::array Steps{
+        static constexpr auto       period = readPeriod(IT);
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x04, .count = 2, .offset = 0}),
           Engine::Step::read({.reg = 0x05, .count = 2, .offset = 2})};
 
@@ -165,7 +165,7 @@ struct Veml6030 {
         struct Sample {
             std::uint16_t als{};
             std::uint16_t white{};
-            MicroLux      resolution{Resolution};   ///< light per count the frame was taken at
+            MicroLux      resolution{resolutionValue};   ///< light per count the frame was taken at
 
             [[nodiscard]] constexpr MilliLux lux() const { return toLight(als); }
 
@@ -194,8 +194,8 @@ struct Veml6030 {
     /// applied() has already switched the resolution it is scaled by.
     struct Config {
         using Value                          = std::uint16_t;
-        static constexpr std::size_t Bytes   = 2;
-        static constexpr Value       Initial = Conf;
+        static constexpr std::size_t bytes   = 2;
+        static constexpr Value       initial = conf;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -224,11 +224,11 @@ struct Veml6030 {
 template<Veml6030Detail::Gain        G  = Veml6030Detail::Gain::eighth,
          Veml6030Detail::Integration IT = Veml6030Detail::Integration::ms100>
 struct Veml7700 : Veml6030<G, IT> {
-    static constexpr std::string_view Name = "VEML7700";
+    static constexpr std::string_view name = "VEML7700";
     // Identity: the VEML6030's, inherited. The VEML7700's data sheet documents no ID register; the
     // description has always asked it for the VEML6030's 81h, and still does.
-    static constexpr Address7                Address = 0x10;
-    static constexpr std::array<Address7, 1> Addresses{0x10};
+    static constexpr Address7                address = 0x10;
+    static constexpr std::array<Address7, 1> addresses{0x10};
 };
 
 }   // namespace Kvasir::I2C::Chips

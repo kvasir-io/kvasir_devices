@@ -121,10 +121,10 @@ template<typename Transport,
          typename Gate   = NoGate>
     requires Transport::template
 accepts<ChipT> struct Device
-  : DeviceCore<detail::PortOf<Transport>, Clock, ChipT, detail::confirmsOf<ChipT, Config>()>
-  , detail::ForwardClaims<Reset> {   // the reset line's pin claim, if any, becomes the device's
+  : DeviceCore<Detail::PortOf<Transport>, Clock, ChipT, Detail::confirmsOf<ChipT, Config>()>
+  , Detail::ForwardClaims<Reset> {   // the reset line's pin claim, if any, becomes the device's
     using Core
-      = DeviceCore<detail::PortOf<Transport>, Clock, ChipT, detail::confirmsOf<ChipT, Config>()>;
+      = DeviceCore<Detail::PortOf<Transport>, Clock, ChipT, Detail::confirmsOf<ChipT, Config>()>;
     /// The transport this device is on (I2C/Device.hpp, SPI/Transport.hpp): it states the log
     /// id, the part's own clock and whether requests carry it; the device asks nothing else.
     using TransportT   = Transport;
@@ -136,7 +136,7 @@ accepts<ChipT> struct Device
     using Reads        = typename Core::Reads;
 
     /// Behind a bridge that can be switched off (Bridge.hpp): link() can say `offline`.
-    static constexpr bool Bridged = detail::BridgedGate<Gate>;
+    static constexpr bool bridged = Detail::BridgedGate<Gate>;
 
     /// Config's `static bool enabled();` takes the part offline for a reason the bus cannot see
     /// (a module not fitted), as an inactive bridge would, and combines with one. It comes back
@@ -145,7 +145,7 @@ accepts<ChipT> struct Device
     ///         static constexpr std::uint8_t address = 0x49;
     ///         static bool enabled() { return slots.fitted(2); }
     ///     };
-    static constexpr bool Enableable = requires {
+    static constexpr bool enableable = requires {
         { Config::enabled() } -> std::convertible_to<bool>;
     };
 
@@ -156,7 +156,7 @@ accepts<ChipT> struct Device
     ///         static constexpr std::uint32_t enabledArg = 2;   // the slot
     ///         static bool enabled() { return slotFitted(2); }   // for the application
     ///     };
-    static constexpr bool SharedEnable = requires {
+    static constexpr bool sharedEnable = requires {
         { Config::enabledBy(Config::enabledArg) } -> std::convertible_to<bool>;
     };
     // Either may add `static constexpr std::atomic<std::uint32_t> const* enabledGeneration`: a
@@ -165,78 +165,78 @@ accepts<ChipT> struct Device
     // on an M0+). Until it moves, the engine reuses the last answer instead of calling
     // the function on every loop turn (DeviceOps). A change nobody announces is not seen.
 
-    static constexpr bool Switchable = Bridged || Enableable || SharedEnable;
-    static_assert(!Switchable || detail::PortOf<Transport>::Features.switchable,
+    static constexpr bool switchable = bridged || enableable || sharedEnable;
+    static_assert(!switchable || Detail::PortOf<Transport>::features.switchable,
                   "this device is behind a bridge or has Config::enabled(), and its bus leaves the "
                   "engine's switchable feature out: give the bus one, "
                   "Kvasir::Engine::WithFeatures<Bus, {.switchable = true}> (EngineFeatures.hpp)");
 
-    static constexpr WhileOff WhileDisabled
+    static constexpr WhileOff whileDisabled
       = KVASIR_CONFIG_OR(Config, whileDisabled, WhileOff::unpowered);
 
     /// The part's I2C address; on an SPI transport, its chip-select GPIO (for the log).
-    static constexpr std::uint8_t Address = Transport::template logId<Config, Chip>();
+    static constexpr std::uint8_t address = Transport::template logId<Config, Chip>();
 
-    static constexpr bool HasResetLine = !requires { Reset::NoLine; };
+    static constexpr bool hasResetLine = !requires { Reset::noLine; };
 
     // The policy knobs (EngineDefaults), each overridable by the Config.
-    static constexpr std::uint8_t MaxRetries
+    static constexpr std::uint8_t maxRetries
       = static_cast<std::uint8_t>(KVASIR_CONFIG_OR(Config, maxRetries, EngineDefaults::maxRetries));
 
     // ConfirmChange<G> is the core's (from detail::confirmsOf<ChipT, Config>(), the same Config).
 
-    static_assert(detail::checkConfirmConfig<Config,
+    static_assert(Detail::checkConfirmConfig<Config,
                                              Reads>()
-                    != detail::ConfirmConfig::unnamed,
+                    != Detail::ConfirmConfig::unnamed,
                   "Config::confirmChange names no read group: add `using Confirm = List<...>;` "
                   "with the groups whose changes are confirmed");
-    static_assert(detail::checkConfirmConfig<Config,
+    static_assert(Detail::checkConfirmConfig<Config,
                                              Reads>()
-                    != detail::ConfirmConfig::uncounted,
+                    != Detail::ConfirmConfig::uncounted,
                   "Config::Confirm without Config::confirmChange confirms nothing");
-    static_assert(detail::checkConfirmConfig<Config,
+    static_assert(Detail::checkConfirmConfig<Config,
                                              Reads>()
-                    != detail::ConfirmConfig::foreign,
+                    != Detail::ConfirmConfig::foreign,
                   "Config::Confirm names a group that is not one of this part's reads");
-    static_assert(detail::checkConfirmConfig<Config,
+    static_assert(Detail::checkConfirmConfig<Config,
                                              Reads>()
-                    != detail::ConfirmConfig::counted,
+                    != Detail::ConfirmConfig::counted,
                   "a read group with a counted read (a stream, a FIFO) cannot confirm changes: the "
                   "confirming read is a second read at once");
 
     static_assert(
       [] {
           bool ok = true;
-          detail::forEach<Reads>([&](auto i) {
-              using G = typename detail::Nth<Reads>::template type<decltype(i)::value>;
-              ok      = ok && Core::template ConfirmChange<G> <= MaxRetries;
+          Detail::forEach<Reads>([&](auto i) {
+              using G = typename Detail::Nth<Reads>::template type<decltype(i)::value>;
+              ok      = ok && Core::template confirmChange<G> <= maxRetries;
           });
           return ok;
       }(),
       "a read group's ConfirmChange is over MaxRetries: its confirming re-reads are the run's "
       "retries, and a run out of retries rejects the reading");
 
-    static constexpr std::chrono::milliseconds FaultBackoff
+    static constexpr std::chrono::milliseconds faultBackoff
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Config, faultBackoff, EngineDefaults::faultBackoff));
 
-    static constexpr std::chrono::milliseconds FaultBackoffLongest
+    static constexpr std::chrono::milliseconds faultBackoffLongest
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Config,
                                             faultBackoffLongest,
                                             std::chrono::duration_cast<std::chrono::milliseconds>(
                                               EngineDefaults::faultBackoffLongest)));
-    static_assert(FaultBackoffLongest >= FaultBackoff,
+    static_assert(faultBackoffLongest >= faultBackoff,
                   "faultBackoffLongest is the ceiling faultBackoff doubles up to: not below it");
 
-    static constexpr BackoffReset FaultBackoffResetOn
+    static constexpr BackoffReset faultBackoffResetOn
       = KVASIR_CONFIG_OR(Config, faultBackoffResetOn, EngineDefaults::faultBackoffResetOn);
 
-    static constexpr std::uint8_t FaultsBeforeReinit = static_cast<std::uint8_t>(
+    static constexpr std::uint8_t faultsBeforeReinit = static_cast<std::uint8_t>(
       KVASIR_CONFIG_OR(Config, faultsBeforeReinit, EngineDefaults::faultsBeforeReinit));
 
-    static constexpr std::chrono::milliseconds InFlightTimeout = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds inFlightTimeout = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config, inFlightTimeout, EngineDefaults::inFlightTimeout));
 
-    static constexpr std::chrono::milliseconds UnidentifiedRetry = Kvasir::asDuration(
+    static constexpr std::chrono::milliseconds unidentifiedRetry = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config, unidentifiedRetry, EngineDefaults::unidentifiedRetry));
 
     /// The clock this part asks for, in Hz, or 0 when it asks for none (the transport says:
@@ -244,32 +244,32 @@ accepts<ChipT> struct Device
     /// with perDeviceClock the device is run at it (capped at the bus's baudRate), and every
     /// request it submits carries the bus's timing for it; on a bus without, a clock below the
     /// bus's rate is a compile error (the driver's timing()).
-    static constexpr std::uint32_t OwnClockHz = Transport::template ownClockHz<Config, Chip>();
+    static constexpr std::uint32_t ownClockHz = Transport::template ownClockHz<Config, Chip>();
 
     /// What the part runs at: its own clock capped at the bus's rate, the bus's rate when it
     /// asks for none, 0 on a bus that says no rate. Bus::busLoad() weighs its bits with it.
-    static constexpr std::uint32_t BusHz = [] {
-        if constexpr(requires { Transport::BaudRate; }) {
-            auto const bus = static_cast<std::uint32_t>(Transport::BaudRate);
-            return OwnClockHz != 0 ? std::min(OwnClockHz, bus) : bus;
+    static constexpr std::uint32_t busHz = [] {
+        if constexpr(requires { Transport::baudRate; }) {
+            auto const bus = static_cast<std::uint32_t>(Transport::baudRate);
+            return ownClockHz != 0 ? std::min(ownClockHz, bus) : bus;
         } else {
-            return OwnClockHz;
+            return ownClockHz;
         }
     }();
 
     /// The bus runs each device at its own clock: its request has a `timing` member.
-    static constexpr bool PerDeviceClock = Transport::perDeviceClock;
+    static constexpr bool perDeviceClock = Transport::perDeviceClock;
 
     /// The timing every request of this device carries on a PerDeviceClock bus, for its own
     /// clock or else the bus's rate. On any other bus the driver's timing() only checks a
     /// clock the part asks for (a part slower than the bus fails the build there).
-    static constexpr auto BusTiming = [] {
-        if constexpr(PerDeviceClock) {
+    static constexpr auto busTiming = [] {
+        if constexpr(perDeviceClock) {
             return Transport::timing(
-              OwnClockHz != 0 ? OwnClockHz : static_cast<std::uint32_t>(Transport::BaudRate));
+              ownClockHz != 0 ? ownClockHz : static_cast<std::uint32_t>(Transport::baudRate));
         } else {
-            if constexpr(OwnClockHz != 0 && requires { Transport::timing(OwnClockHz); }) {
-                [[maybe_unused]] constexpr auto checked = Transport::timing(OwnClockHz);
+            if constexpr(ownClockHz != 0 && requires { Transport::timing(ownClockHz); }) {
+                [[maybe_unused]] constexpr auto checked = Transport::timing(ownClockHz);
             }
             return Empty{};
         }
@@ -277,8 +277,8 @@ accepts<ChipT> struct Device
 
     static_assert(
       [] {
-          if constexpr(requires { Transport::CallbackSize; }) {
-              return static_cast<std::size_t>(Transport::CallbackSize) >= Core::CallbackBytes;
+          if constexpr(requires { Transport::callbackSize; }) {
+              return static_cast<std::size_t>(Transport::callbackSize) >= Core::callbackBytes;
           }
           return true;
       }(),
@@ -287,7 +287,7 @@ accepts<ChipT> struct Device
     static_assert(presenceKnobsOk<Config>,
                   "a probe interval, and a maximum it grows towards");
 
-    constexpr Device() : Core(&Hooks) {}
+    constexpr Device() : Core(&hooks) {}
 
     /// The gate, for an application that has to point it at something: a device behind an
     /// I2C switch is told which switch and which arbiter at start-up (Mux.hpp). An ungated
@@ -301,9 +301,9 @@ private:
         return static_cast<Device const&>(e);
     }
 
-    using PortT      = detail::PortOf<Transport>;
-    using DeviceOpsT = detail::DeviceOps<PortT, Clock>;
-    using KnobsT     = detail::DeviceKnobs<PortT, Clock>;
+    using PortT      = Detail::PortOf<Transport>;
+    using DeviceOpsT = Detail::DeviceOps<PortT, Clock>;
+    using KnobsT     = Detail::DeviceKnobs<PortT, Clock>;
 
     /// The per-device hooks of the gate, the bridge and the enable: static functions of exactly the types of their
     /// DeviceKnobs / DeviceOps fields. Each is named (so instantiated) only where the device needs it; the tables
@@ -324,11 +324,11 @@ private:
 
     /// What this device shares with others that have the same: its knobs, one object per
     /// distinct set (detail::deviceKnobs); a hook it does not need is null.
-    static constexpr KnobsT Knobs{
+    static constexpr KnobsT knobs{
       .claimGate =
         [] {
             using Fn = bool (*)(EngineStateT&);
-            if constexpr(Gate::Gated) {
+            if constexpr(Gate::gated) {
                 return Fn{&DeviceHooks::claimGate};
             } else {
                 return Fn{};
@@ -337,7 +337,7 @@ private:
       .releaseGate =
         [] {
             using Fn = void (*)(EngineStateT&);
-            if constexpr(Gate::Gated) {
+            if constexpr(Gate::gated) {
                 return Fn{&DeviceHooks::releaseGate};
             } else {
                 return Fn{};
@@ -346,7 +346,7 @@ private:
       .gateGeneration =
         [] {
             using Fn = std::uint32_t (*)(EngineStateT const&);
-            if constexpr(Bridged) {
+            if constexpr(bridged) {
                 return Fn{&DeviceHooks::gateGeneration};
             } else {
                 return Fn{};
@@ -355,7 +355,7 @@ private:
       .resetHold =
         [] {
             using Fn = void (*)();
-            if constexpr(HasResetLine) {
+            if constexpr(hasResetLine) {
                 return Fn{[] { Reset::hold(); }};
             } else {
                 return Fn{};
@@ -364,41 +364,41 @@ private:
       .resetRelease =
         [] {
             using Fn = void (*)();
-            if constexpr(HasResetLine) {
+            if constexpr(hasResetLine) {
                 return Fn{[] { Reset::release(); }};
             } else {
                 return Fn{};
             }
         }(),
       .presence              = presenceKnobs<Config>(),
-      .faultBackoffMs        = static_cast<std::uint32_t>(FaultBackoff.count()),
-      .faultBackoffLongestMs = static_cast<std::uint32_t>(FaultBackoffLongest.count()),
-      .inFlightTimeoutMs     = static_cast<std::uint32_t>(InFlightTimeout.count()),
-      .unidentifiedRetryMs   = static_cast<std::uint32_t>(UnidentifiedRetry.count()),
-      .faultsBeforeReinit    = FaultsBeforeReinit,
-      .maxRetries            = MaxRetries,
+      .faultBackoffMs        = static_cast<std::uint32_t>(faultBackoff.count()),
+      .faultBackoffLongestMs = static_cast<std::uint32_t>(faultBackoffLongest.count()),
+      .inFlightTimeoutMs     = static_cast<std::uint32_t>(inFlightTimeout.count()),
+      .unidentifiedRetryMs   = static_cast<std::uint32_t>(unidentifiedRetry.count()),
+      .faultsBeforeReinit    = faultsBeforeReinit,
+      .maxRetries            = maxRetries,
       .bridgeUnpowered =
         [] {
-            if constexpr(Bridged) {
+            if constexpr(bridged) {
                 return Gate::Bridge::whileOff == WhileOff::unpowered;
             } else {
                 return false;
             }
         }(),
-      .disabledUnpowered = WhileDisabled == WhileOff::unpowered,
-      .faultBackoffOnAck = FaultBackoffResetOn == BackoffReset::anyAck};
+      .disabledUnpowered = whileDisabled == WhileOff::unpowered,
+      .faultBackoffOnAck = faultBackoffResetOn == BackoffReset::anyAck};
 
     /// What only this device has, for the engine.
-    static constexpr DeviceOpsT Hooks{
+    static constexpr DeviceOpsT hooks{
       .submit =
         [] {
             using Fn = bool (*)(typename Transport::Request const&);
-            if constexpr(PerDeviceClock) {
+            if constexpr(perDeviceClock) {
                 // The engine's code is shared by every device on the port: the timing is this
                 // device's own, so it goes in here, on the way out.
                 return Fn{[](typename Transport::Request const& r) -> bool {
                     auto timed   = r;
-                    timed.timing = BusTiming;
+                    timed.timing = busTiming;
                     return Transport::submit(timed);
                 }};
             } else {
@@ -407,17 +407,17 @@ private:
                 }};
             }
         }(),
-      .knobs = detail::deviceKnobs<PortT, Clock, Knobs>,
+      .knobs = Detail::deviceKnobs<PortT, Clock, knobs>,
       .enabled =
         [] {
             using Fn = bool (*)(std::uint32_t);
-            if constexpr(SharedEnable) {
+            if constexpr(sharedEnable) {
                 static_assert(
                   std::is_convertible_v<decltype(Config::enabledBy), Fn>,
                   "Config::enabledBy is a bool(*)(std::uint32_t): the value it is given is "
                   "Config::enabledArg, a std::uint32_t");
                 return Fn{Config::enabledBy};
-            } else if constexpr(Enableable) {
+            } else if constexpr(enableable) {
                 return Fn{&DeviceHooks::enabled};
             } else {
                 return Fn{};
@@ -425,7 +425,7 @@ private:
         }(),
       .enabledArg =
         [] {
-            if constexpr(SharedEnable) {
+            if constexpr(sharedEnable) {
                 // braces: a pointer or a wider value does not narrow into the word silently
                 return std::uint32_t{Config::enabledArg};
             } else {
@@ -443,13 +443,13 @@ private:
       .gateOffline =
         [] {
             using Fn = bool (*)(EngineStateT const&);
-            if constexpr(Bridged) {
+            if constexpr(bridged) {
                 return Fn{&DeviceHooks::gateOffline};
             } else {
                 return Fn{};
             }
         }(),
-      .address = Address};
+      .address = address};
 
     [[no_unique_address]] Gate gate_{};
 };

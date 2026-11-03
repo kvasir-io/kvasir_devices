@@ -48,8 +48,8 @@ struct PanelModel {
         if(!Pins::level[Dc::id]) {
             if(Busy::busy()) { whileBusy = true; }
             commands.push_back({mosi, {}});
-            if(mosi == Cmd::SwReset) { Busy::until = FakeClock::now() + 3ms; }
-            if(mosi == Cmd::MasterActivation) { Busy::until = FakeClock::now() + 400ms; }
+            if(mosi == Cmd::swReset) { Busy::until = FakeClock::now() + 3ms; }
+            if(mosi == Cmd::masterActivation) { Busy::until = FakeClock::now() + 400ms; }
         } else if(commands.empty()) {
             ++orphanData;
         } else {
@@ -111,13 +111,13 @@ void bringUp() {
     check(runUntil([] { return Panel::ready() || Panel::failed(); }, 5s), "settled");
     check(Panel::ready(), "ready");
     checkEq(Panel::refreshes(), 1U, "one refresh");
-    check(!model.commands.empty() && model.commands.front().cmd == Cmd::SwReset, "SW reset first");
-    check(model.has(Cmd::MasterActivation), "the refresh activated");
+    check(!model.commands.empty() && model.commands.front().cmd == Cmd::swReset, "SW reset first");
+    check(model.has(Cmd::masterActivation), "the refresh activated");
     check(!model.whileBusy, "no command while BUSY is high");
     checkEq(model.orphanData, 0U, "no data byte before its command");
     std::size_t ram = 0;
     for(auto const& c : model.commands) {
-        if(c.cmd == Cmd::WriteRamBw) { ram += c.params.size(); }
+        if(c.cmd == Cmd::writeRamBw) { ram += c.params.size(); }
     }
     checkEq(ram, 128U / 8U * 296U, "the whole frame into the RAM");
     // a command and its parameters are one chip-select cycle, each RAM chunk another
@@ -150,7 +150,7 @@ void failedTransfer() {
     check(runUntil([] { return Panel::ready(); }, 5s), "up again after retryAfter, by itself");
     checkEq(Panel::failures(), failures, "the failure counted once");
     check(!EpdBus::failed(), "the bus's error cleared by the retry");
-    check(model.has(Cmd::SwReset) && model.has(Cmd::MasterActivation), "a whole bring-up again");
+    check(model.has(Cmd::swReset) && model.has(Cmd::masterActivation), "a whole bring-up again");
 }
 
 void abandonedSend() {

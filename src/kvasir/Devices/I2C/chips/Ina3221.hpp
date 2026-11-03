@@ -29,32 +29,32 @@ namespace Kvasir::I2C::Chips {
 /// channels takes 6.6 ms). 0x40..0x43 by the A0 pin.
 template<MicroOhm Shunt = Units::microOhm(50000), typename Timing = Engine::DefaultTiming>
 struct Ina3221 {
-    static constexpr std::string_view Name = "INA3221";
+    static constexpr std::string_view name = "INA3221";
     /// TI INA3221. INA3221.md:914..915, Manufacturer ID FEh = 5449h and Die ID FFh = 3220h.
     /// Configuration (00h, INA3221.md:939..998): RST clear, CH1en..CH3en set, MODE3..1 = 111b, shunt
     /// and bus continuous.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
       Engine::RegisterCheck{         "die-id", 0xFF, 2, true, 0xFFFF, 0x3220},
     };
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"channels-continuous", 0x00, 2, true, 0xF007, 0x7007},
     };
-    static constexpr Address7    Address       = 0x40;
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x40;
+    static constexpr std::size_t registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x40, 4>();
+    static constexpr auto addresses = addressRun<0x40, 4>();
 
     static_assert(Shunt >= Units::microOhm(77),
                   "the shunt value is what the current is worked out from: below 77 uOhm the "
                   "full-scale current is past the 32 bits a MicroAmp holds");
-    static constexpr std::chrono::milliseconds ReadPeriod
+    static constexpr std::chrono::milliseconds readPeriod
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, period, std::chrono::milliseconds{200}));
-    static_assert(ReadPeriod > std::chrono::milliseconds::zero(),
+    static_assert(readPeriod > std::chrono::milliseconds::zero(),
                   "Timing::period is how often Power is read; 0 never reads it");
 
-    static constexpr std::size_t Channels = 3;
+    static constexpr std::size_t channels = 3;
 
     struct State {
         std::uint16_t manufacturer{};
@@ -70,11 +70,11 @@ struct Ina3221 {
     }
 
     struct Power {
-        static constexpr auto Period = ReadPeriod;
+        static constexpr auto period = readPeriod;
 
         /// Shunt and bus interleaved, channel by channel; the pointer does not
         /// auto-increment, so each register is its own read.
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read({.reg = 0x01, .count = 2, .offset = 0}),
           Engine::Step::read({.reg = 0x02, .count = 2, .offset = 2}),
           Engine::Step::read({.reg = 0x03, .count = 2, .offset = 4}),
@@ -84,14 +84,14 @@ struct Ina3221 {
         };
 
         struct Sample {
-            std::array<NanoVolt, Channels>  shuntVoltage{};
-            std::array<MilliVolt, Channels> busVoltage{};
-            std::array<MicroAmp, Channels>  current{};
+            std::array<NanoVolt, channels>  shuntVoltage{};
+            std::array<MilliVolt, channels> busVoltage{};
+            std::array<MicroAmp, channels>  current{};
         };
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
             Sample sample{};
-            for(std::size_t i = 0; i < Channels; ++i) {
+            for(std::size_t i = 0; i < channels; ++i) {
                 auto const shunt       = static_cast<std::int32_t>(data.s16be(4 * i) >> 3);
                 auto const bus         = static_cast<std::int32_t>(data.s16be(4 * i + 2) >> 3);
                 sample.shuntVoltage[i] = Units::nanoVolt(shunt * 40000);   // 40 uV per count
@@ -107,12 +107,12 @@ struct Ina3221 {
 
     struct Config {
         using Value                        = std::uint16_t;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t bytes = 2;
         /// The reset configuration: all three channels on, 1.1 ms conversions, 1 average.
         /// Written after every bring-up like any Initial: a board that wires the TC pin should
         /// know that any configuration write before the power-up timing-control sequence has
         /// run its course disables that alert until a power cycle or a reset (7.3.2.4).
-        static constexpr Value Initial = 0x7127;
+        static constexpr Value initial = 0x7127;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -124,8 +124,8 @@ struct Ina3221 {
     /// Critical then warning limit, per channel: 0x07..0x0C, in shunt counts of 40 uV.
     struct Limits {
         using Value                        = NanoVolt;   ///< across the shunt
-        static constexpr std::size_t Items = 6;
-        static constexpr std::size_t Bytes = 2;
+        static constexpr std::size_t items = 6;
+        static constexpr std::size_t bytes = 2;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         limit,
                                                            std::size_t          item,

@@ -10,9 +10,9 @@ namespace Kvasir { namespace SPI { namespace Chips {
     template<Bme280Compensation::Model Model = Bme280Compensation::Model::bme280>
     struct Bmx280 : I2C::Chips::Bmx280<Model> {
         /// Mode '00' or '11', chosen by SCK's level at CSB's falling edge (6.3, BME280.md:1456).
-        static constexpr Hal::ClockMode Mode = Hal::ClockMode::mode0;
+        static constexpr Hal::ClockMode mode = Hal::ClockMode::mode0;
         /// F_spi up to 10 MHz (Table 34, BME280.md:1616).
-        static constexpr Units::Hertz MaxClock = Units::hertz(10'000'000);
+        static constexpr Units::Hertz maxClock = Units::hertz(10'000'000);
     };
 
     using Bme280 = Bmx280<Bme280Compensation::Model::bme280>;

@@ -20,21 +20,21 @@ namespace Kvasir::I2C::Chips {
 /// 6.5 ms, and is read as four bytes with no pointer: T msb lsb, RH msb lsb (8.5.1.3).
 /// T = raw / 2^16 * 165 - 40, RH = raw / 2^16 * 100 (8.6.1, 8.6.2).
 struct Hdc1080 {
-    static constexpr std::string_view Name = "HDC1080";
+    static constexpr std::string_view name = "HDC1080";
     /// "The manufacturer ID reads 0x5449" (8.6.5, Table 8), "A reading of the Device ID register
     /// returns 0x1050" (8.6.6, Table 9); i2c/HDC1080.md l.628-629, l.728, l.752. The engine reads
     /// both before anything is written: a part with another identity at 0x40 gets nothing.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"manufacturer-id", 0xFE, 2, true, 0xFFFF, 0x5449},
       Engine::RegisterCheck{      "device-id", 0xFF, 2, true, 0xFFFF, 0x1050},
     };
-    static constexpr Address7                Address = 0x40;
-    static constexpr std::array<Address7, 1> Addresses{0x40};
-    static constexpr std::size_t             RegisterBytes = 1;
-    static constexpr auto                    StartupDelay  = std::chrono::milliseconds{15};
+    static constexpr Address7                address = 0x40;
+    static constexpr std::array<Address7, 1> addresses{0x40};
+    static constexpr std::size_t             registerBytes = 1;
+    static constexpr auto                    startupDelay  = std::chrono::milliseconds{15};
 
     // clang-format off
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x02, .payload = {0x10, 0x00}}),
     };
     // clang-format on
@@ -52,8 +52,8 @@ struct Hdc1080 {
     }
 
     struct Measurement {
-        static constexpr auto       Period = std::chrono::milliseconds{1000};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{1000};
+        static constexpr std::array steps{
           Engine::Step::write({.reg = 0x00, .payload = {}, .delay = std::chrono::milliseconds{20}}),
           Engine::Step::receive({.count = 4, .offset = 0})};
 

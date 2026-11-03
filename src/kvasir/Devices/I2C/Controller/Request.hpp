@@ -21,11 +21,11 @@ namespace Kvasir { namespace I2C { namespace Queue {
     /// a designated initialiser (`.address`, `.receiveData`, `.callback`) names only those - and the request keeps
     /// its size (the empty base takes no byte).
     struct PrefixedSend {
-        static constexpr std::size_t MaxPrefix = 2;
+        static constexpr std::size_t maxPrefix = 2;
 
         template<typename Self,
                  std::integral... B>
-            requires(sizeof...(B) <= MaxPrefix)
+            requires(sizeof...(B) <= maxPrefix)
         constexpr void setPrefix(this Self& self,
                                  B... b) {
             self.prefix      = {std::byte{static_cast<std::uint8_t>(b)}...};
@@ -54,7 +54,7 @@ namespace Kvasir { namespace I2C { namespace Queue {
         /// (a gather list would need storage that outlives the queued request, for the one or
         /// two bytes every user has).
         std::uint8_t                                               prefixBytes{};
-        std::array<std::byte, MaxPrefix>                           prefix{};
+        std::array<std::byte, maxPrefix>                           prefix{};
         std::span<std::byte const>                                 sendData{};
         std::span<std::byte>                                       receiveData{};
         StaticFunction<void(::Kvasir::Bus::Outcome), CallbackSize> callback{};
@@ -82,13 +82,13 @@ namespace Kvasir { namespace I2C { namespace Queue {
     struct I2CTrackedRequest : PrefixedSend {
         std::uint8_t                                                              address{};
         std::uint8_t                                                              prefixBytes{};
-        std::array<std::byte, MaxPrefix>                                          prefix{};
+        std::array<std::byte, maxPrefix>                                          prefix{};
         std::span<std::byte const>                                                sendData{};
         std::span<std::byte>                                                      receiveData{};
         StaticFunction<void(::Kvasir::Bus::TrackedOutcome), CallbackSize>         callback{};
         std::uint16_t                                                             ticket{};
         bool                                                                      cancelled{};
-        [[no_unique_address]] Kvasir::detail::IfFeature<Deadlines, TimePoint, 30> deadline{
+        [[no_unique_address]] Kvasir::Detail::IfFeature<Deadlines, TimePoint, 30> deadline{
           TimePoint::max()};
     };
 

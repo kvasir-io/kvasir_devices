@@ -16,7 +16,7 @@ concept ResetLine = requires {
 
 struct NoReset {
     /// A driver tests this marker, not the type.
-    static constexpr bool NoLine = true;
+    static constexpr bool noLine = true;
 
     static void hold() {}
 

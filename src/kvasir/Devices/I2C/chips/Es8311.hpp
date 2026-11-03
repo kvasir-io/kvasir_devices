@@ -57,7 +57,7 @@ namespace Es8311Detail {
         std::uint8_t  dacOsr{};     ///< REG04 bits 6:0
     };
 
-    inline constexpr std::array Coeffs{
+    inline constexpr std::array coeffs{
       //          mclk     rate  pre  mul  adc  dac   fs  aOsr  dOsr
       Coefficients{ 6144000,  8000, 0x03, 0x00, 0x01, 0x01, 0x00, 0x10, 0x10},
       Coefficients{ 6144000, 12000, 0x02, 0x00, 0x01, 0x01, 0x00, 0x10, 0x10},
@@ -80,9 +80,9 @@ namespace Es8311Detail {
     consteval std::uint8_t bclkCodeFor(std::uint32_t ratio) {
         if(ratio >= 1 && ratio <= 20) { return static_cast<std::uint8_t>(ratio - 1); }
         constexpr std::array<std::uint32_t, 12>
-          Listed{22, 24, 25, 30, 32, 33, 34, 36, 44, 48, 66, 72};
-        for(std::size_t i = 0; i < Listed.size(); ++i) {
-            if(Listed[i] == ratio) { return static_cast<std::uint8_t>(20 + i); }
+          listed{22, 24, 25, 30, 32, 33, 34, 36, 44, 48, 66, 72};
+        for(std::size_t i = 0; i < listed.size(); ++i) {
+            if(listed[i] == ratio) { return static_cast<std::uint8_t>(20 + i); }
         }
         noEs8311BclkDividerForThisMclkRateAndWordLength();
     }
@@ -100,7 +100,7 @@ namespace Es8311Detail {
     /// rate").
     consteval Coefficients coefficientsFor(Hertz mclk,
                                            Hertz sampleRate) {
-        for(auto const& c : Coeffs) {
+        for(auto const& c : coeffs) {
             if(Units::hertz(c.mclkHz) == mclk && Units::hertz(c.sampleRate) == sampleRate) {
                 return c;
             }
@@ -190,30 +190,30 @@ struct Es8311Codec {
                                     Es8311Config>,
                   "derive the configuration from Kvasir::I2C::Chips::Es8311Config");
 
-    static constexpr Hertz                    Mclk       = Cfg::mclk;
-    static constexpr Hertz                    SampleRate = Es8311Detail::sampleRateOf<Cfg>();
-    static constexpr Es8311Detail::Role       SerialRole = Cfg::serialRole;
-    static constexpr Es8311Detail::WordLength Width      = Cfg::width;
-    static constexpr Address7                 Addr       = Cfg::addr;
+    static constexpr Hertz                    mclk       = Cfg::mclk;
+    static constexpr Hertz                    sampleRate = Es8311Detail::sampleRateOf<Cfg>();
+    static constexpr Es8311Detail::Role       serialRole = Cfg::serialRole;
+    static constexpr Es8311Detail::WordLength width      = Cfg::width;
+    static constexpr Address7                 addr       = Cfg::addr;
 
-    static constexpr std::string_view Name = "ES8311";
+    static constexpr std::string_view name = "ES8311";
     /// CHIP_ID1 0xFD reads 0x83, CHIP_ID2 0xFE reads 0x11 (REGISTER 0XFD / 0XFE - CHIP,
     /// i2c/es8311.md l.1371-1376). Two one-byte checks, not one two-byte read: the ES8311's
     /// pointer does not auto-increment, so a two-byte read would return 0xFD twice. The engine
     /// reads both before anything is written: a part with another identity at 0x18/0x19 gets
     /// nothing.
-    static constexpr std::array Identity{
+    static constexpr std::array identity{
       Engine::RegisterCheck{"chip-id1", 0xFD, 1, true, 0xFF, 0x83},
       Engine::RegisterCheck{"chip-id2", 0xFE, 1, true, 0xFF, 0x11},
     };
-    static constexpr Address7                Address = Addr;
-    static constexpr std::array<Address7, 2> Addresses{0x18, 0x19};
-    static constexpr std::size_t             RegisterBytes = 1;
+    static constexpr Address7                address = addr;
+    static constexpr std::array<Address7, 2> addresses{0x18, 0x19};
+    static constexpr std::size_t             registerBytes = 1;
 
-    static_assert(Addr == 0x18 || Addr == 0x19,
+    static_assert(addr == 0x18 || addr == 0x19,
                   "the CE pin gives 0x18 or 0x19");
 
-    static constexpr auto Coeff = Es8311Detail::coefficientsFor(Mclk, SampleRate);
+    static constexpr auto coeff = Es8311Detail::coefficientsFor(mclk, sampleRate);
 
     /// REG02's MULT_PRE multiplies the pre-divided master clock by 2, 4 or 8. The datasheet
     /// defines it as that alone, with PATHSEL (bit 2, the clock doubler path) as a separate
@@ -222,42 +222,42 @@ struct Es8311Codec {
     /// its reset value. Until that is tried on a part here, the rows that need it are refused
     /// rather than risk a rate a half, a quarter or an eighth of the one asked for. For 48 kHz, feed the part 12.288 MHz; for a 6.144 MHz master clock, 24 kHz
     /// is the top of what it gives without MULT_PRE.
-    static_assert(Coeff.preMulti == 0,
+    static_assert(coeff.preMulti == 0,
                   "this (MCLK, sample rate) pair needs the ES8311's clock doubler (REG02 "
                   "MULT_PRE), which this description does not configure -- the part would run "
                   "at a half, a quarter or an eighth of the rate asked for. Use a row with "
                   "MULT_PRE 0: 24 kHz from a 6.144 MHz master clock, or 48 kHz from 12.288 MHz");
 
-    static constexpr bool CodecIsMaster = SerialRole == Es8311Detail::Role::codecMaster;
+    static constexpr bool codecIsMaster = serialRole == Es8311Detail::Role::codecMaster;
 
     /// The master-mode dividers, both of the MCLK pin (REGISTERS 0X06..0X08): LRCK is
     /// MCLK / (DIV_LRCK + 1), so DIV_LRCK is MCLK / fs - 1; BCLK carries two slots a frame, 16
     /// bits each for 16-bit words and 32 for the longer ones. A slave ignores both.
-    static constexpr std::uint32_t MclkPerFrame
-      = static_cast<std::uint32_t>(Units::value(Mclk) / Units::value(SampleRate));
-    static_assert(MclkPerFrame * Units::value(SampleRate) == Units::value(Mclk),
+    static constexpr std::uint32_t mclkPerFrame
+      = static_cast<std::uint32_t>(Units::value(mclk) / Units::value(sampleRate));
+    static_assert(mclkPerFrame * Units::value(sampleRate) == Units::value(mclk),
                   "MCLK is a whole multiple of the sample rate");
-    static constexpr std::uint16_t LrckDiv = static_cast<std::uint16_t>(MclkPerFrame - 1U);
-    static constexpr std::uint32_t BitsPerFrame
-      = Width == Es8311Detail::WordLength::bits16 ? 32U : 64U;
-    static constexpr std::uint8_t BclkCode = Es8311Detail::bclkCodeFor(
-      MclkPerFrame % BitsPerFrame == 0 ? MclkPerFrame / BitsPerFrame : 0U);
+    static constexpr std::uint16_t lrckDiv = static_cast<std::uint16_t>(mclkPerFrame - 1U);
+    static constexpr std::uint32_t bitsPerFrame
+      = width == Es8311Detail::WordLength::bits16 ? 32U : 64U;
+    static constexpr std::uint8_t bclkCode = Es8311Detail::bclkCodeFor(
+      mclkPerFrame % bitsPerFrame == 0 ? mclkPerFrame / bitsPerFrame : 0U);
 
     /// REG00 after the resets are released: CSM_ON (bit 7) always, MSC (bit 6) only when the
     /// codec drives the clocks.
-    static constexpr std::uint8_t Reg00Run
-      = static_cast<std::uint8_t>(0x80U | (CodecIsMaster ? 0x40U : 0x00U));
+    static constexpr std::uint8_t reg00Run
+      = static_cast<std::uint8_t>(0x80U | (codecIsMaster ? 0x40U : 0x00U));
 
     /// REG09, the DAC-side serial port: word length in bits 4:2, format I2S in bits 1:0, and
     /// SDP_IN_SEL (bit 7) left at 0 so the left-channel slot feeds the DAC.
-    static constexpr std::uint8_t Reg09
-      = static_cast<std::uint8_t>(static_cast<std::uint8_t>(Width) << 2U);
+    static constexpr std::uint8_t reg09
+      = static_cast<std::uint8_t>(static_cast<std::uint8_t>(width) << 2U);
 
     /// Bring-up, in the vendor's order, with the microphone writes left out.
     ///
     /// The 20 ms after the reset is the vendor's and is not in the datasheet's power-up
     /// sequence; it costs nothing and a codec that has not settled answers its own ID.
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write(
         {.reg     = 0x00,
          .payload = {0x1F},
@@ -269,20 +269,20 @@ struct Es8311Codec {
       // The clock manager: REG02..REG05 straight out of the coefficient row, REG06..REG08 the
       // master-mode dividers.
       Engine::Step::write({.reg     = 0x02,
-                           .payload = {static_cast<std::uint8_t>(((Coeff.preDiv - 1U) << 5U)
-                                                                 | (Coeff.preMulti << 3U))}}),
+                           .payload = {static_cast<std::uint8_t>(((coeff.preDiv - 1U) << 5U)
+                                                                 | (coeff.preMulti << 3U))}}),
       Engine::Step::write(
-        {.reg = 0x03, .payload = {static_cast<std::uint8_t>((Coeff.fsMode << 6U) | Coeff.adcOsr)}}),
-      Engine::Step::write({.reg = 0x04, .payload = {Coeff.dacOsr}}),
+        {.reg = 0x03, .payload = {static_cast<std::uint8_t>((coeff.fsMode << 6U) | coeff.adcOsr)}}),
+      Engine::Step::write({.reg = 0x04, .payload = {coeff.dacOsr}}),
       Engine::Step::write({.reg     = 0x05,
-                           .payload = {static_cast<std::uint8_t>(((Coeff.adcDiv - 1U) << 4U)
-                                                                 | (Coeff.dacDiv - 1U))}}),
-      Engine::Step::write({.reg = 0x06, .payload = {BclkCode}}),
-      Engine::Step::write({.reg = 0x07, .payload = {static_cast<std::uint8_t>(LrckDiv >> 8U)}}),
-      Engine::Step::write({.reg = 0x08, .payload = {static_cast<std::uint8_t>(LrckDiv & 0xFFU)}}),
+                           .payload = {static_cast<std::uint8_t>(((coeff.adcDiv - 1U) << 4U)
+                                                                 | (coeff.dacDiv - 1U))}}),
+      Engine::Step::write({.reg = 0x06, .payload = {bclkCode}}),
+      Engine::Step::write({.reg = 0x07, .payload = {static_cast<std::uint8_t>(lrckDiv >> 8U)}}),
+      Engine::Step::write({.reg = 0x08, .payload = {static_cast<std::uint8_t>(lrckDiv & 0xFFU)}}),
       Engine::Step::write(
-        {.reg = 0x00, .payload = {Reg00Run}}),                  // and now master, if Role says so
-      Engine::Step::write({.reg = 0x09, .payload = {Reg09}}),   // Width-bit I2S into the DAC
+        {.reg = 0x00, .payload = {reg00Run}}),                  // and now master, if Role says so
+      Engine::Step::write({.reg = 0x09, .payload = {reg09}}),   // Width-bit I2S into the DAC
       // Analogue. REG0D powers the reference and bias and starts VMID charging; REG0E enables
       // the PGA and modulator; REG12 powers the DAC; REG13 bit 4 (HPSW) picks the headphone
       // driver over the line-out default.
@@ -315,8 +315,8 @@ struct Es8311Codec {
     /// DAC volume, REG32. 0.5 dB a step, 0xBF is 0 dB; `Es8311Detail::volumeForDb()` converts.
     struct Volume {
         using Value                          = std::uint8_t;
-        static constexpr std::size_t Bytes   = 1;
-        static constexpr Value       Initial = Es8311Detail::volumeForDb(-30.0);
+        static constexpr std::size_t bytes   = 1;
+        static constexpr Value       initial = Es8311Detail::volumeForDb(-30.0);
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -329,8 +329,8 @@ struct Es8311Codec {
     /// application that never touches this makes no sound rather than an undefined one.
     struct Mute {
         using Value                        = Es8311Detail::Muting;
-        static constexpr std::size_t Bytes = 1;
-        static constexpr Value       Initial{Value::muted};
+        static constexpr std::size_t bytes = 1;
+        static constexpr Value       initial{Value::muted};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         muting,
                                                            std::span<std::byte> buffer) {
@@ -344,8 +344,8 @@ struct Es8311Codec {
     /// the bring-up. Takes the edge off starting and stopping a tone.
     struct Fade {
         using Value                        = std::uint8_t;   ///< 0..15
-        static constexpr std::size_t Bytes = 1;
-        static constexpr Value       Initial{0};
+        static constexpr std::size_t bytes = 1;
+        static constexpr Value       initial{0};
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
@@ -358,9 +358,9 @@ struct Es8311Codec {
     /// output with a running stream can be diagnosed from outside.
     /// Ten single-register reads, not one block: this part's pointer does not auto-increment.
     struct Status {
-        static constexpr auto Period = std::chrono::milliseconds{1000};
+        static constexpr auto period = std::chrono::milliseconds{1000};
 
-        static constexpr std::array Steps{
+        static constexpr std::array steps{
           Engine::Step::read(
             {.reg = 0x00, .count = 1, .offset = 0}),   // CSM_ON, master/slave, resets
           Engine::Step::read({.reg = 0x01, .count = 1, .offset = 1}),   // the clock domains

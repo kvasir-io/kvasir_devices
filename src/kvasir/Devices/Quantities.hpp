@@ -28,7 +28,7 @@ namespace Kvasir { namespace Units {
     namespace mpu = mp_units;
     namespace si  = mp_units::si;
 
-    namespace detail {
+    namespace Detail {
         /// The one factory body: `Units::milliDegC(x)` is x in the unit of the quantity type, x converted to its
         /// representation (int32 or uint32). An object rather than a function template per quantity, so every
         /// factory below is one line; a call compiles as it did. Built with delta<>, which an offset unit (Celsius)
@@ -40,7 +40,7 @@ namespace Kvasir { namespace Units {
                 return mpu::delta<Q::reference>(static_cast<typename Q::rep>(value));
             }
         };
-    }   // namespace detail
+    }   // namespace Detail
 
     // -- temperature ---------------------------------------------------------------------
     //
@@ -56,13 +56,13 @@ namespace Kvasir { namespace Units {
     /// reader names.
     using Temperature = MilliDegC;
 
-    inline constexpr detail::Make<DegC> degC{};
+    inline constexpr Detail::Make<DegC> degC{};
 
-    inline constexpr detail::Make<DeciDegC> deciDegC{};
+    inline constexpr Detail::Make<DeciDegC> deciDegC{};
 
-    inline constexpr detail::Make<CentiDegC> centiDegC{};
+    inline constexpr Detail::Make<CentiDegC> centiDegC{};
 
-    inline constexpr detail::Make<MilliDegC> milliDegC{};
+    inline constexpr Detail::Make<MilliDegC> milliDegC{};
 
     /// The one place a temperature leaves the type system, for an application that wants a
     /// float. Generic over the scale, which is the point: one bridge rather than one per
@@ -99,14 +99,14 @@ namespace Kvasir { namespace Units {
     using MilliPercent = mpu::quantity<si::milli<mpu::percent>, std::uint32_t>;
     using Humidity     = MilliPercent;
 
-    inline constexpr detail::Make<CentiPercent> centiPercent{};
+    inline constexpr Detail::Make<CentiPercent> centiPercent{};
 
-    inline constexpr detail::Make<MilliPercent> milliPercent{};
+    inline constexpr Detail::Make<MilliPercent> milliPercent{};
 
     // -- pressure ------------------------------------------------------------------------
     using Pascal = mpu::quantity<si::pascal, std::int32_t>;
 
-    inline constexpr detail::Make<Pascal> pascal{};
+    inline constexpr Detail::Make<Pascal> pascal{};
 
     // -- voltage, current, power ---------------------------------------------------------
     using NanoVolt  = mpu::quantity<si::nano<si::volt>, std::int32_t>;
@@ -118,106 +118,106 @@ namespace Kvasir { namespace Units {
     using MicroWatt = mpu::quantity<si::micro<si::watt>, std::uint32_t>;
     using MilliWatt = mpu::quantity<si::milli<si::watt>, std::uint32_t>;
 
-    inline constexpr detail::Make<NanoVolt> nanoVolt{};
+    inline constexpr Detail::Make<NanoVolt> nanoVolt{};
 
-    inline constexpr detail::Make<MicroVolt> microVolt{};
+    inline constexpr Detail::Make<MicroVolt> microVolt{};
 
-    inline constexpr detail::Make<MilliVolt> milliVolt{};
+    inline constexpr Detail::Make<MilliVolt> milliVolt{};
 
-    inline constexpr detail::Make<NanoAmp> nanoAmp{};
+    inline constexpr Detail::Make<NanoAmp> nanoAmp{};
 
-    inline constexpr detail::Make<MilliAmp> milliAmp{};
+    inline constexpr Detail::Make<MilliAmp> milliAmp{};
 
-    inline constexpr detail::Make<MicroAmp> microAmp{};
+    inline constexpr Detail::Make<MicroAmp> microAmp{};
 
-    inline constexpr detail::Make<MicroWatt> microWatt{};
+    inline constexpr Detail::Make<MicroWatt> microWatt{};
 
-    inline constexpr detail::Make<MilliWatt> milliWatt{};
+    inline constexpr Detail::Make<MilliWatt> milliWatt{};
 
     // -- illuminance ---------------------------------------------------------------------
     using MicroLux = mpu::quantity<si::micro<si::lux>, std::uint32_t>;
     using MilliLux = mpu::quantity<si::milli<si::lux>, std::uint32_t>;
 
-    inline constexpr detail::Make<MicroLux> microLux{};
+    inline constexpr Detail::Make<MicroLux> microLux{};
 
-    inline constexpr detail::Make<MilliLux> milliLux{};
+    inline constexpr Detail::Make<MilliLux> milliLux{};
 
     // -- acceleration, as the accelerometers report it: a fraction of standard gravity ----
     using MilliG = mpu::quantity<si::milli<si::standard_gravity>, std::int32_t>;
     using MicroG = mpu::quantity<si::micro<si::standard_gravity>, std::int32_t>;
 
-    inline constexpr detail::Make<MilliG> milliG{};
+    inline constexpr Detail::Make<MilliG> milliG{};
 
-    inline constexpr detail::Make<MicroG> microG{};
+    inline constexpr Detail::Make<MicroG> microG{};
 
     // -- magnetic flux density -----------------------------------------------------------
     using NanoTesla  = mpu::quantity<si::nano<si::tesla>, std::int32_t>;
     using MicroTesla = mpu::quantity<si::micro<si::tesla>, std::int32_t>;
 
-    inline constexpr detail::Make<NanoTesla> nanoTesla{};
+    inline constexpr Detail::Make<NanoTesla> nanoTesla{};
 
-    inline constexpr detail::Make<MicroTesla> microTesla{};
+    inline constexpr Detail::Make<MicroTesla> microTesla{};
 
     // -- angular rate --------------------------------------------------------------------
     using MicroDegPerSec = mpu::quantity<si::micro<si::degree> / si::second, std::int32_t>;
     using MilliDegPerSec = mpu::quantity<si::milli<si::degree> / si::second, std::int32_t>;
 
-    inline constexpr detail::Make<MicroDegPerSec> microDegPerSec{};
+    inline constexpr Detail::Make<MicroDegPerSec> microDegPerSec{};
 
-    inline constexpr detail::Make<MilliDegPerSec> milliDegPerSec{};
+    inline constexpr Detail::Make<MilliDegPerSec> milliDegPerSec{};
 
     // -- resistance ----------------------------------------------------------------------
     using MicroOhm = mpu::quantity<si::micro<si::ohm>, std::uint32_t>;
     using MilliOhm = mpu::quantity<si::milli<si::ohm>, std::uint32_t>;
     using Ohm      = mpu::quantity<si::ohm, std::uint32_t>;
 
-    inline constexpr detail::Make<MicroOhm> microOhm{};
+    inline constexpr Detail::Make<MicroOhm> microOhm{};
 
-    inline constexpr detail::Make<MilliOhm> milliOhm{};
+    inline constexpr Detail::Make<MilliOhm> milliOhm{};
 
-    inline constexpr detail::Make<Ohm> ohm{};
+    inline constexpr Detail::Make<Ohm> ohm{};
 
     // -- length --------------------------------------------------------------------------
     using MilliMetre = mpu::quantity<si::milli<si::metre>, std::int32_t>;
 
-    inline constexpr detail::Make<MilliMetre> milliMetre{};
+    inline constexpr Detail::Make<MilliMetre> milliMetre{};
 
     // -- speed ---------------------------------------------------------------------------
     using MilliMetrePerSecond = mpu::quantity<si::milli<si::metre> / si::second, std::int32_t>;
 
-    inline constexpr detail::Make<MilliMetrePerSecond> milliMetrePerSecond{};
+    inline constexpr Detail::Make<MilliMetrePerSecond> milliMetrePerSecond{};
 
     // -- plane angle ---------------------------------------------------------------------
     using CentiDegree = mpu::quantity<si::centi<si::degree>, std::int32_t>;
     /// A latitude or longitude: +-180e6 fits the int32 with room to spare.
     using MicroDegree = mpu::quantity<si::micro<si::degree>, std::int32_t>;
 
-    inline constexpr detail::Make<CentiDegree> centiDegree{};
+    inline constexpr Detail::Make<CentiDegree> centiDegree{};
 
-    inline constexpr detail::Make<MicroDegree> microDegree{};
+    inline constexpr Detail::Make<MicroDegree> microDegree{};
 
     // -- capacitance ---------------------------------------------------------------------
     using PicoFarad = mpu::quantity<si::pico<si::farad>, std::uint32_t>;
 
-    inline constexpr detail::Make<PicoFarad> picoFarad{};
+    inline constexpr Detail::Make<PicoFarad> picoFarad{};
 
     // -- frequency -----------------------------------------------------------------------
     using Hertz = mpu::quantity<si::hertz, std::uint32_t>;
 
-    inline constexpr detail::Make<Hertz> hertz{};
+    inline constexpr Detail::Make<Hertz> hertz{};
 
     // -- rotational speed, as a fan tachometer reports it --------------------------------
     using Rpm = mpu::quantity<mpu::one / mpu::non_si::minute, std::uint32_t>;
 
-    inline constexpr detail::Make<Rpm> rpm{};
+    inline constexpr Detail::Make<Rpm> rpm{};
 
     // -- ratios: whole percent, parts per million ----------------------------------------
     using Percent = mpu::quantity<mpu::percent, std::uint32_t>;
     using Ppm     = mpu::quantity<mpu::parts_per_million, std::uint32_t>;
 
-    inline constexpr detail::Make<Percent> percent{};
+    inline constexpr Detail::Make<Percent> percent{};
 
-    inline constexpr detail::Make<Ppm> ppm{};
+    inline constexpr Detail::Make<Ppm> ppm{};
 
     // -- UV index ------------------------------------------------------------------------
     //
@@ -228,7 +228,7 @@ namespace Kvasir { namespace Units {
 
     using MilliUvi = mpu::quantity<si::milli<uvIndex>, std::uint32_t>;
 
-    inline constexpr detail::Make<MilliUvi> milliUvi{};
+    inline constexpr Detail::Make<MilliUvi> milliUvi{};
 
     static_assert(MilliDegC{centiDegC(2350)} == milliDegC(23500),
                   "centi widens to milli exactly");

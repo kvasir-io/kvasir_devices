@@ -23,7 +23,7 @@ namespace Ktd2026Detail {
         std::uint8_t blue{};
     };
 
-    inline constexpr Wiring DefaultWiring{0, 2, 1};
+    inline constexpr Wiring defaultWiring{0, 2, 1};
 
     /// Red, green and blue, 0 meaning off, then 1..192 for the part's 0.125..24 mA.
     struct Rgb {
@@ -59,29 +59,29 @@ namespace Ktd2026Detail {
 /// Which colour sits on which channel is board wiring, so it is the `Wiring` template
 /// parameter. `Timing::startupDelay` is the wait after power before the first transaction: the
 /// datasheet gives no figure and 500 ms is a conservative default. Address 0x30; the -B and -C variants are 0x31 and 0x32.
-template<Ktd2026Detail::Wiring Wire = Ktd2026Detail::DefaultWiring,
+template<Ktd2026Detail::Wiring Wire = Ktd2026Detail::defaultWiring,
          typename Timing            = Engine::DefaultTiming>
 struct Ktd2026 {
-    static constexpr std::string_view Name          = "KTD2026";
-    static constexpr Address7         Address       = 0x30;
-    static constexpr std::size_t      RegisterBytes = 1;
+    static constexpr std::string_view name          = "KTD2026";
+    static constexpr Address7         address       = 0x30;
+    static constexpr std::size_t      registerBytes = 1;
 
-    static constexpr auto Addresses = addressRun<0x30, 3>();
+    static constexpr auto addresses = addressRun<0x30, 3>();
 
     static_assert(Wire.red < 3 && Wire.green < 3 && Wire.blue < 3,
                   "a colour is wired to D1, D2 or D3 (0, 1, 2)");
     static_assert(Wire.red != Wire.green && Wire.green != Wire.blue && Wire.red != Wire.blue,
                   "one colour per channel");
 
-    static constexpr std::chrono::milliseconds StartupDelay
+    static constexpr std::chrono::milliseconds startupDelay
       = Kvasir::asDuration(KVASIR_CONFIG_OR(Timing, startupDelay, std::chrono::milliseconds{500}));
 
     /// The highest current code: 24 mA. Higher codes are 24 mA too.
-    static constexpr std::uint8_t MaxLevel = 0xBF;
+    static constexpr std::uint8_t maxLevel = 0xBF;
 
     using Rgb = Ktd2026Detail::Rgb;
 
-    static constexpr std::array Init{
+    static constexpr std::array init{
       Engine::Step::write({.reg = 0x00, .payload = {0x00}}),
       Engine::Step::write({.reg     = 0x00,
                            .payload = {0x07},
@@ -95,15 +95,15 @@ struct Ktd2026 {
     [[nodiscard]] static constexpr std::uint8_t code(std::uint8_t level) {
         if(level == 0) { return 0; }
         auto const c = static_cast<std::uint8_t>(level - 1);
-        return c > MaxLevel ? MaxLevel : c;
+        return c > maxLevel ? maxLevel : c;
     }
 
     /// Red, green and blue, 0 meaning off.
     struct Colour {
         using Value = Rgb;
 
-        static constexpr std::size_t Bytes = 5;
-        static constexpr Value       Initial{0, 0, 0};
+        static constexpr std::size_t bytes = 5;
+        static constexpr Value       initial{0, 0, 0};
 
         /// The ramp byte and the three currents, in the chip's D1 D2 D3 order, each from the
         /// colour `Wiring` puts there, then channel control last, so a channel is switched on

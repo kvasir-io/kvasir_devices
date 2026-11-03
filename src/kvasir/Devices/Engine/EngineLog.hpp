@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace Kvasir::Engine::detail {
+namespace Kvasir::Engine::Detail {
 
 /// The bring-up finished: the part is there and, unless it failed its Identity, is the chip
 /// the description is for.
@@ -139,4 +139,4 @@ KVASIR_LOG_SHARED void logOversizedRead([[maybe_unused]] std::string_view name,
     UC_LOG_W("{} at {:#04x}: asked for {} bytes, the group holds {}", name, address, asked, holds);
 }
 
-}   // namespace Kvasir::Engine::detail
+}   // namespace Kvasir::Engine::Detail

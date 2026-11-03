@@ -115,10 +115,10 @@ void opt3001() {
             && Chips::Opt3001<>::Light::decode(Kvasir::Bytes{top}).saturated();
     }());
     // CT picks the conversion time, the read period trails it by 50 ms.
-    static_assert(Chips::Opt3001<>::Light::Period == 850ms
-                  && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::Light::Period
+    static_assert(Chips::Opt3001<>::Light::period == 850ms
+                  && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::Light::period
                        == 150ms
-                  && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::Conf == 0xC610);
+                  && Chips::Opt3001<Chips::Opt3001Detail::ConversionTime::ms100>::conf == 0xC610);
 }
 
 void opt4048() {
@@ -326,35 +326,35 @@ struct As7341Long {
     static constexpr auto integrationTime = 2s;
 };
 
-static_assert(Chips::Apds9960<>::Cycles == 10 && Chips::Apds9960<>::Atime == 0xF6
-                && Chips::Apds9960<>::IntegrationTime == 27'800us
-                && Chips::Apds9960<>::IntegrationWait == 28ms,
+static_assert(Chips::Apds9960<>::cycles == 10 && Chips::Apds9960<>::atime == 0xF6
+                && Chips::Apds9960<>::integrationTime == 27'800us
+                && Chips::Apds9960<>::integrationWait == 28ms,
               "the default: ten cycles, as before");
 static_assert(Chips::Apds9960<Chips::Apds9960Detail::Gain::x4,
-                              ApdsSlow>::Cycles
+                              ApdsSlow>::cycles
                   == 36
                 && Chips::Apds9960<Chips::Apds9960Detail::Gain::x4,
-                                   ApdsSlow>::IntegrationTime
+                                   ApdsSlow>::integrationTime
                      == 100'080us,
               "100 ms is 35.97 cycles: 36");
-static_assert(Chips::As7341<>::Atime == 0 && Chips::As7341<>::Astep == 17'985
-                && Chips::As7341<>::IntegrationTime == 50'002us,
+static_assert(Chips::As7341<>::atime == 0 && Chips::As7341<>::astep == 17'985
+                && Chips::As7341<>::integrationTime == 50'002us,
               "50 ms with the smallest ATIME: 17986 x 2.78 us");
 static_assert(Chips::As7341<Chips::As7341Detail::Gain::x256,
-                            As7341Datasheet>::Atime
+                            As7341Datasheet>::atime
                   == 29
                 && Chips::As7341<Chips::As7341Detail::Gain::x256,
-                                 As7341Datasheet>::Astep
+                                 As7341Datasheet>::astep
                      == 599
                 && Chips::As7341<Chips::As7341Detail::Gain::x256,
-                                 As7341Datasheet>::IntegrationTime
+                                 As7341Datasheet>::integrationTime
                      == 50'040us,
               "the codes as given");
 static_assert(Chips::As7341<Chips::As7341Detail::Gain::x256,
-                            As7341Long>::Atime
+                            As7341Long>::atime
                   == 10
                 && Chips::As7341<Chips::As7341Detail::Gain::x256,
-                                 As7341Long>::Astep
+                                 As7341Long>::astep
                      == 65'401,
               "2 s: ATIME 9 would need 71942 steps, ATIME 10 needs 65402");
 
@@ -510,7 +510,7 @@ void ktd2061() {
     // Control: night mode (01), BrightExtend off, CoolExtend 90 C (11), fade 1 s (101) = 0x5D,
     // which is what the previous driver wrote.
     checkEq(ktd.word(0x02), 0x5DU, "control");
-    static_assert(Chip::ControlValue == 0x5D);
+    static_assert(Chip::controlValue == 0x5D);
 
     // Twelve LEDs, two to a select register, the first of a pair in the high nibble (ISELA12:
     // ENA1 is bit 7). On plus all three channels from slot 0 is 0x8; on with red from slot 1 is
@@ -522,14 +522,14 @@ void ktd2061() {
         b = Chip::with(b, 12, {.on = true, .green = true, .blue = true});
         return equal(b[0], 0x8C) && equal(b[5], 0x0B);
     }());
-    static_assert(Chip::with({}, Chip::Module::C4, {.on = true})
+    static_assert(Chip::with({}, Chip::Module::c4, {.on = true})
                   == Chip::with({}, 12, {.on = true}));
     // and changing one LED leaves the other in its register alone
     static_assert([] {
         Chip::Select::Value b{};
         b = Chip::with(b, 3, {.on = true, .blue = true});
         b = Chip::with(b, 4, {.on = true});
-        b = Chip::with(b, 3, Chip::Off);
+        b = Chip::with(b, 3, Chip::off);
         return equal(b[1], 0x08);
     }());
 
@@ -613,7 +613,7 @@ void pca9956b() {
     // MODE2 has an Initial of its own, written at bring-up, so the count to wait on is the
     // one after that.
     auto const mode2Writes = pc.writes<Led::Mode2>();
-    pc.set<Led::Mode2>(Led::ClrErr);
+    pc.set<Led::Mode2>(Led::clrErr);
     check(runUntil(
             pc,
             [&] { return pc.writes<Led::Mode2>() != mode2Writes; },

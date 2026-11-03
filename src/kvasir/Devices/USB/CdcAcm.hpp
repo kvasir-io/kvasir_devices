@@ -36,18 +36,18 @@ struct [[gnu::packed]] LineCoding {
 
 namespace Descriptors {
     struct [[gnu::packed]] Header
-      : detail::InterfaceDescriptorBase<Header, DescriptorSubType::CDC_Header> {
+      : Detail::InterfaceDescriptorBase<Header, DescriptorSubType::cdcHeader> {
         std::uint16_t bcdCDC{0x0120};
     };
 
     struct [[gnu::packed]] Union
-      : detail::InterfaceDescriptorBase<Union, DescriptorSubType::CDC_Union> {
+      : Detail::InterfaceDescriptorBase<Union, DescriptorSubType::cdcUnion> {
         std::uint8_t bMasterInterface0;
         std::uint8_t bSlaveInterface0;
     };
 
     struct [[gnu::packed]] CallManagement
-      : detail::InterfaceDescriptorBase<CallManagement, DescriptorSubType::CDC_CallManagement> {
+      : Detail::InterfaceDescriptorBase<CallManagement, DescriptorSubType::cdcCallManagement> {
         std::uint8_t bmCapabilities;
         std::uint8_t bDataInterface;
     };
@@ -56,7 +56,7 @@ namespace Descriptors {
 namespace ACM {
     namespace Descriptors {
         struct [[gnu::packed]] Descriptor
-          : detail::InterfaceDescriptorBase<Descriptor, DescriptorSubType::CDC_ACM_Descriptor> {
+          : Detail::InterfaceDescriptorBase<Descriptor, DescriptorSubType::cdcAcmDescriptor> {
             // SET_LINE_CODING, GET_LINE_CODING and SET_CONTROL_LINE_STATE are supported
             std::uint8_t bmCapabilities{0x02};
         };
@@ -66,79 +66,79 @@ namespace ACM {
                  std::uint8_t ManagementEndpointId,
                  std::uint8_t DataEndpointID>
         consteval auto makeInterfaceDescriptorArrays() {
-            constexpr USB::Descriptors::InterfaceAssociation CDC_ACM_InterfaceAssociation{
+            constexpr USB::Descriptors::InterfaceAssociation cdcAcmInterfaceAssociation{
               .bFirstInterface{ManagementInterfaceId},
               .bInterfaceCount{2},
               .bFunctionClass{2},
               .bFunctionSubClass{2},
               .bFunctionProtocol{0}};
 
-            constexpr USB::Descriptors::Interface CDC_ManagementInterfaceDescriptor{
+            constexpr USB::Descriptors::Interface cdcManagementInterfaceDescriptor{
               .bInterfaceNumber{ManagementInterfaceId},
               .bAlternateSetting{0},
               .bNumEndpoints{1},
-              .bInterfaceClass{std::to_underlying(DeviceClass::Communication)},
+              .bInterfaceClass{std::to_underlying(DeviceClass::communication)},
               .bInterfaceSubClass{2},
               .bInterfaceProtocol{0}};
 
-            constexpr USB::Descriptors::Interface ACM_InterfaceDescriptor{
+            constexpr USB::Descriptors::Interface acmInterfaceDescriptor{
               .bInterfaceNumber{DataInterfaceId},
               .bAlternateSetting{0},
               .bNumEndpoints{2},
-              .bInterfaceClass{std::to_underlying(DeviceClass::CDC_Data)},
+              .bInterfaceClass{std::to_underlying(DeviceClass::cdcData)},
               .bInterfaceSubClass{0},
               .bInterfaceProtocol{0}};
 
-            constexpr USB::CDC::Descriptors::Header CDC_HeaderDescriptor{};
+            constexpr USB::CDC::Descriptors::Header cdcHeaderDescriptor{};
 
-            constexpr USB::CDC::ACM::Descriptors::Descriptor CDC_ACM_Descriptor{};
+            constexpr USB::CDC::ACM::Descriptors::Descriptor cdcAcmDescriptor{};
 
-            constexpr USB::CDC::Descriptors::Union CDC_UnionDescriptor{
+            constexpr USB::CDC::Descriptors::Union cdcUnionDescriptor{
               .bMasterInterface0{ManagementInterfaceId},
               .bSlaveInterface0{DataInterfaceId}};
 
-            constexpr USB::CDC::Descriptors::CallManagement CDC_CallManagementDescriptor{
+            constexpr USB::CDC::Descriptors::CallManagement cdcCallManagementDescriptor{
               .bmCapabilities{0x0},
               .bDataInterface{DataInterfaceId}};
 
             // CDC Management endpoint packet size
             // A SERIAL_STATE notification is 10 bytes (8 of header, 2 of state): one packet.
-            static constexpr std::uint16_t ManagementEndpointPacketSize = 16;
+            static constexpr std::uint16_t managementEndpointPacketSize = 16;
             // Interrupt endpoint polling interval (in ms, max 255 to minimize polling)
-            static constexpr std::uint8_t InterruptEndpointInterval = 255;
+            static constexpr std::uint8_t interruptEndpointInterval = 255;
 
-            constexpr auto CDC_ManagementEndpointDescriptor
-              = USB::Descriptors::endpoint(EndpointDirection::In,
+            constexpr auto cdcManagementEndpointDescriptor
+              = USB::Descriptors::endpoint(EndpointDirection::in,
                                            ManagementEndpointId,
-                                           EndpointTransferType::Interrupt,
-                                           ManagementEndpointPacketSize,
-                                           InterruptEndpointInterval);
-            constexpr auto ACM_DataInEndpointDescriptor
-              = USB::Descriptors::endpoint(EndpointDirection::In,
+                                           EndpointTransferType::interrupt,
+                                           managementEndpointPacketSize,
+                                           interruptEndpointInterval);
+            constexpr auto acmDataInEndpointDescriptor
+              = USB::Descriptors::endpoint(EndpointDirection::in,
                                            DataEndpointID,
-                                           EndpointTransferType::Bulk);
-            constexpr auto ACM_DataOutEndpointDescriptor
-              = USB::Descriptors::endpoint(EndpointDirection::Out,
+                                           EndpointTransferType::bulk);
+            constexpr auto acmDataOutEndpointDescriptor
+              = USB::Descriptors::endpoint(EndpointDirection::out,
                                            DataEndpointID,
-                                           EndpointTransferType::Bulk);
+                                           EndpointTransferType::bulk);
 
-            constexpr auto CDC_Interface
-              = USB::Descriptors::generateArray(CDC_ManagementInterfaceDescriptor,
-                                                CDC_HeaderDescriptor,
-                                                CDC_CallManagementDescriptor,
-                                                CDC_ACM_Descriptor,
-                                                CDC_UnionDescriptor,
-                                                CDC_ManagementEndpointDescriptor);
-            constexpr auto ACM_Interface
-              = USB::Descriptors::generateArray(ACM_InterfaceDescriptor,
-                                                ACM_DataOutEndpointDescriptor,
-                                                ACM_DataInEndpointDescriptor);
+            constexpr auto cdcInterface
+              = USB::Descriptors::generateArray(cdcManagementInterfaceDescriptor,
+                                                cdcHeaderDescriptor,
+                                                cdcCallManagementDescriptor,
+                                                cdcAcmDescriptor,
+                                                cdcUnionDescriptor,
+                                                cdcManagementEndpointDescriptor);
+            constexpr auto acmInterface
+              = USB::Descriptors::generateArray(acmInterfaceDescriptor,
+                                                acmDataOutEndpointDescriptor,
+                                                acmDataInEndpointDescriptor);
 
-            constexpr auto Interface = USB::Descriptors::generateArray(CDC_ACM_InterfaceAssociation,
-                                                                       CDC_Interface,
-                                                                       ACM_Interface);
+            constexpr auto interface = USB::Descriptors::generateArray(cdcAcmInterfaceAssociation,
+                                                                       cdcInterface,
+                                                                       acmInterface);
 
-            return Interface;
+            return interface;
         }
     }   // namespace Descriptors
 
@@ -156,34 +156,34 @@ namespace ACM {
         using Self = Mixin<Clock, Config, Derived, FirstInterfaceNumber, FirstEndpointNumber>;
 
         // CDC-ACM uses 2 interfaces (management + data)
-        static constexpr std::size_t InterfaceCount = 2;
-        static constexpr std::size_t EndpointCount  = 2;
+        static constexpr std::size_t interfaceCount = 2;
+        static constexpr std::size_t endpointCount  = 2;
 
-        static constexpr std::size_t SerialStateSize          = 10;
-        static constexpr std::size_t ManagementInterface      = FirstInterfaceNumber;
-        static constexpr std::size_t DataInterface            = FirstInterfaceNumber + 1;
-        static constexpr std::size_t ManagementEndpointNumber = FirstEndpointNumber;
-        static constexpr std::size_t DataEndpointNumber       = FirstEndpointNumber + 1;
+        static constexpr std::size_t serialStateSize          = 10;
+        static constexpr std::size_t managementInterface      = FirstInterfaceNumber;
+        static constexpr std::size_t dataInterface            = FirstInterfaceNumber + 1;
+        static constexpr std::size_t managementEndpointNumber = FirstEndpointNumber;
+        static constexpr std::size_t dataEndpointNumber       = FirstEndpointNumber + 1;
 
         // Interface descriptors for both CDC management and ACM data interfaces
-        static constexpr auto InterfaceDescriptor
-          = USB::CDC::ACM::Descriptors::makeInterfaceDescriptorArrays<ManagementInterface,
-                                                                      DataInterface,
-                                                                      ManagementEndpointNumber,
-                                                                      DataEndpointNumber>();
+        static constexpr auto interfaceDescriptor
+          = USB::CDC::ACM::Descriptors::makeInterfaceDescriptorArrays<managementInterface,
+                                                                      dataInterface,
+                                                                      managementEndpointNumber,
+                                                                      dataEndpointNumber>();
 
-        using DataEndpointHandler = Kvasir::USB::detail::BulkDataAdapter<Clock,
+        using DataEndpointHandler = Kvasir::USB::Detail::BulkDataAdapter<Clock,
                                                                          Config,
                                                                          Derived,
                                                                          Self,
-                                                                         DataInterface,
-                                                                         DataEndpointNumber,
+                                                                         dataInterface,
+                                                                         dataEndpointNumber,
                                                                          true,
                                                                          true>;
 
         // The notification endpoint: SERIAL_STATE goes out on it (sendSerialState()).
         using Notification
-          = detail::InterruptInEndpoint<Derived, ManagementEndpointNumber, SerialStateSize>;
+          = Detail::InterruptInEndpoint<Derived, managementEndpointNumber, serialStateSize>;
 
         // Callbacks
         static void setupEndpointsCallback() {
@@ -200,7 +200,7 @@ namespace ACM {
             lineCodingExpected = false;
 
             if(pkt.type() == Type::classT && pkt.recipient() == Recipient::interface) {
-                if(pkt.wIndex == ManagementInterface) {
+                if(pkt.wIndex == managementInterface) {
                     switch(static_cast<Request>(std::to_underlying(pkt.bRequest))) {
                     case Request::setControlLineState:
                         {
@@ -243,11 +243,11 @@ namespace ACM {
                 return false;
             }
             return handleEndpointRequest<Derived, Notification>(pkt)
-                || detail::handleSetInterface<Derived>(pkt,
-                                                       ManagementInterface,
+                || Detail::handleSetInterface<Derived>(pkt,
+                                                       managementInterface,
                                                        Notification::restart)
-                || detail::handleSetInterface<Derived>(pkt,
-                                                       DataInterface,
+                || Detail::handleSetInterface<Derived>(pkt,
+                                                       dataInterface,
                                                        DataEndpointHandler::restart)
                 || DataEndpointHandler::setupPacketRequestCallback(pkt);
         }
@@ -273,7 +273,7 @@ namespace ACM {
                   lineCoding.bCharFormat);
                 return true;
             }
-            if(epNum == ManagementEndpointNumber && in) {
+            if(epNum == managementEndpointNumber && in) {
                 Notification::bufferDone();
                 return true;
             }
@@ -282,7 +282,7 @@ namespace ACM {
 
         static bool abortDoneCallback(std::size_t epNum,
                                       bool        in) {
-            if(epNum == ManagementEndpointNumber && in) {
+            if(epNum == managementEndpointNumber && in) {
                 Notification::abortDone();
                 return true;
             }
@@ -325,24 +325,24 @@ namespace ACM {
         /// The bits of a SERIAL_STATE notification (PSTN 1.2, 6.5.4, table 31): what a UART's
         /// modem and error lines would say.
         struct SerialState {
-            static constexpr std::uint16_t Dcd     = 1U << 0U;   // bRxCarrier
-            static constexpr std::uint16_t Dsr     = 1U << 1U;   // bTxCarrier
-            static constexpr std::uint16_t Break   = 1U << 2U;
-            static constexpr std::uint16_t Ring    = 1U << 3U;
-            static constexpr std::uint16_t Framing = 1U << 4U;
-            static constexpr std::uint16_t Parity  = 1U << 5U;
-            static constexpr std::uint16_t Overrun = 1U << 6U;
+            static constexpr std::uint16_t dcd     = 1U << 0U;   // bRxCarrier
+            static constexpr std::uint16_t dsr     = 1U << 1U;   // bTxCarrier
+            static constexpr std::uint16_t break_  = 1U << 2U;
+            static constexpr std::uint16_t ring    = 1U << 3U;
+            static constexpr std::uint16_t framing = 1U << 4U;
+            static constexpr std::uint16_t parity  = 1U << 5U;
+            static constexpr std::uint16_t overrun = 1U << 6U;
         };
 
         /// Tells the host the state of the lines, on the notification endpoint. False while the
         /// last notification has not gone out yet, or while the device is not configured.
         static bool sendSerialState(std::uint16_t state) {
-            std::array<std::byte, SerialStateSize> const notification{
+            std::array<std::byte, serialStateSize> const notification{
               std::byte{0xA1},   // bmRequestType: class, interface, device to host
               std::byte{0x20},   // bNotification: SERIAL_STATE
               std::byte{0},
               std::byte{0},   // wValue
-              static_cast<std::byte>(ManagementInterface),
+              static_cast<std::byte>(managementInterface),
               std::byte{0},   // wIndex: the interface
               std::byte{2},
               std::byte{0},   // wLength
@@ -368,8 +368,8 @@ template<template<typename, typename> class BackendT,
 using CdcAcm = Device<BackendT,
                       Clock,
                       Config,
-                      DeviceClass::Miscellaneous,
-                      DeviceClass::Communication,
+                      DeviceClass::miscellaneous,
+                      DeviceClass::communication,
                       0,   // FirstInterfaceNumber
                       1,   // FirstEndpointNumber
                       CDC::ACM::Mixin,

@@ -63,17 +63,17 @@ namespace Kvasir { namespace SPI {
         using TimePoint = typename Clock::time_point;
         using Callback  = StaticFunction<void(Units::MicroVolt), 128>;
 
-        static constexpr std::chrono::milliseconds ResetLow = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds resetLow = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config, resetLow, std::chrono::milliseconds{Ads8675Defaults::resetLow}));
-        static constexpr std::chrono::milliseconds ResetRecover = Kvasir::asDuration(
+        static constexpr std::chrono::milliseconds resetRecover = Kvasir::asDuration(
           KVASIR_CONFIG_OR(Config,
                            resetRecover,
                            std::chrono::milliseconds{Ads8675Defaults::resetRecover}));
-        static constexpr std::uint8_t RangeSel = static_cast<std::uint8_t>(
+        static constexpr std::uint8_t rangeSel = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, rangeSel, Ads8675Defaults::rangeSel));
-        static constexpr std::uint8_t AbsentAfterFailures = static_cast<std::uint8_t>(
+        static constexpr std::uint8_t absentAfterFailures = static_cast<std::uint8_t>(
           KVASIR_CONFIG_OR(Config, absentAfterFailures, Ads8675Defaults::absentAfterFailures));
-        static constexpr auto Setup
+        static constexpr auto setup
           = Master::setup(Hal::ClockMode::mode0,
                           KVASIR_CONFIG_OR(Config, maxClock, Ads8675Defaults::maxClock));
 
@@ -151,13 +151,13 @@ namespace Kvasir { namespace SPI {
                 ready_.store(false, std::memory_order_release);
                 apply(clear(Rst{}));
                 apply(clear(Cs{}));
-                next_  = now + ResetLow;
+                next_  = now + resetLow;
                 state_ = State::waitReset;
                 break;
             case State::waitReset:
                 if(now > next_) {
                     apply(set(Rst{}));
-                    next_  = now + ResetRecover;
+                    next_  = now + resetRecover;
                     state_ = State::waitInit;
                 }
                 break;
@@ -171,7 +171,7 @@ namespace Kvasir { namespace SPI {
                 if(apply(read(Rvs{}))) {
                     // WRITE_HWORD (0xD0) RANGE_SEL (0x14) = RangeSel
                     command_(
-                      {std::byte{0xD0}, std::byte{0x14}, std::byte{0x00}, std::byte{RangeSel}});
+                      {std::byte{0xD0}, std::byte{0x14}, std::byte{0x00}, std::byte{rangeSel}});
                     state_ = State::waitInitData;
                 }
                 break;
@@ -197,7 +197,7 @@ namespace Kvasir { namespace SPI {
             case State::waitCheckData:
                 // CS stays low: the first sampleCallback() raises it
                 if(!running_.load(std::memory_order_acquire)) {
-                    if(ok_ && data_[0] == std::byte{0x00} && data_[1] == std::byte{RangeSel}) {
+                    if(ok_ && data_[0] == std::byte{0x00} && data_[1] == std::byte{rangeSel}) {
                         state_ = State::idle;
                         bringUpFailures_.cleared();
                         ready_.store(true, std::memory_order_release);
@@ -207,7 +207,7 @@ namespace Kvasir { namespace SPI {
                         UC_LOG_W("ads8675: RANGE_SEL reads {:#04x}{:02x}, expected {:#04x}",
                                  std::to_integer<unsigned>(data_[0]),
                                  std::to_integer<unsigned>(data_[1]),
-                                 RangeSel);
+                                 rangeSel);
                         state_ = State::reset;
                     }
                 }
@@ -230,7 +230,7 @@ namespace Kvasir { namespace SPI {
             idle
         };
 
-        static constexpr std::uint32_t SkippedKey = rateLimitKey(2);
+        static constexpr std::uint32_t skippedKey = rateLimitKey(2);
 
         static constexpr Lines csLines = ChipSelect<Cs, false>::lines;
 
@@ -238,7 +238,7 @@ namespace Kvasir { namespace SPI {
         [[nodiscard]] bool submit_(F&& done) {
             running_.store(true, std::memory_order_release);
             bool const accepted
-              = Master::submit(typename Master::Request{.setup = Setup,
+              = Master::submit(typename Master::Request{.setup = setup,
                                                         .lines = csLines,
                                                         .tx    = std::span<std::byte const>{data_},
                                                         .rx    = std::span{data_},
@@ -277,7 +277,7 @@ namespace Kvasir { namespace SPI {
         void logSkipped_(TimePoint now) {
             auto const skipped = skipped_.load(std::memory_order_relaxed);
             if(skipped == skippedLogged_) { return; }
-            auto const line = log_.allow(SkippedKey, now);
+            auto const line = log_.allow(skippedKey, now);
             if(!line) { return; }
             KVASIR_LOG_LIMITED(
               line,
@@ -293,7 +293,7 @@ namespace Kvasir { namespace SPI {
         std::atomic<bool> ready_{false};
         bool volatile ok_{};
         State                                       state_{State::reset};
-        FailureStreak<AbsentAfterFailures>          bringUpFailures_{};
+        FailureStreak<absentAfterFailures>          bringUpFailures_{};
         std::array<std::byte, 4>                    data_{};
         std::atomic<std::uint32_t>                  errors_;
         std::atomic<std::uint32_t>                  skipped_;

@@ -529,8 +529,8 @@ struct Tc74Part {
 void tc74() {
     testCase("TC74");
     // The variant is the address: A0..A7 at 0x48..0x4F, A5 the default (TC74.md:402-415).
-    static_assert(Chips::Tc74<0>::Address == 0x48 && Chips::Tc74<1>::Address == 0x49
-                  && Chips::Tc74<>::Address == 0x4D && Chips::Tc74<7>::Address == 0x4F);
+    static_assert(Chips::Tc74<0>::address == 0x48 && Chips::Tc74<1>::address == 0x49
+                  && Chips::Tc74<>::address == 0x4D && Chips::Tc74<7>::address == 0x4F);
     // Table 4-4: 8-bit two's complement, one degree a count
     static_assert([] {
         using T      = Chips::Tc74<>::Temperature;
@@ -724,8 +724,8 @@ void dps310() {
         constexpr double traw = 305'000;      // 0x04A768; raw / kT about 0.58
         auto const       f    = frame(0xE8, 0xE8, 0xE7, 0x04, 0xA7, 0x68, 0x30);
         auto const       got  = D::Measurement::decode(Kvasir::Bytes{f}, st).value;
-        double const     prs  = praw / D::Kp;
-        double const     tmp  = traw / D::Kt;
+        double const     prs  = praw / D::kp;
+        double const     tmp  = traw / D::kt;
         double const wantP = st.c00 + prs * (st.c10 + prs * (st.c20 + prs * st.c30)) + tmp * st.c01
                            + tmp * prs * (st.c11 + prs * st.c21);
         double const wantT = st.c0 * 0.5 + st.c1 * tmp;
@@ -770,11 +770,11 @@ void tmp117() {
             "DEVICE_ID as the engine read it, once, kept in the State");
     // The identity is the description's Identity, under its mask: DID 117h whatever the revision
     // in 15:12; the TMP119's is its whole word, 2117h.
-    static_assert(Chips::Tmp117::Identity[0].matches(0x0117)
-                  && Chips::Tmp117::Identity[0].matches(0x3117)
-                  && !Chips::Tmp117::Identity[0].matches(0x0118));
-    static_assert(Chips::Tmp119::Identity[0].matches(0x2117)
-                  && !Chips::Tmp119::Identity[0].matches(0x0117));
+    static_assert(Chips::Tmp117::identity[0].matches(0x0117)
+                  && Chips::Tmp117::identity[0].matches(0x3117)
+                  && !Chips::Tmp117::identity[0].matches(0x0118));
+    static_assert(Chips::Tmp119::identity[0].matches(0x2117)
+                  && !Chips::Tmp119::identity[0].matches(0x0117));
     // what is left to setup(): a part still loading its EEPROM is not brought up yet
     static_assert([] {
         Chips::Tmp117::State st{};
@@ -787,7 +787,7 @@ void tmp117() {
     checkEq(t1.latest().highAlert, true, "HIGH_Alert from the configuration read at offset 0");
     checkEq(t1.latest().lowAlert, false, "and LOW_Alert clear");
     checkEq(t17.word(0x01), 0x0220U, "the reset configuration at bring-up");
-    t1.set<Chips::Tmp117::Limits>(Chips::Tmp117::High, Units::milliDegC(60000));
+    t1.set<Chips::Tmp117::Limits>(Chips::Tmp117::high, Units::milliDegC(60000));
     check(runUntil(t1, [&] { return t17.word(0x02) == 0x1E00U; }, 200ms), "THIGH 60 degC");
     t1.modify<Chips::Tmp117::Config>(
       [](auto& c) { c.averaging = Chips::Tmp117::Averaging::sixtyFour; });
@@ -812,7 +812,7 @@ void tmp117() {
             && !up.value.lowAlert && isOk(dn) && equal(dn.value.temperature, -25000)
             && isUnchanged(T::decode(Kvasir::Bytes{h}, dn.value));
     }());
-    check(Chips::Tmp119::Name == std::string_view{"TMP119"}, "the TMP119 shares the map");
+    check(Chips::Tmp119::name == std::string_view{"TMP119"}, "the TMP119 shares the map");
 }
 
 void emc2101() {
@@ -940,7 +940,7 @@ void adt7420() {
     }());
     checkEq(adCfg, std::uint8_t{0x00}, "the reset configuration at bring-up");
     checkEq(adHyst, std::uint8_t{0x05}, "and 5 degC of hysteresis");
-    aa.set<Chips::Adt7420<>::Limits>(Chips::Adt7420<>::High, Units::centiDegC(6400));
+    aa.set<Chips::Adt7420<>::Limits>(Chips::Adt7420<>::high, Units::centiDegC(6400));
     check(runUntil(aa, [&] { return ad.word(0x04) == 0x2000U; }, 200ms), "THIGH 64 degC");
     aa.modify<Chips::Adt7420<>::Config>([](auto& c) { c.mode = Chips::Adt7420<>::Mode::shutdown; });
     check(runUntil(aa, [&] { return adCfg == 0x60; }, 200ms), "shutdown, the rest untouched");
@@ -960,8 +960,8 @@ void tmp1075() {
     checkEq(tt.latest().temperature, 2500, "the model's frame reached the decode");
     checkEq(t75.word(0x01), 0x0000U, "the reset configuration is written back at bring-up");
 
-    tt.set<Chips::Tmp1075<>::Limits>(Chips::Tmp1075<>::Low, Units::centiDegC(7500));
-    tt.set<Chips::Tmp1075<>::Limits>(Chips::Tmp1075<>::High, Units::centiDegC(8000));
+    tt.set<Chips::Tmp1075<>::Limits>(Chips::Tmp1075<>::low, Units::centiDegC(7500));
+    tt.set<Chips::Tmp1075<>::Limits>(Chips::Tmp1075<>::high, Units::centiDegC(8000));
     check(runUntil(
             tt,
             [&] { return tt.writes<Chips::Tmp1075<>::Limits>() == 2; },
@@ -996,7 +996,7 @@ void tmp1075() {
 
 /// The limits read back every 5 s, 100 ms after a write.
 struct CheckedLimits {
-    static constexpr std::chrono::seconds LimitsVerifyInterval{5};
+    static constexpr std::chrono::seconds limitsVerifyInterval{5};
 };
 
 void limitsReadBack() {
@@ -1007,11 +1007,11 @@ void limitsReadBack() {
     t75.readOnly     = {0x00, 0x0F};
     FakeBus::respond = std::ref(t75);
     using Checked    = Chips::Tmp1075<CheckedLimits>;
-    static_assert(Kvasir::Engine::detail::Verifies<Checked::Limits>
-                  && !Kvasir::Engine::detail::Verifies<Chips::Tmp1075<>::Limits>);
+    static_assert(Kvasir::Engine::Detail::Verifies<Checked::Limits>
+                  && !Kvasir::Engine::Detail::Verifies<Chips::Tmp1075<>::Limits>);
     Dev<Checked> tt{};
-    tt.set<Checked::Limits>(Checked::High, Units::centiDegC(8500));
-    tt.set<Checked::Limits>(Checked::Low, Units::centiDegC(8000));
+    tt.set<Checked::Limits>(Checked::high, Units::centiDegC(8500));
+    tt.set<Checked::Limits>(Checked::low, Units::centiDegC(8000));
     check(runUntil(tt, [&] { return tt.writes<Checked::Limits>() == 2; }, 500ms), "written");
     checkEq(t75.word(0x03), 0x5500U, "THIGH 85 degC");
     t75.set(0x03, {0x50, 0x00});   // a supply dip: back at the reset THIGH
@@ -1025,9 +1025,9 @@ void limitsReadBack() {
     a.readOnly       = {0x00, 0x01, 0x0B};
     FakeBus::respond = std::ref(a);
     using CheckedAdt = Chips::Adt7420<Chips::Adt7420<>::Resolution::bits13, CheckedLimits>;
-    static_assert(Kvasir::Engine::detail::Verifies<CheckedAdt::Limits>);
+    static_assert(Kvasir::Engine::Detail::Verifies<CheckedAdt::Limits>);
     Dev<CheckedAdt> aa{};
-    aa.set<CheckedAdt::Limits>(CheckedAdt::Critical, Units::centiDegC(8500));
+    aa.set<CheckedAdt::Limits>(CheckedAdt::critical, Units::centiDegC(8500));
     check(runUntil(aa, [&] { return aa.writes<CheckedAdt::Limits>() == 1; }, 500ms), "written");
     a.set(0x08, {0x49, 0x80});   // TCRIT back at its reset 147 degC
     check(runUntil(
@@ -1078,7 +1078,7 @@ constexpr auto aht20Frame = frame(0x1C, 0x80, 0x00, 0x06, 0x66, 0x66);
 
 void dht20() {
     // The AHT20's frame: 50.00 %RH, 30.00 degC.
-    constexpr std::array<std::uint8_t, 6> Frame{0x1C, 0x80, 0x00, 0x06, 0x66, 0x66};
+    constexpr std::array<std::uint8_t, 6> frameBytes{0x1C, 0x80, 0x00, 0x06, 0x66, 0x66};
     std::uint8_t                          status = 0x18;
     std::array<std::uint8_t, 3>           regBytes{0x11, 0x22, 0x33};
     auto const                            respond
@@ -1094,9 +1094,9 @@ void dht20() {
             } else if(recv.size() == 3) {
                 for(std::size_t i = 0; i < 3; ++i) { recv[i] = std::byte{regBytes[i]}; }
             } else if(recv.size() == 7) {
-                for(std::size_t i = 0; i < 6; ++i) { recv[i] = std::byte{Frame[i]}; }
+                for(std::size_t i = 0; i < 6; ++i) { recv[i] = std::byte{frameBytes[i]}; }
                 recv[6] = std::byte{
-                  Kvasir::Sensirion::crc8(Kvasir::Bytes{std::as_bytes(std::span{Frame})})};
+                  Kvasir::Sensirion::crc8(Kvasir::Bytes{std::as_bytes(std::span{frameBytes})})};
             } else {
                 return FakeBus::Result::failed;
             }

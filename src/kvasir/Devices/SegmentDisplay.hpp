@@ -79,67 +79,67 @@ enum class Light : std::uint8_t { dark, lit };
 using Glyph = std::uint8_t;
 
 /// Segments a digit has room for: a..g and the point.
-inline constexpr std::size_t Segments = 8;
+inline constexpr std::size_t segments = 8;
 
 namespace Seg {
-    inline constexpr Glyph A  = 1U << 0U;
-    inline constexpr Glyph B  = 1U << 1U;
-    inline constexpr Glyph C  = 1U << 2U;
-    inline constexpr Glyph D  = 1U << 3U;
-    inline constexpr Glyph E  = 1U << 4U;
-    inline constexpr Glyph F  = 1U << 5U;
-    inline constexpr Glyph G  = 1U << 6U;
-    inline constexpr Glyph Dp = 1U << 7U;
+    inline constexpr Glyph a  = 1U << 0U;
+    inline constexpr Glyph b  = 1U << 1U;
+    inline constexpr Glyph c  = 1U << 2U;
+    inline constexpr Glyph d  = 1U << 3U;
+    inline constexpr Glyph e  = 1U << 4U;
+    inline constexpr Glyph f  = 1U << 5U;
+    inline constexpr Glyph g  = 1U << 6U;
+    inline constexpr Glyph dp = 1U << 7U;
 }   // namespace Seg
 
-inline constexpr Glyph Blank = 0;
-inline constexpr Glyph Minus = Seg::G;
+inline constexpr Glyph blank = 0;
+inline constexpr Glyph minus = Seg::g;
 
 /// 0..9, then A b C d E F, so an address or a register can go on the glass as hex.
-inline constexpr std::array<Glyph, 16> HexDigits{
-  Seg::A | Seg::B | Seg::C | Seg::D | Seg::E | Seg::F,            // 0
-  Seg::B | Seg::C,                                                // 1
-  Seg::A | Seg::B | Seg::G | Seg::E | Seg::D,                     // 2
-  Seg::A | Seg::B | Seg::C | Seg::D | Seg::G,                     // 3
-  Seg::F | Seg::G | Seg::B | Seg::C,                              // 4
-  Seg::A | Seg::F | Seg::G | Seg::C | Seg::D,                     // 5
-  Seg::A | Seg::F | Seg::G | Seg::E | Seg::C | Seg::D,            // 6
-  Seg::A | Seg::B | Seg::C,                                       // 7
-  Seg::A | Seg::B | Seg::C | Seg::D | Seg::E | Seg::F | Seg::G,   // 8
-  Seg::A | Seg::B | Seg::C | Seg::D | Seg::F | Seg::G,            // 9
-  Seg::A | Seg::B | Seg::C | Seg::E | Seg::F | Seg::G,            // A
-  Seg::C | Seg::D | Seg::E | Seg::F | Seg::G,                     // b
-  Seg::A | Seg::D | Seg::E | Seg::F,                              // C
-  Seg::B | Seg::C | Seg::D | Seg::E | Seg::G,                     // d
-  Seg::A | Seg::D | Seg::E | Seg::F | Seg::G,                     // E
-  Seg::A | Seg::E | Seg::F | Seg::G,                              // F
+inline constexpr std::array<Glyph, 16> hexDigits{
+  Seg::a | Seg::b | Seg::c | Seg::d | Seg::e | Seg::f,            // 0
+  Seg::b | Seg::c,                                                // 1
+  Seg::a | Seg::b | Seg::g | Seg::e | Seg::d,                     // 2
+  Seg::a | Seg::b | Seg::c | Seg::d | Seg::g,                     // 3
+  Seg::f | Seg::g | Seg::b | Seg::c,                              // 4
+  Seg::a | Seg::f | Seg::g | Seg::c | Seg::d,                     // 5
+  Seg::a | Seg::f | Seg::g | Seg::e | Seg::c | Seg::d,            // 6
+  Seg::a | Seg::b | Seg::c,                                       // 7
+  Seg::a | Seg::b | Seg::c | Seg::d | Seg::e | Seg::f | Seg::g,   // 8
+  Seg::a | Seg::b | Seg::c | Seg::d | Seg::f | Seg::g,            // 9
+  Seg::a | Seg::b | Seg::c | Seg::e | Seg::f | Seg::g,            // A
+  Seg::c | Seg::d | Seg::e | Seg::f | Seg::g,                     // b
+  Seg::a | Seg::d | Seg::e | Seg::f,                              // C
+  Seg::b | Seg::c | Seg::d | Seg::e | Seg::g,                     // d
+  Seg::a | Seg::d | Seg::e | Seg::f | Seg::g,                     // E
+  Seg::a | Seg::e | Seg::f | Seg::g,                              // F
 };
 
 /// A character as a glyph: the hex digits in either case, a few letters that read
 /// unambiguously on seven segments (H L n o P r U, for "Err", "OFF", "Hi"), '-', '_' and
 /// ' '. Anything else is blank.
 [[nodiscard]] constexpr Glyph glyph(char c) {
-    if(c >= '0' && c <= '9') { return HexDigits[static_cast<std::size_t>(c - '0')]; }
-    if(c >= 'a' && c <= 'f') { return HexDigits[10 + static_cast<std::size_t>(c - 'a')]; }
-    if(c >= 'A' && c <= 'F') { return HexDigits[10 + static_cast<std::size_t>(c - 'A')]; }
+    if(c >= '0' && c <= '9') { return hexDigits[static_cast<std::size_t>(c - '0')]; }
+    if(c >= 'a' && c <= 'f') { return hexDigits[10 + static_cast<std::size_t>(c - 'a')]; }
+    if(c >= 'A' && c <= 'F') { return hexDigits[10 + static_cast<std::size_t>(c - 'A')]; }
     switch(c) {
-    case '-': return Minus;
-    case '_': return Seg::D;
+    case '-': return minus;
+    case '_': return Seg::d;
     case 'H':
-    case 'h': return Seg::B | Seg::C | Seg::E | Seg::F | Seg::G;
+    case 'h': return Seg::b | Seg::c | Seg::e | Seg::f | Seg::g;
     case 'L':
-    case 'l': return Seg::D | Seg::E | Seg::F;
+    case 'l': return Seg::d | Seg::e | Seg::f;
     case 'n':
-    case 'N': return Seg::C | Seg::E | Seg::G;
+    case 'N': return Seg::c | Seg::e | Seg::g;
     case 'o':
-    case 'O': return Seg::C | Seg::D | Seg::E | Seg::G;
+    case 'O': return Seg::c | Seg::d | Seg::e | Seg::g;
     case 'P':
-    case 'p': return Seg::A | Seg::B | Seg::E | Seg::F | Seg::G;
+    case 'p': return Seg::a | Seg::b | Seg::e | Seg::f | Seg::g;
     case 'r':
-    case 'R': return Seg::E | Seg::G;
+    case 'R': return Seg::e | Seg::g;
     case 'U':
-    case 'u': return Seg::B | Seg::C | Seg::D | Seg::E | Seg::F;
-    default:  return Blank;
+    case 'u': return Seg::b | Seg::c | Seg::d | Seg::e | Seg::f;
+    default:  return blank;
     }
 }
 
@@ -155,7 +155,7 @@ enum class Overflow : std::uint8_t {
 template<std::size_t N>
 [[nodiscard]] constexpr Digits<N> dashes() {
     Digits<N> d{};
-    for(auto& g : d) { g = Minus; }
+    for(auto& g : d) { g = minus; }
     return d;
 }
 
@@ -190,11 +190,11 @@ template<std::size_t N>
     Digits<N>         d{};
     std::size_t const used = width(v);
     for(std::size_t i = 0; i < used; ++i) {   // i counts from the right
-        d[N - 1 - i] = HexDigits[v % 10U];
+        d[N - 1 - i] = hexDigits[v % 10U];
         v /= 10U;
     }
-    if(negative) { d[N - 1 - used] = Minus; }
-    if(point != 0) { d[N - 1 - point] = static_cast<Glyph>(d[N - 1 - point] | Seg::Dp); }
+    if(negative) { d[N - 1 - used] = minus; }
+    if(point != 0) { d[N - 1 - point] = static_cast<Glyph>(d[N - 1 - point] | Seg::dp); }
     return d;
 }
 
@@ -204,7 +204,7 @@ template<std::size_t N>
                                       std::size_t   width = N) {
     Digits<N> d{};
     for(std::size_t i = 0; i < width && i < N; ++i) {
-        d[N - 1 - i] = HexDigits[(value >> (4U * i)) & 0xFU];
+        d[N - 1 - i] = hexDigits[(value >> (4U * i)) & 0xFU];
     }
     return d;
 }
@@ -213,34 +213,34 @@ static_assert(number<3>(1000) == dashes<3>(),
               "past three digits is three dashes");
 static_assert(number<3>(5,
                         1)
-                == Digits<3>{Blank,
-                             HexDigits[0] | Seg::Dp,
-                             HexDigits[5]},
+                == Digits<3>{blank,
+                             hexDigits[0] | Seg::dp,
+                             hexDigits[5]},
               "\"0.5\": the zero before the point is drawn");
 static_assert(number<3>(-12)
-                == Digits<3>{Minus,
-                             HexDigits[1],
-                             HexDigits[2]},
+                == Digits<3>{minus,
+                             hexDigits[1],
+                             hexDigits[2]},
               "a minus in front");
 static_assert(number<3>(-7)
-                == Digits<3>{Blank,
-                             Minus,
-                             HexDigits[7]},
+                == Digits<3>{blank,
+                             minus,
+                             hexDigits[7]},
               "right against its digit");
 static_assert(number<3>(-100) == dashes<3>(),
               "no room for the minus");
 static_assert(number<3>(-100,
                         0,
                         Overflow::clamp)
-                == Digits<3>{Minus,
-                             HexDigits[9],
-                             HexDigits[9]},
+                == Digits<3>{minus,
+                             hexDigits[9],
+                             hexDigits[9]},
               "clamped, -99");
 static_assert(hex<3>(0x3F,
                      2)
-                == Digits<3>{Blank,
-                             HexDigits[3],
-                             HexDigits[15]},
+                == Digits<3>{blank,
+                             hexDigits[3],
+                             hexDigits[15]},
               "two hex digits, right-aligned");
 
 // -- layouts --------------------------------------------------------------------------------
@@ -272,14 +272,14 @@ struct Line {
 };
 
 /// A segment, or a whole line, the glass does not have.
-inline constexpr Line NotWired{0xFF};
+inline constexpr Line notWired{0xFF};
 
 /// Every digit on lines of its own, driven all the time: `segment[position][s]` is the line
 /// for segment s (a..g, dp -- the Glyph bit order) of the digit at `position`, 0 the leftmost
 /// as read.
 template<std::size_t N>
 struct StaticLayout {
-    std::array<std::array<Line, Segments>, N> segment;
+    std::array<std::array<Line, segments>, N> segment;
     Active                                    active;
 };
 
@@ -287,7 +287,7 @@ struct StaticLayout {
 /// time: `select[position]` switches in the digit at `position`, 0 the leftmost as read.
 template<std::size_t N>
 struct MultiplexedLayout {
-    std::array<Line, Segments> segment;
+    std::array<Line, segments> segment;
     std::array<Line, N>        select;
     Active                     segmentActive;
     Active                     selectActive;
@@ -295,8 +295,8 @@ struct MultiplexedLayout {
 
 /// A regular board: every digit wired alike, `stride` lines a digit.
 struct PerDigit {
-    std::array<Line, Segments> pattern;   ///< the line of segment s within one digit's lines
-    std::uint8_t               stride = Segments;
+    std::array<Line, segments> pattern;   ///< the line of segment s within one digit's lines
+    std::uint8_t               stride = segments;
     FirstDigit                 first;
     Active                     active;
 };
@@ -309,28 +309,28 @@ namespace LayoutDetail {
 
     template<typename L>
     struct Traits {
-        static constexpr bool Layout = false;
+        static constexpr bool layout = false;
     };
 
     template<std::size_t N>
     struct Traits<StaticLayout<N>> {
-        static constexpr bool        Layout      = true;
-        static constexpr bool        Multiplexed = false;
-        static constexpr std::size_t Digits      = N;
+        static constexpr bool        layout      = true;
+        static constexpr bool        multiplexed = false;
+        static constexpr std::size_t digits      = N;
     };
 
     template<std::size_t N>
     struct Traits<MultiplexedLayout<N>> {
-        static constexpr bool        Layout      = true;
-        static constexpr bool        Multiplexed = true;
-        static constexpr std::size_t Digits      = N;
+        static constexpr bool        layout      = true;
+        static constexpr bool        multiplexed = true;
+        static constexpr std::size_t digits      = N;
     };
 
     /// Marks `line` used, stopping the build if it is past `Outputs` or already taken.
     template<std::size_t Outputs>
     constexpr void claim(std::bitset<Outputs>& used,
                          Line                  line) {
-        if(line == NotWired) { return; }
+        if(line == notWired) { return; }
         if(line.index >= Outputs) { segmentDisplayLineIsPastTheLastOutputOfTheBackend(); }
         if(used.test(line.index)) { segmentDisplayOneOutputLineIsWiredTwice(); }
         used.set(line.index);
@@ -343,21 +343,21 @@ namespace LayoutDetail {
 }   // namespace LayoutDetail
 
 template<typename L>
-concept Layout = LayoutDetail::Traits<std::remove_cvref_t<L>>::Layout;
+concept Layout = LayoutDetail::Traits<std::remove_cvref_t<L>>::layout;
 
 template<std::size_t N>
 [[nodiscard]] constexpr StaticLayout<N> perDigit(PerDigit const& p) {
     StaticLayout<N> l{.segment = {}, .active = p.active};
     for(std::size_t slot = 0; slot < N; ++slot) {
         std::size_t const position = p.first == FirstDigit::right ? N - 1 - slot : slot;
-        for(std::size_t s = 0; s < Segments; ++s) {
+        for(std::size_t s = 0; s < segments; ++s) {
             Line const        in    = p.pattern[s];
             std::size_t const index = (slot * p.stride) + in.index;
-            if(in == NotWired) {
-                l.segment[position][s] = NotWired;
+            if(in == notWired) {
+                l.segment[position][s] = notWired;
                 continue;
             }
-            if(index >= NotWired.index) {
+            if(index >= notWired.index) {
                 LayoutDetail::segmentDisplayPerDigitLineDoesNotFitInAByte();
             }
             l.segment[position][s] = Line{index};
@@ -384,7 +384,7 @@ template<std::size_t Outputs,
     std::bitset<Outputs> used{};
     for(auto const line : l.segment) { LayoutDetail::claim(used, line); }
     for(auto const line : l.select) {
-        if(line == NotWired) { LayoutDetail::segmentDisplayEveryDigitNeedsASelectLine(); }
+        if(line == notWired) { LayoutDetail::segmentDisplayEveryDigitNeedsASelectLine(); }
         LayoutDetail::claim(used, line);
     }
     return used;
@@ -398,9 +398,9 @@ template<std::size_t Outputs,
                                                    Digits<N> const&       digits) {
     std::bitset<Outputs> out{};
     for(std::size_t position = 0; position < N; ++position) {
-        for(std::size_t s = 0; s < Segments; ++s) {
+        for(std::size_t s = 0; s < segments; ++s) {
             Line const line = l.segment[position][s];
-            if(line == NotWired) { continue; }
+            if(line == notWired) { continue; }
             bool const lit = ((digits[position] >> s) & 1U) != 0;
             out.set(line.index, LayoutDetail::level(lit, l.active) == Level::high);
         }
@@ -416,10 +416,10 @@ template<std::size_t Outputs,
                                                        Digits<N> const&            digits,
                                                        std::size_t                 position) {
     std::bitset<Outputs> out{};
-    Glyph const          g = position < N ? digits[position] : Blank;
-    for(std::size_t s = 0; s < Segments; ++s) {
+    Glyph const          g = position < N ? digits[position] : blank;
+    for(std::size_t s = 0; s < segments; ++s) {
         Line const line = l.segment[s];
-        if(line == NotWired) { continue; }
+        if(line == notWired) { continue; }
         bool const lit = ((g >> s) & 1U) != 0;
         out.set(line.index, LayoutDetail::level(lit, l.segmentActive) == Level::high);
     }
@@ -438,10 +438,10 @@ template<std::size_t Outputs,
 /// housekeeping each loop turn), `light(Light)` (blink by dimming rather than a blank frame),
 /// `turn()`, and whatever else the Display forwards (`brightness`, `current`).
 template<typename B>
-concept Backend = requires(B& b, std::bitset<B::Outputs> const& bits) {
+concept Backend = requires(B& b, std::bitset<B::outputs> const& bits) {
     typename B::TimePoint;
-    { B::Outputs } -> std::convertible_to<std::size_t>;
-    { B::Scanning } -> std::convertible_to<Scan>;
+    { B::outputs } -> std::convertible_to<std::size_t>;
+    { B::scanning } -> std::convertible_to<Scan>;
     { b.show(bits) } -> std::same_as<bool>;
 };
 
@@ -469,35 +469,35 @@ public:
     using Glyph       = SegmentDisplay::Glyph;
     using Overflow    = SegmentDisplay::Overflow;
 
-    static constexpr std::size_t Count       = Traits::Digits;
-    static constexpr bool        Multiplexed = Traits::Multiplexed;
-    static constexpr std::size_t Outputs     = B::Outputs;
-    using Digits                             = SegmentDisplay::Digits<Count>;
-    using Bits                               = std::bitset<Outputs>;
+    static constexpr std::size_t count       = Traits::digits;
+    static constexpr bool        multiplexed = Traits::multiplexed;
+    static constexpr std::size_t outputs     = B::outputs;
+    using Digits                             = SegmentDisplay::Digits<count>;
+    using Bits                               = std::bitset<outputs>;
 
-    static_assert(Count >= 1,
+    static_assert(count >= 1,
                   "a display has at least one digit");
-    static_assert(!Multiplexed || B::Scanning == Scan::supported,
+    static_assert(!multiplexed || B::scanning == Scan::supported,
                   "scan a multiplexed display from GPIO; over I2C use static wiring");
 
     /// The lines the glass uses; checking the layout against the backend on the way.
-    static constexpr Bits Used = usedLines<Outputs>(LayoutV);
-    static_assert(Used.count() <= Outputs,
+    static constexpr Bits used = usedLines<outputs>(LayoutV);
+    static_assert(used.count() <= outputs,
                   "a display checks its layout whether or not its backend asks for the lines");
 
-    static constexpr std::chrono::microseconds DigitPeriod
+    static constexpr std::chrono::microseconds digitPeriod
       = Kvasir::asDuration<std::chrono::microseconds>(
         KVASIR_CONFIG_OR(Timing, digitPeriod, DefaultDisplayTiming::digitPeriod));
 
     /// How long a blinking display is lit, and dark, unless blink() is told otherwise.
-    static constexpr auto BlinkOn  = std::chrono::milliseconds{400};
-    static constexpr auto BlinkOff = std::chrono::milliseconds{200};
+    static constexpr auto blinkOn  = std::chrono::milliseconds{400};
+    static constexpr auto blinkOff = std::chrono::milliseconds{200};
 
     template<typename... Args>
         requires std::constructible_from<B,
                                          Args&&...>
     explicit Display(Args&&... args) : backend_(std::forward<Args>(args)...) {
-        if constexpr(requires { backend_.lines(Used); }) { backend_.lines(Used); }
+        if constexpr(requires { backend_.lines(used); }) { backend_.lines(used); }
         (void)backend_.show(dark_());
     }
 
@@ -508,26 +508,26 @@ public:
     /// Position 0 is the leftmost digit as read.
     void setDigit(std::size_t position,
                   Glyph       glyph) {
-        if(position < Count) { digits_[position] = glyph; }
+        if(position < count) { digits_[position] = glyph; }
     }
 
     /// `value` with `decimals` digits after the point (SegmentDisplay::number).
     void setNumber(std::int32_t value,
                    std::size_t  decimals = 0,
                    Overflow     overflow = Overflow::dashes) {
-        digits_ = SegmentDisplay::number<Count>(value, decimals, overflow);
+        digits_ = SegmentDisplay::number<count>(value, decimals, overflow);
     }
 
     /// The low `width` hex digits of `value`, right-aligned.
     void setHex(std::uint32_t value,
-                std::size_t   width = Count) {
-        digits_ = SegmentDisplay::hex<Count>(value, width);
+                std::size_t   width = count) {
+        digits_ = SegmentDisplay::hex<count>(value, width);
     }
 
     void blank() { digits_ = Digits{}; }
 
     /// Every digit a dash: a reading that is not there.
-    void dashes() { digits_ = SegmentDisplay::dashes<Count>(); }
+    void dashes() { digits_ = SegmentDisplay::dashes<count>(); }
 
     [[nodiscard]] Digits const& digits() const { return digits_; }
 
@@ -536,8 +536,8 @@ public:
     /// Blink the whole display, `on` lit and `off` dark. Turning it on starts with the dark
     /// half; turning it off lights the display at the next update().
     void blink(Blink                     mode,
-               std::chrono::milliseconds on  = BlinkOn,
-               std::chrono::milliseconds off = BlinkOff) {
+               std::chrono::milliseconds on  = blinkOn,
+               std::chrono::milliseconds off = blinkOff) {
         auto const enable = mode == Blink::on;
         if(enable && !blinking_) { toggle_.stop(); }   // toggles at the next update()
         blinking_ = enable;
@@ -592,19 +592,19 @@ public:
         if constexpr(requires { backend_.light(Light::lit); }) {
             backend_.light(lit_ ? Light::lit : Light::dark);
         } else {
-            static constexpr Digits None{};
-            if(!lit_) { shown = &None; }
+            static constexpr Digits none{};
+            if(!lit_) { shown = &none; }
         }
 
         bool changed = false;
-        if constexpr(Multiplexed) {
+        if constexpr(multiplexed) {
             if(scan_.armed(now)) { return false; }
-            scan_.restart(std::chrono::duration_cast<Duration>(DigitPeriod), now);
-            position_ = (position_ + 1) % Count;
-            (void)backend_.show(scanFrame<Outputs>(LayoutV, *shown, Count));
-            changed = backend_.show(scanFrame<Outputs>(LayoutV, *shown, position_));
+            scan_.restart(std::chrono::duration_cast<Duration>(digitPeriod), now);
+            position_ = (position_ + 1) % count;
+            (void)backend_.show(scanFrame<outputs>(LayoutV, *shown, count));
+            changed = backend_.show(scanFrame<outputs>(LayoutV, *shown, position_));
         } else {
-            changed = backend_.show(frame<Outputs>(LayoutV, *shown));
+            changed = backend_.show(frame<outputs>(LayoutV, *shown));
         }
         if(changed) { ++updates_; }
         return changed;
@@ -626,21 +626,21 @@ public:
 
 private:
     [[nodiscard]] static constexpr Bits dark_() {
-        if constexpr(Multiplexed) {
-            return scanFrame<Outputs>(LayoutV, Digits{}, Count);
+        if constexpr(multiplexed) {
+            return scanFrame<outputs>(LayoutV, Digits{}, count);
         } else {
-            return frame<Outputs>(LayoutV, Digits{});
+            return frame<outputs>(LayoutV, Digits{});
         }
     }
 
     B        backend_;
     Digits   digits_{};
-    Duration on_{std::chrono::duration_cast<Duration>(BlinkOn)};
-    Duration off_{std::chrono::duration_cast<Duration>(BlinkOff)};
+    Duration on_{std::chrono::duration_cast<Duration>(blinkOn)};
+    Duration off_{std::chrono::duration_cast<Duration>(blinkOff)};
     // Stopped = due at once: the next update() toggles / switches to the next digit.
     Kvasir::Deadline<typename TimePoint::clock> toggle_{};
     Kvasir::Deadline<typename TimePoint::clock> scan_{};
-    std::size_t                                 position_{Count - 1};
+    std::size_t                                 position_{count - 1};
     std::uint32_t                               updates_{};
     bool                                        blinking_{};
     bool                                        lit_{true};

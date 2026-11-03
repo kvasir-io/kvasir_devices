@@ -27,13 +27,13 @@ namespace Ads1x15Detail {
 
     /// The positive full scale of each Gain, in microvolts.
     [[nodiscard]] constexpr std::int32_t fullScaleMicroVolt(Gain gain) {
-        constexpr std::array<std::int32_t, 6> Fsr{6'144'000,
+        constexpr std::array<std::int32_t, 6> fsr{6'144'000,
                                                   4'096'000,
                                                   2'048'000,
                                                   1'024'000,
                                                   512'000,
                                                   256'000};
-        return Fsr[static_cast<std::size_t>(gain)];
+        return fsr[static_cast<std::size_t>(gain)];
     }
 
     /// Config for one single-shot conversion of AINn against GND: OS | MUX 100b + n | the
@@ -71,7 +71,7 @@ namespace Ads1115Detail {
 /// by the ADDR pin.
 template<Ads1x15Detail::Gain Gain = Ads1x15Detail::Gain::fsr2V048>
 struct Ads1115 {
-    static constexpr std::string_view Name = "ADS1115";
+    static constexpr std::string_view name = "ADS1115";
     /// TI ADS1115 and ADS1015. The config register (01h) while the description sweeps the four
     /// inputs with single-shot conversions (ADS1115.md:1031..1058): MUX bit 14 set -- an input against
     /// GND, whichever of the four the sweep is at --, PGA 11:9 = 010b, +-2.048 V, which is what the
@@ -80,20 +80,20 @@ struct Ads1115 {
     /// not read this way: its RDATA command and the read after it are two transactions, and a register
     /// read between them would be taken for the conversion result.
     /// What a finished bring-up leaves in the part: read by the hardware test, not the engine.
-    static constexpr std::array AfterBringUp{
+    static constexpr std::array afterBringUp{
       Engine::RegisterCheck{"single-ended-2v048-single-shot", 0x01, 2, true, 0x4F03, 0x4503},
     };
-    static constexpr Address7    Address       = 0x48;
-    static constexpr auto        Addresses     = addressRun<0x48, 4>();
-    static constexpr std::size_t RegisterBytes = 1;
+    static constexpr Address7    address       = 0x48;
+    static constexpr auto        addresses     = addressRun<0x48, 4>();
+    static constexpr std::size_t registerBytes = 1;
 
     /// +FSR, what a code of 0x7FFF + 1 would be.
-    static constexpr MicroVolt FullScale
+    static constexpr MicroVolt fullScale
       = Units::microVolt(Ads1x15Detail::fullScaleMicroVolt(Gain));
 
     struct Sweep {
-        static constexpr auto       Period = std::chrono::milliseconds{100};
-        static constexpr std::array Steps{
+        static constexpr auto       period = std::chrono::milliseconds{100};
+        static constexpr std::array steps{
           Ads1115Detail::start(0, Gain),
           Engine::Step::read({.reg = 0x00, .count = 2, .offset = 0}),
           Ads1115Detail::start(1, Gain),
@@ -110,7 +110,7 @@ struct Ads1115 {
             /// A code at the configured full-scale range: 32768 counts is +FSR.
             [[nodiscard]] static constexpr MicroVolt toVoltage(std::int16_t c) {
                 return Units::microVolt(static_cast<std::int32_t>(
-                  static_cast<std::int64_t>(c) * Units::value(FullScale) / 32768));
+                  static_cast<std::int64_t>(c) * Units::value(fullScale) / 32768));
             }
 
             /// Channel `ch`.

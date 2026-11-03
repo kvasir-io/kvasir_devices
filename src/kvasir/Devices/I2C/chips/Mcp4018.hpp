@@ -24,18 +24,18 @@ namespace Kvasir::I2C::Chips {
 /// modelled, and the datasheet's own figures show it varies with voltage and temperature.
 template<Ohm EndToEnd = Units::ohm(5000)>
 struct Mcp4018 {
-    static constexpr std::string_view Name          = "MCP4018";
-    static constexpr Address7         Address       = 0x2F;
-    static constexpr std::size_t      RegisterBytes = 0;
+    static constexpr std::string_view name          = "MCP4018";
+    static constexpr Address7         address       = 0x2F;
+    static constexpr std::size_t      registerBytes = 0;
 
     /// Fixed; there is no address pin.
-    static constexpr std::array<Address7, 1> Addresses{0x2F};
+    static constexpr std::array<Address7, 1> addresses{0x2F};
 
-    static constexpr std::uint8_t MaxTap = 0x7F;
+    static constexpr std::uint8_t maxTap = 0x7F;
 
     struct Wiper {
-        static constexpr auto       Period = std::chrono::milliseconds{500};
-        static constexpr std::array Steps{Engine::Step::receive({.count = 1, .offset = 0})};
+        static constexpr auto       period = std::chrono::milliseconds{500};
+        static constexpr std::array steps{Engine::Step::receive({.count = 1, .offset = 0})};
 
         struct Sample {
             std::uint8_t tap{};
@@ -44,12 +44,12 @@ struct Mcp4018 {
             /// ignoring wiper resistance. B is VSS on the MCP4018.
             [[nodiscard]] constexpr Ohm resistance() const {
                 return Units::ohm(static_cast<std::uint32_t>(tap) * Units::value(EndToEnd)
-                                  / MaxTap);
+                                  / maxTap);
             }
         };
 
         [[nodiscard]] static constexpr Sample decode(Bytes data) {
-            return {static_cast<std::uint8_t>(data.u8(0) & MaxTap)};
+            return {static_cast<std::uint8_t>(data.u8(0) & maxTap)};
         }
     };
 
@@ -58,11 +58,11 @@ struct Mcp4018 {
     /// application has set a tap it is written again after a reset.
     struct Tap {
         using Value                        = std::uint8_t;
-        static constexpr std::size_t Bytes = 1;
+        static constexpr std::size_t bytes = 1;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            buffer[0] = static_cast<std::byte>(value & MaxTap);
+            buffer[0] = static_cast<std::byte>(value & maxTap);
             return Engine::Step::commandBuffer({.offset = 0, .count = 1});
         }
     };

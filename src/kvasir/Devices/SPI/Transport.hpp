@@ -32,12 +32,12 @@ namespace Kvasir { namespace SPI {
 
     template<typename C>
     concept SpiChip = requires {
-        { C::Name } -> std::convertible_to<std::string_view>;
-        { C::Mode } -> std::convertible_to<Hal::ClockMode>;
-        C::MaxClock;
-    } && (!requires { C::RegisterBytes; } || C::RegisterBytes <= 1);
+        { C::name } -> std::convertible_to<std::string_view>;
+        { C::mode } -> std::convertible_to<Hal::ClockMode>;
+        C::maxClock;
+    } && (!requires { C::registerBytes; } || C::registerBytes <= 1);
 
-    namespace detail {
+    namespace Detail {
 
         template<typename Chip>
         constexpr std::uint8_t readCommand(std::uint8_t reg) {
@@ -86,22 +86,22 @@ namespace Kvasir { namespace SPI {
                 return 0;
             }
         }
-    }   // namespace detail
+    }   // namespace Detail
 
     /// What the engine hands an SPI transport. Outside Transport, so it names nothing but the
     /// callback size: every SPI device of one callback size is on one engine port
-    /// (Engine::detail::PortOf) and shares one Engine - nested, each device's Request was a type of
+    /// (Engine::Detail::PortOf) and shares one Engine - nested, each device's Request was a type of
     /// its own and each device got an Engine copy of its own (1.5-2.2 KB of flash a device).
     ///
     /// The engine puts the register into `prefix` (the queued I2C drivers' shape) and the
     /// payload alone into sendData: the command and the data are two spans here already.
     template<std::size_t CallbackSize>
     struct TransportRequest {
-        static constexpr std::size_t MaxPrefix = 2;
+        static constexpr std::size_t maxPrefix = 2;
 
         std::uint8_t                                     address{};   // unused on SPI
         std::uint8_t                                     prefixBytes{};
-        std::array<std::byte, MaxPrefix>                 prefix{};
+        std::array<std::byte, maxPrefix>                 prefix{};
         std::span<std::byte const>                       sendData{};
         std::span<std::byte>                             receiveData{};
         StaticFunction<void(Bus::Outcome), CallbackSize> callback{};
@@ -109,23 +109,23 @@ namespace Kvasir { namespace SPI {
 
     template<typename Master, typename Cs, SpiChip Chip, std::size_t CallbackCapacity = 16>
     struct Transport {
-        static constexpr std::size_t CallbackSize = CallbackCapacity;
+        static constexpr std::size_t callbackSize = CallbackCapacity;
         using Result                              = Bus::Outcome;
         using MasterT                             = Master;
         /// SPI has no NAK, so nothing to park (Presence), and the queued master times out a
         /// transfer itself (QueueCore), so the engine needs no net of its own; no bridges.
-        static constexpr Engine::EngineFeatures Features{.switchable  = false,
+        static constexpr Engine::EngineFeatures features{.switchable  = false,
                                                          .presence    = false,
                                                          .inFlightNet = false};
 
-        using Request = TransportRequest<CallbackSize>;
+        using Request = TransportRequest<callbackSize>;
 
         /// What the engine asks a transport (Engine/Device.hpp): the log names a part by its
         /// chip-select GPIO, an SPI part has no clock of its own to put into a request.
         template<typename,
                  typename>
         static constexpr std::uint8_t logId() {
-            return detail::csId<Cs>();
+            return Detail::csId<Cs>();
         }
 
         template<typename,
@@ -139,19 +139,19 @@ namespace Kvasir { namespace SPI {
         template<typename>
         static constexpr bool accepts = true;
 
-        static constexpr auto Setup = Master::setup(Chip::Mode, Chip::MaxClock);
+        static constexpr auto setup = Master::setup(Chip::mode, Chip::maxClock);
 
         /// The engine has one step on the wire per device, so command and callback live here.
         static bool submit(Request const& r) {
-            typename Master::Request m{.setup = Setup, .lines = csLines};
+            typename Master::Request m{.setup = setup, .lines = csLines};
             std::size_t              c      = 0;
             bool const               isRead = !r.receiveData.empty();
             if(r.prefixBytes != 0) {
                 auto const reg = std::to_integer<std::uint8_t>(r.prefix[0]);
-                command_[c++]  = std::byte{isRead ? detail::readCommand<Chip>(reg)
-                                                  : detail::writeCommand<Chip>(reg)};
+                command_[c++]  = std::byte{isRead ? Detail::readCommand<Chip>(reg)
+                                                  : Detail::writeCommand<Chip>(reg)};
                 if(isRead) {
-                    for(std::size_t i = 0; i < detail::dummyBytes<Chip>(); ++i) {
+                    for(std::size_t i = 0; i < Detail::dummyBytes<Chip>(); ++i) {
                         command_[c++] = std::byte{0xFF};
                     }
                 }
@@ -177,8 +177,8 @@ namespace Kvasir { namespace SPI {
     private:
         static constexpr Lines csLines = ChipSelect<Cs>::lines;
 
-        inline static std::array<std::byte, 1 + detail::dummyBytes<Chip>()> command_{};
-        inline static StaticFunction<void(Result), CallbackSize>            callback_{};
+        inline static std::array<std::byte, 1 + Detail::dummyBytes<Chip>()> command_{};
+        inline static StaticFunction<void(Result), callbackSize>            callback_{};
     };
 
 }}   // namespace Kvasir::SPI

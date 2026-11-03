@@ -22,9 +22,9 @@ struct Config : TestConfig {
     static constexpr std::size_t recvBufferSize = 300;
 };
 
-constexpr std::size_t  Ep    = 1;
-constexpr std::uint8_t InEp  = 0x81;
-constexpr std::uint8_t OutEp = 0x01;
+constexpr std::size_t  ep    = 1;
+constexpr std::uint8_t inEp  = 0x81;
+constexpr std::uint8_t outEp = 0x01;
 
 /// What has to come out. A struct rather than locals captured by a lambda: clang 23's lifetime analysis takes a
 /// container captured by reference as a borrow of its contents, so every later clear() looked like a use after
@@ -86,7 +86,7 @@ bool run(char const*   name,
         case 3:
         case 4:
             {   // the host reads a packet
-                auto in = Fake::hostIn(Ep);
+                auto in = Fake::hostIn(ep);
                 Host::pump();
                 if(model.inHalted) {
                     check(in.handshake == Fake::Handshake::stall, "a halted endpoint reads STALL");
@@ -96,7 +96,7 @@ bool run(char const*   name,
                 model.reading.insert(model.reading.end(),
                                      in.packet.data.begin(),
                                      in.packet.data.end());
-                if(in.packet.data.size() < Fake::MaxPacket) {
+                if(in.packet.data.size() < Fake::maxPacket) {
                     check(!model.expectedMessages.empty()
                             && model.reading == model.expectedMessages.front(),
                           "a transfer is the oldest message, whole");
@@ -111,7 +111,7 @@ bool run(char const*   name,
                 // Full packets often: they are what a controller that gathers a transfer by
                 // itself keeps to itself until a short one follows.
                 auto const data = pattern(pick(3) == 0 ? 64 : 1 + pick(64), ++counter);
-                auto const hs   = Fake::hostOut(Ep, data);
+                auto const hs   = Fake::hostOut(ep, data);
                 Host::pump();
                 if(hs == Fake::Handshake::ack) {
                     model.expectedBytes.insert(model.expectedBytes.end(), data.begin(), data.end());
@@ -136,7 +136,7 @@ bool run(char const*   name,
                 bool const in     = pick(2) == 0;
                 bool&      halted = in ? model.inHalted : model.outHalted;
                 check(
-                  (halted ? Host::clearHalt(in ? InEp : OutEp) : Host::setHalt(in ? InEp : OutEp))
+                  (halted ? Host::clearHalt(in ? inEp : outEp) : Host::setHalt(in ? inEp : outEp))
                     .ok(),
                   "halt feature");
                 halted = !halted;
@@ -166,9 +166,9 @@ bool run(char const*   name,
     }
 
     // Everything still owed arrives.
-    if(model.inHalted) { check(Host::clearHalt(InEp).ok(), "halt cleared"); }
+    if(model.inHalted) { check(Host::clearHalt(inEp).ok(), "halt cleared"); }
     for(int i = 0; i != 64 && !model.expectedMessages.empty() && failures == before; ++i) {
-        auto const r = Host::bulkIn(Ep);
+        auto const r = Host::bulkIn(ep);
         model.reading.insert(model.reading.end(), r.data.begin(), r.data.end());
         if(r.endedShort) {
             check(model.reading == model.expectedMessages.front(),
