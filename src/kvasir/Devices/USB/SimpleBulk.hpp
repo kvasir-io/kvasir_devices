@@ -103,9 +103,9 @@ private:
     static void setupEndpointsCallback() { DataEndpointHandler::setupEndpointsCallback(); }
 
     static bool setupPacketRequestCallback(SetupPacket const& pkt) {
-        return Detail::handleSetInterface<Derived>(pkt,
-                                                   FirstInterfaceNumber,
-                                                   DataEndpointHandler::restart)
+        return Detail::handleSetInterface<Derived, &DataEndpointHandler::restart>(
+                 pkt,
+                 FirstInterfaceNumber)
             || DataEndpointHandler::setupPacketRequestCallback(pkt);
     }
 

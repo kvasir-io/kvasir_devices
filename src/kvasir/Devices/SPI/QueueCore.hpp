@@ -47,6 +47,15 @@ namespace Kvasir { namespace SPI {
         return hz == 0 ? 0 : (1'024'000'000U + hz - 1U) / hz;
     }
 
+    namespace Detail {
+        /// Every call through a Lines pointer, out of line: its targets are the application's
+        /// select/deselect functions, which only the firmware's stack-bound notes can name
+        /// (`calls Kvasir::SPI::Detail::callLine <its functions>`, cmake/tools/stack_bound.py). The
+        /// SDK's notes cover the rest of QueueCore's indirect calls (the requests' callbacks) and
+        /// not this one, so an image whose notes forget the lines stays a LOWER BOUND.
+        [[gnu::noinline]] inline void callLine(void (*line)()) { line(); }
+    }   // namespace Detail
+
     /// Called from the completion interrupt, so CS goes up the moment the last bit is in.
     /// `select` is also the device's identity for a hold.
     struct Lines {
@@ -484,7 +493,9 @@ namespace Kvasir { namespace SPI {
             }
             if(!overrun && inCommand_ && hasData_(current_.request)) {
                 inCommand_ = false;
-                if(current_.request.lines.between != nullptr) { current_.request.lines.between(); }
+                if(current_.request.lines.between != nullptr) {
+                    Detail::callLine(current_.request.lines.between);
+                }
                 startPhase_(transferOf_(current_.request), current_.request.setup.usPerBitQ10, now);
                 mask_.unlock();
                 return;
@@ -569,8 +580,15 @@ namespace Kvasir { namespace SPI {
         inline static Extras x_{};
 
         // Non-incrementing DMA source/sink: MOSI high while reading, what a write clocks in.
-        alignas(2) inline static std::byte const fillBytes[2]{std::byte{0xFF},
-                                                              std::byte{0xFF}};
+        //
+        // The fill pattern is NOT const, so it lives in RAM. As a constant it sat in flash, and every frame of a read
+        // was a DMA fetch through the XIP cache; a miss stalls the whole DMA for the QSPI transfer, every other
+        // channel included (RP2350 datasheet 4.4.3), so the receive channel stopped draining the 8-frame RX FIFO,
+        // the FIFO overran and dropped a byte, and the transfer then waited for that byte until the request's
+        // timeout failed it. Whether the line got evicted depended on where unrelated code landed: 0 to ~100 failed
+        // requests in the same test from one changed member elsewhere in the image.
+        alignas(2) inline static std::byte fillBytes[2]{std::byte{0xFF},
+                                                        std::byte{0xFF}};
         alignas(2) inline static std::byte sink_[2]{};
 
         /// Microseconds since the transfer on the wire started.
@@ -699,14 +717,14 @@ namespace Kvasir { namespace SPI {
                 setup_      = r.setup;
                 configured_ = true;
             }
-            if(r.lines.prepare != nullptr) { r.lines.prepare(); }
-            if(!continuation && r.lines.select != nullptr) { r.lines.select(); }
+            if(r.lines.prepare != nullptr) { Detail::callLine(r.lines.prepare); }
+            if(!continuation && r.lines.select != nullptr) { Detail::callLine(r.lines.select); }
             ++x_.transfers;
             bool ok = true;
             if(!r.command.empty()) {
                 ok = Hw::transferPolled(commandOf_(r));
                 if(ok && hasData_(r)) {
-                    if(r.lines.between != nullptr) { r.lines.between(); }
+                    if(r.lines.between != nullptr) { Detail::callLine(r.lines.between); }
                     ok = Hw::transferPolled(t);
                 }
             } else {
@@ -714,7 +732,7 @@ namespace Kvasir { namespace SPI {
             }
             if(ok && !r.hold) {
                 x_.deadBus.note(Result::ok, false);
-                if(r.lines.deselect != nullptr) { r.lines.deselect(); }
+                if(r.lines.deselect != nullptr) { Detail::callLine(r.lines.deselect); }
                 holding_ = false;
                 // in place: StaticFunction calls a copy of its captures, and `r` is the caller's
                 inv_.invoke(r.callback, Result::ok);
@@ -784,8 +802,8 @@ namespace Kvasir { namespace SPI {
                 setup_      = r.setup;
                 configured_ = true;
             }
-            if(r.lines.prepare != nullptr) { r.lines.prepare(); }
-            if(!continuation && r.lines.select != nullptr) { r.lines.select(); }
+            if(r.lines.prepare != nullptr) { Detail::callLine(r.lines.prepare); }
+            if(!continuation && r.lines.select != nullptr) { Detail::callLine(r.lines.select); }
 
             active_ = true;
             ++x_.transfers;
@@ -816,12 +834,12 @@ namespace Kvasir { namespace SPI {
                     holder_       = r.lines;
                     holdDeadline_ = Clock::now() + holdTimeout;
                 } else {
-                    if(r.lines.deselect != nullptr) { r.lines.deselect(); }
+                    if(r.lines.deselect != nullptr) { Detail::callLine(r.lines.deselect); }
                     holding_ = false;
                 }
             } else {
                 // A failure ends the device's transaction: the part sees CS go high.
-                if(r.lines.deselect != nullptr) { r.lines.deselect(); }
+                if(r.lines.deselect != nullptr) { Detail::callLine(r.lines.deselect); }
                 holding_ = false;
                 if(haveContinuation_) {
                     haveContinuation_ = false;
@@ -834,7 +852,7 @@ namespace Kvasir { namespace SPI {
         }
 
         static void endHold_() {
-            if(holder_.deselect != nullptr) { holder_.deselect(); }
+            if(holder_.deselect != nullptr) { Detail::callLine(holder_.deselect); }
             holding_ = false;
             holder_  = {};
         }

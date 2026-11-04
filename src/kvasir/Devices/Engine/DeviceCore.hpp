@@ -960,7 +960,11 @@ public:
     /// the port shares one engine. With EngineFeatures::directOps it is a device set of one
     /// (SetOps.hpp) instead: direct calls, no table read -- and an engine per chip type.
     /// A Bus or a DeviceSet drives its parts through the set's dispatch either way.
-    void turn(TimePoint now) {
+    ///
+    /// Out of line, as restart(): the engine's calls through its tables stay in the engine's own
+    /// functions, where the static stack bound's notes (cmake/tools/stack_bound_default.txt) name
+    /// their targets, instead of being inlined into whichever application function drives it.
+    [[gnu::noinline]] void turn(TimePoint now) {
         if constexpr(Port::features.directOps) {
             Detail::Engine<Port, Clock>::turn(*this,
                                               Detail::SetOpsFor<Port, Clock, DeviceCore>{},
@@ -975,7 +979,7 @@ public:
     /// was on the wire is abandoned, a write in flight is owed again, the part counts as
     /// present and is brought up from the start (StartupDelay, the identity, Init), and
     /// everything the application had written is re-sent after it, as after any bring-up.
-    void restart() {
+    [[gnu::noinline]] void restart() {
         // SelfOps whatever the dispatch: a device a Bus or a DeviceSet drives would otherwise
         // pull this chip's whole table, and with it a table engine, into an image that has none.
         Detail::Engine<Port, Clock>::reset(*this, SelfOps{});

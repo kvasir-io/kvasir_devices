@@ -243,12 +243,10 @@ namespace ACM {
                 return false;
             }
             return handleEndpointRequest<Derived, Notification>(pkt)
-                || Detail::handleSetInterface<Derived>(pkt,
-                                                       managementInterface,
-                                                       Notification::restart)
-                || Detail::handleSetInterface<Derived>(pkt,
-                                                       dataInterface,
-                                                       DataEndpointHandler::restart)
+                || Detail::handleSetInterface<Derived, &Notification::restart>(pkt,
+                                                                               managementInterface)
+                || Detail::handleSetInterface<Derived, &DataEndpointHandler::restart>(pkt,
+                                                                                      dataInterface)
                 || DataEndpointHandler::setupPacketRequestCallback(pkt);
         }
 

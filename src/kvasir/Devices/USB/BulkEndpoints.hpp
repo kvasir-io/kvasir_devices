@@ -70,11 +70,11 @@ namespace Kvasir::USB::Detail {
 
 // SET_INTERFACE on one interface: alternate setting 0 is the only one, and selecting it resets the
 // interface's endpoints (restart).
+// Restart is a template argument (a function), so the call is direct.
 template<typename Derived,
-         typename Restart>
+         auto Restart>
 bool handleSetInterface(SetupPacket const& pkt,
-                        std::size_t        interfaceNumber,
-                        Restart            restart) {
+                        std::size_t        interfaceNumber) {
     bool const toInterface = pkt.recipient() == SetupPacket::Recipient::interface;
     if(pkt.type() != SetupPacket::Type::standard || !toInterface
        || pkt.direction() != SetupPacket::Direction::hostToDevice
@@ -83,7 +83,7 @@ bool handleSetInterface(SetupPacket const& pkt,
     {
         return false;
     }
-    restart();
+    Restart();
     Derived::acknowledgeSetupRequest();
     return true;
 }
@@ -181,61 +181,66 @@ struct BulkInEndpoint {
     static inline std::uint32_t                                         messageBytesLeft{};
     static inline bool                                                  messageOpen{false};
 
-    // Hands the next packet to the controller. Runs in the interrupt, or from the application with
-    // the interrupt masked.
+    // Hands the next packets to the controller. Runs in the interrupt, or from the application with
+    // the interrupt masked. One packet a pass, each one handed over freeing its slot for the next, until
+    // the controller has no free buffer or nothing is left: a loop rather than a call per packet (the
+    // static stack bound, cmake/tools/stack_bound.py, would count a recursion once per level).
     static void armNext() {
-        if(halted || restartPending || !Derived::isConfigured()) { return; }
+        while(armOne_()) {}
+    }
+
+    // One packet, or the end of a transfer: true when one was handed over and another may follow.
+    static bool armOne_() {
+        if(halted || restartPending || !Derived::isConfigured()) { return false; }
         // Asked of the controller, not counted: two completions can raise a single interrupt.
         auto const free = EP::freeBuffers();
-        if(std::ranges::none_of(free, std::identity{})) { return; }
+        if(std::ranges::none_of(free, std::identity{})) { return false; }
         if(stagedSize == 0) {
             if constexpr(Framed) {
                 if(!messageOpen) {
-                    if(!messageSizes.popInto(messageBytesLeft)) { return; }
+                    if(!messageSizes.popInto(messageBytesLeft)) { return false; }
                     messageOpen = true;
                 }
             }
             std::size_t size = std::min(ring.size(), transferSize);
             if constexpr(Framed) { size = std::min<std::size_t>(size, messageBytesLeft); }
-            if(size == 0) {
-                endTransfer(free);
-                return;
-            }
+            if(size == 0) { return endTransfer(free); }
             std::span<std::byte> chunk{packets[nextSlot].data(), size};
-            if(!ring.popInto(chunk)) { return; }
+            if(!ring.popInto(chunk)) { return false; }
             stagedSize = size;
             if constexpr(Framed) {
                 messageBytesLeft -= static_cast<std::uint32_t>(size);
                 stagedEndsMessage = messageBytesLeft == 0;
             }
         }
-        if(handOver(stagedSize, free)) {
-            if constexpr(Framed) {
-                // A full last packet leaves the message open until a zero-length packet follows.
-                if(stagedEndsMessage && !endsOnPacketBoundary(stagedSize)) { messageOpen = false; }
-            } else {
-                lastPacketFull = endsOnPacketBoundary(stagedSize);
-            }
-            stagedSize = 0;
-            // The controller has its copy, so the slot is free for the next packet.
-            armNext();
+        if(!handOver(stagedSize, free)) { return false; }
+        if constexpr(Framed) {
+            // A full last packet leaves the message open until a zero-length packet follows.
+            if(stagedEndsMessage && !endsOnPacketBoundary(stagedSize)) { messageOpen = false; }
+        } else {
+            lastPacketFull = endsOnPacketBoundary(stagedSize);
         }
+        stagedSize = 0;
+        // The controller has its copy, so the slot is free for the next packet.
+        return true;
     }
 
     // With nothing left to send: the host sees the end of a transfer in a short packet, so an
-    // empty message, or a transfer whose last packet was full, takes a zero-length packet.
-    static void endTransfer(typename EP::FreeBuffers const& free) {
+    // empty message, or a transfer whose last packet was full, takes a zero-length packet. True
+    // when a framed message's zero-length packet went out (the next message may follow).
+    static bool endTransfer(typename EP::FreeBuffers const& free) {
         if constexpr(Framed) {
             if(messageOpen && handOver(0, free)) {
                 messageOpen = false;
-                armNext();
+                return true;
             }
         } else {
-            if(!endOfTransferPending) { return; }
-            if(lastPacketFull && !handOver(0, free)) { return; }
+            if(!endOfTransferPending) { return false; }
+            if(lastPacketFull && !handOver(0, free)) { return false; }
             endOfTransferPending = false;
             lastPacketFull       = false;
         }
+        return false;
     }
 
     // Hands what is in the current slot to the controller and moves on to the other slot.

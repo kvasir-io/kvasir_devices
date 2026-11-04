@@ -105,7 +105,12 @@ namespace Kvasir { namespace I2C {
         /// it waits, and starts once the block is back (as on the SPI QueueCore).
         static void reset() { reset_(true); }
 
+        /// A request with nothing to send or receive is refused (false, no callback): no block
+        /// finishes one. Failed from the start of the queue instead, its completion would start the
+        /// next request from inside the start of this one - a recursion as deep as the queue, which
+        /// the static stack bound (Kvasir_SDK cmake/tools/stack_bound.py) counts once per level.
         static bool submit(Request const& req) {
+            if(req.sendBytes() + req.receiveData.size() == 0) { return false; }
             mask_.lock();
             // inside the masked window, the push too: submit() also runs from completion callbacks
             // in the ISR, and the queue has one producer only if the two cannot interleave
@@ -648,17 +653,12 @@ namespace Kvasir { namespace I2C {
             // next request after a success -- and each one is the bus seen free.
             Recovery::noteBusFree();
 
+            // Never 0: submit() refuses a request with nothing to transfer, which no block would finish.
             auto const totalBytes
               = currentRequest_.sendBytes() + currentRequest_.receiveData.size();
             auto const started = Clock::now();
             if constexpr(stamped) { x_.stamps.requestStart = started; }
             timeoutTime_ = started + Hw::transferTimeout(totalBytes, currentRequest_);
-
-            // Nothing to transfer: not something a driver asks for, and no block finishes it.
-            if(totalBytes == 0) {
-                complete(Result::failed);
-                return;
-            }
             Hw::start(currentRequest_);
         }
     };

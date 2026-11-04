@@ -1536,60 +1536,68 @@ struct Engine {
     }
 
     /// The step `step_` of the running script: a wait, a question the buffer answers, or a
-    /// transaction on the wire.
+    /// transaction on the wire. A step that needs no transaction (a count of 0, an oracle, an
+    /// identify or a check that passed) goes on to the next one here, in the loop: one frame for
+    /// the whole script rather than one per step (cmake/tools/stack_bound.py would count the
+    /// recursion once per step the longest script has, and could not know how long that is).
     template<typename O>
     static void startStep(State&    e,
                           O const&  ops,
                           TimePoint now) {
-        auto const steps = ops.script(e);
-        e.current_       = steps[e.step_];
-        if(e.running_ == Running::read && e.current_.kind == Step::Kind::read) { ops.sizeRead(e); }
-        if(e.current_.kind == Step::Kind::read && e.current_.counted) {
-            // The count an earlier step of this run read; 0 is nothing to read, so no
-            // transaction and on to the next step.
-            auto const n = e.current_.countIn(ops.buffer(e));
-            if(e.running_ == Running::read) { ops.countRead(e, n); }
-            if(n == 0) {
-                nextStep(e, ops, now);
+        for(;;) {
+            auto const steps = ops.script(e);
+            e.current_       = steps[e.step_];
+            if(e.running_ == Running::read && e.current_.kind == Step::Kind::read) {
+                ops.sizeRead(e);
+            }
+            if(e.current_.kind == Step::Kind::read && e.current_.counted) {
+                // The count an earlier step of this run read; 0 is nothing to read, so no
+                // transaction and on to the next step.
+                auto const n = e.current_.countIn(ops.buffer(e));
+                if(e.running_ == Running::read) { ops.countRead(e, n); }
+                if(n == 0) {
+                    if(advance_(e, ops, now)) { continue; }
+                    return;
+                }
+                e.current_.count = n;
+            }
+            switch(e.current_.kind) {
+            case Step::Kind::wait: wait(e, ops, now, e.current_.delay, true); return;
+            case Step::Kind::oracle:
+                if(!ops.oracle(e)) {
+                    finish(e, ops, now);
+                    return;
+                }
+                if(advance_(e, ops, now)) { continue; }
                 return;
+            case Step::Kind::identify:
+                // The same setup() the end of the bring-up runs, on a State of its own: false
+                // ends the script, and finishInit_ reaches the same verdict.
+                if(!ops.identify(e)) {
+                    finish(e, ops, now);
+                    return;
+                }
+                if(advance_(e, ops, now)) { continue; }
+                return;
+            case Step::Kind::stopUnless:
+                if(!ops.ready(e)) {
+                    finish(e, ops, now);
+                    return;
+                }
+                if(advance_(e, ops, now)) { continue; }
+                return;
+            case Step::Kind::check:
+                if(!ops.ready(e)) {
+                    again(e, ops, now, e.current_.delay);
+                    return;
+                }
+                if(advance_(e, ops, now)) { continue; }
+                return;
+            default: break;
             }
-            e.current_.count = n;
+            e.inFlight_ = submit(e, ops, ops.buffer(e));
+            return;
         }
-        switch(e.current_.kind) {
-        case Step::Kind::wait: wait(e, ops, now, e.current_.delay, true); return;
-        case Step::Kind::oracle:
-            if(ops.oracle(e)) {
-                nextStep(e, ops, now);
-            } else {
-                finish(e, ops, now);
-            }
-            return;
-        case Step::Kind::identify:
-            // The same setup() the end of the bring-up runs, on a State of its own: false
-            // ends the script, and finishInit_ reaches the same verdict.
-            if(ops.identify(e)) {
-                nextStep(e, ops, now);
-            } else {
-                finish(e, ops, now);
-            }
-            return;
-        case Step::Kind::stopUnless:
-            if(ops.ready(e)) {
-                nextStep(e, ops, now);
-            } else {
-                finish(e, ops, now);
-            }
-            return;
-        case Step::Kind::check:
-            if(ops.ready(e)) {
-                nextStep(e, ops, now);
-            } else {
-                again(e, ops, now, e.current_.delay);
-            }
-            return;
-        default: break;
-        }
-        e.inFlight_ = submit(e, ops, ops.buffer(e));
     }
 
     /// The step's delay, then the next step.
@@ -1625,12 +1633,19 @@ public:
     static void nextStep(State&    e,
                          O const&  ops,
                          TimePoint now) {
+        if(advance_(e, ops, now)) { startStep(e, ops, now); }
+    }
+
+private:
+    /// On to the next step: true when there is one, else the script is finished (and false).
+    template<typename O>
+    static bool advance_(State&    e,
+                         O const&  ops,
+                         TimePoint now) {
         ++e.step_;
-        if(e.step_ < ops.script(e).size()) {
-            startStep(e, ops, now);
-        } else {
-            finish(e, ops, now);
-        }
+        if(e.step_ < ops.script(e).size()) { return true; }
+        finish(e, ops, now);
+        return false;
     }
 };
 

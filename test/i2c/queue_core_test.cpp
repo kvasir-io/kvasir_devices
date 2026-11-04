@@ -409,14 +409,15 @@ void callbackSubmitStartsAfterIt() {
 }
 
 void emptyRequest() {
-    testCase("a request with nothing to send or receive completes failed, never on the wire");
+    testCase(
+      "a request with nothing to send or receive is refused: no callback, never on the wire");
     fresh();
     auto e        = read(1);
     e.receiveData = {};
-    Core::submit(e);
-    check(results.size() == 1 && results[0] == std::pair{1, Result::failed}, "failed at once");
+    check(!Core::submit(e), "refused");
+    check(results.empty(), "no callback");
     checkEq(Hw::startCount(), 0, "the block never saw it");
-    check(!Core::submit(read(2)) || Hw::startCount() == 1, "the bus goes on");
+    check(Core::submit(read(2)) && Hw::startCount() == 1, "the bus goes on");
 }
 
 void plainBus() {

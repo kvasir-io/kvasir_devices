@@ -320,6 +320,15 @@ private:
         static bool gateOffline(EngineStateT const& e) { return self_(e).gate_.offline(); }
 
         static bool enabled(std::uint32_t) { return static_cast<bool>(Config::enabled()); }
+
+        /// The application's shared enable, called from here rather than put into the table
+        /// itself: `Config::enabledBy` is a constant, so this is a direct call (a tail call), and
+        /// what the engine calls through DeviceOps::enabled stays a function of the SDK's - the
+        /// stack bound's notes (cmake/tools/stack_bound_default.txt) name every target of the
+        /// engine's tables without knowing the application's functions.
+        static bool enabledBy(std::uint32_t arg) {
+            return static_cast<bool>(Config::enabledBy(arg));
+        }
     };
 
     /// What this device shares with others that have the same: its knobs, one object per
@@ -416,7 +425,7 @@ private:
                   std::is_convertible_v<decltype(Config::enabledBy), Fn>,
                   "Config::enabledBy is a bool(*)(std::uint32_t): the value it is given is "
                   "Config::enabledArg, a std::uint32_t");
-                return Fn{Config::enabledBy};
+                return Fn{&DeviceHooks::enabledBy};
             } else if constexpr(enableable) {
                 return Fn{&DeviceHooks::enabled};
             } else {
