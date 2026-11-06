@@ -19,8 +19,9 @@
 //   static bool transferPolled(Transfer const&); the transfer by the CPU through the FIFOs, masked, nothing on the
 //                  wire; true once every frame is back, false when they stopped moving (bounded; the core aborts).
 //                  With it the core runs short requests polled inside submit() (QueueCore.hpp, `pollUpTo`)
-//   static constexpr bool SupportsWide;          false: no 16-bit frames
-//   static constexpr std::uint32_t MaxFrames;    the DMA's count limit
+//   static constexpr bool supportsWide;          false: no 16-bit frames (QueueCore reads it by this name, default
+//                                                true: a misspelt one is silently ignored)
+//   static constexpr std::uint32_t maxFrames;    the DMA's count limit
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
