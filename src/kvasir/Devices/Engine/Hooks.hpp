@@ -35,8 +35,10 @@
 //   encodeForVerify     item `item` of group w encoded again into the read-back buffer: what to read
 //   verifyMatches       what came back is what was written (the group's verify(), else equal bytes)
 //   applyInitial        group w's items that are not in `known` set to its Initial (a group that has one)
-//   name, registerBytes, initEmpty   the small fields last, together (between the pointers each cost padding):
-//                       the chip's name for the log, 0/1/2 register address bytes, and "sends nothing to come up"
+//   name, registerBytes, initEmpty, initWrites   the small fields last, together (between the pointers each cost
+//                       padding): the chip's name for the log, 0/1/2 register address bytes, "sends nothing to come
+//                       up", and "its Init writes registers" (a part that lost them is brought up again, not only
+//                       written again: Engine::configureAgain)
 //
 // Row kinds: HOOK(name, Result, (args after State&)); HOOK_IF(..., Needs, none) - a device set none of whose chips
 // `Needs` it gets `none` instead of a call; THUNK(name, Result, (args)) - SetOps calls `name##Of<Chip>`; CONST(name,
@@ -80,7 +82,8 @@
     HOOK   (applyInitial,    void,                            (std::uint8_t, std::uint32_t))                    \
     CONST  (name,            std::string_view)                                                                  \
     CONST  (registerBytes,   std::uint8_t)                                                                      \
-    CONST  (initEmpty,       bool)
+    CONST  (initEmpty,       bool)                                                                              \
+    CONST  (initWrites,      bool)
 // clang-format on
 
 /// The parameter list of a hook: the State first, then the row's arguments.

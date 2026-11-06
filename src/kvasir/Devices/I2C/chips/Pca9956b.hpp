@@ -152,15 +152,32 @@ struct Pca9956b {
     /// `set<Mode2>(Pca9956b::ClrErr)`.
     static constexpr std::uint8_t clrErr = 0x10;
 
-    using Pwm     = Block<0x8A>;
-    using Iref    = Block<0xA2>;
-    using PwmAll  = Byte<0x3F, 0x00>;
-    using IrefAll = Byte<0x40, 0x00>;
+    using Pwm  = Block<0x8A>;
+    using Iref = Block<0xA2>;
+
+    /// PWMALL and IREFALL are write only (Tables 18, 19): `readBack` false, a Config's readBackInterval leaves them
+    /// alone. Each writes every PWMn / IREFn, so an application that sets one of these and the block beside it has two
+    /// groups for the same registers, and a read-back of the block sees whichever went out last.
+    struct PwmAll : Byte<0x3F, 0x00> {
+        static constexpr bool readBack = false;
+    };
+
+    struct IrefAll : Byte<0x40, 0x00> {
+        static constexpr bool readBack = false;
+    };
 
     /// MODE2. CLRERR clears itself, so writing the same value again is a new command: every
     /// set goes out. The Initial 0x00 leaves the read-only reserved bits (2:0) to the part.
     struct Mode2 : Byte<0x81, 0x00> {
         static constexpr bool alwaysWrite = true;
+
+        /// A read-back (a Config's readBackInterval) compares the two read/write bits, DMBLNK and OCH (Table 9):
+        /// OVERTEMP and ERROR are flags, CLRERR is write only and clears itself, and the reserved bits 2:0 read 101 -
+        /// 0x05 comes back after 0x00.
+        [[nodiscard]] static constexpr bool verify(Kvasir::Bytes want,
+                                                   Kvasir::Bytes got) {
+            return (want.u8(0) & 0x28U) == (got.u8(0) & 0x28U);
+        }
     };
 
     /// Which outputs the ERROR flag is about. EFLAG0..5 (41h..46h), two bits per channel with

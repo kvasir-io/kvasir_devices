@@ -117,17 +117,36 @@ KVASIR_LOG_SHARED void logIdentityMismatch([[maybe_unused]] std::string_view nam
              mask);
 }
 
-/// A register that does not keep what was written to it, maxRetries times over.
-KVASIR_LOG_SHARED void logVerifyStuck([[maybe_unused]] std::string_view name,
-                                      [[maybe_unused]] std::uint8_t     address,
-                                      [[maybe_unused]] std::uint16_t    reg,
-                                      [[maybe_unused]] std::uint32_t    mismatches) {
+/// A state register read back something else than it was told: the part lost its registers,
+/// and is configured again (Engine::configureAgain). Once per episode (the first mismatch in a
+/// row).
+KVASIR_LOG_SHARED void logRegistersLost([[maybe_unused]] std::string_view name,
+                                        [[maybe_unused]] std::uint8_t     address,
+                                        [[maybe_unused]] std::uint16_t    reg,
+                                        [[maybe_unused]] std::uint32_t    got) {
     UC_LOG_W(
-      "{} at {:#04x}: register {:#04x} will not hold its value "
-      "({} mismatches so far) -- left alone until the next verify",
+      "{} at {:#04x}: register {:#04x} reads {:#x}, not what it was written "
+      "-- the part lost its registers, configuring it again",
       name,
       address,
       reg,
+      got);
+}
+
+/// A register that does not keep what was written to it, maxRetries times over. Once until it
+/// reads back as written again; it is still rewritten at every verify interval.
+KVASIR_LOG_SHARED void logVerifyStuck([[maybe_unused]] std::string_view name,
+                                      [[maybe_unused]] std::uint8_t     address,
+                                      [[maybe_unused]] std::uint16_t    reg,
+                                      [[maybe_unused]] std::uint32_t    got,
+                                      [[maybe_unused]] std::uint32_t    mismatches) {
+    UC_LOG_W(
+      "{} at {:#04x}: register {:#04x} will not hold its value, reads {:#x} "
+      "({} mismatches so far) -- written again at every verify interval, not said again",
+      name,
+      address,
+      reg,
+      got,
       mismatches);
 }
 

@@ -76,12 +76,14 @@ struct Ad7291 {
         return out;
     }
 
-    /// Write-only, so there is nothing to read back and nothing to verify. Rewritten every
-    /// five seconds instead, which is what Period on a write group does.
+    /// Write-only, so there is nothing to read back and nothing to verify (`readBack`: a
+    /// Config's readBackInterval leaves it alone). Rewritten every five seconds instead, which
+    /// is what Period on a write group does.
     struct Command {
-        using Value                         = std::uint16_t;
-        static constexpr std::size_t bytes  = 2;
-        static constexpr auto        period = std::chrono::seconds{5};
+        using Value                           = std::uint16_t;
+        static constexpr std::size_t bytes    = 2;
+        static constexpr auto        period   = std::chrono::seconds{5};
+        static constexpr bool        readBack = false;
 
         static constexpr Value initial = static_cast<std::uint16_t>(
           (static_cast<unsigned>(mirrored(ChannelMask)) << 8)

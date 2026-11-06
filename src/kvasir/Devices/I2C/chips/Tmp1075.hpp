@@ -134,6 +134,14 @@ struct Tmp1075 {
             putBe16(buffer, 0, raw);
             return Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 2});
         }
+
+        /// A read-back (a Config's readBackInterval) compares the fields, bits 14:8: OS "Read
+        /// returns 0" (Table 7-8) whatever started the conversion, and the low byte, "Not used"
+        /// (reset FFh), does not keep the 0 written there -- parts read 0x00FF back after 0x0000.
+        [[nodiscard]] static constexpr bool verify(Kvasir::Bytes want,
+                                                   Kvasir::Bytes got) {
+            return (want.u8(0) & 0x7FU) == (got.u8(0) & 0x7FU);
+        }
     };
 
     /// TLOW then THIGH: set<Limits>(Tmp1075<>::Low, Units::centiDegC(7500)).

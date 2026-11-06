@@ -56,7 +56,15 @@
 ///   verify(Kvasir::Bytes written, Kvasir::Bytes readBack) -- what counts as a
 ///                    match, when bytewise equality does not (a self-clearing bit, a status
 ///                    bit sharing the byte). Spell the type out: the group's own Bytes member
-///                    shadows it. A mismatch rewrites the item, at most maxRetries times.
+///                    shadows it. A mismatch of a state has the part configured again (it
+///                    lost its registers; bringUps() counts it): brought up again when the
+///                    chip's Init writes registers, else every write group written again in
+///                    the order of Writes. A mismatch of a Transient command sends that item
+///                    again. Either at most maxRetries times in a row.
+///   readBack      -- whether the Config's readBackInterval (EngineDefaults) reads this group
+///                    back: false for a register that does not read back as written, true for
+///                    a part without registers that returns what it was sent. Unsaid: a state
+///                    written in one transaction to a register is read back.
 ///
 /// What a cyclic read group may add beyond Period/Steps/Sample/decode:
 ///   prepare()     -- may return a std::size_t instead of void: how many bytes this run
@@ -101,10 +109,25 @@
 /// The chip descriptions are in chips/.
 namespace Kvasir::Engine {
 
+namespace Detail {
+    /// The Config's readBackInterval / readBackDelay (EngineDefaults) as the DeviceCore takes them.
+    template<typename Config>
+    constexpr ReadBackTiming readBackOf() {
+        std::chrono::milliseconds const interval = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config, readBackInterval, EngineDefaults::readBackInterval));
+        std::chrono::milliseconds const delay = Kvasir::asDuration(
+          KVASIR_CONFIG_OR(Config, readBackDelay, EngineDefaults::readBackDelay));
+        if(interval.count() <= 0) { return {}; }
+        return {.delayMs    = static_cast<std::uint32_t>(delay.count()),
+                .intervalMs = static_cast<std::uint32_t>(interval.count())};
+    }
+}   // namespace Detail
+
 /// The driver. `Chip` is the description (chips/); `Config` may set `address`, the presence
 /// knobs (Presence.hpp PresenceDefaults: absentAfterNaks, probeInterval, probeIntervalMax) and the
 /// engine's own (DeviceConfig.hpp EngineDefaults: maxRetries, faultBackoff, faultBackoffLongest,
-/// faultBackoffResetOn, faultsBeforeReinit, inFlightTimeout, unidentifiedRetry) - lowerCamel: a
+/// faultBackoffResetOn, faultsBeforeReinit, inFlightTimeout, unidentifiedRetry, readBackInterval,
+/// readBackDelay) - lowerCamel: a
 /// member spelled otherwise is not read, and the default applies without a word; `Reset` is a line
 /// with hold()/release() (any GPIO reset callable) for a chip that declares ResetLow/ResetSettle.
 ///
@@ -121,10 +144,17 @@ template<typename Transport,
          typename Gate   = NoGate>
     requires Transport::template
 accepts<ChipT> struct Device
-  : DeviceCore<Detail::PortOf<Transport>, Clock, ChipT, Detail::confirmsOf<ChipT, Config>()>
+  : DeviceCore<Detail::PortOf<Transport>,
+               Clock,
+               ChipT,
+               Detail::confirmsOf<ChipT, Config>(),
+               Detail::readBackOf<Config>()>
   , Detail::ForwardClaims<Reset> {   // the reset line's pin claim, if any, becomes the device's
-    using Core
-      = DeviceCore<Detail::PortOf<Transport>, Clock, ChipT, Detail::confirmsOf<ChipT, Config>()>;
+    using Core = DeviceCore<Detail::PortOf<Transport>,
+                            Clock,
+                            ChipT,
+                            Detail::confirmsOf<ChipT, Config>(),
+                            Detail::readBackOf<Config>()>;
     /// The transport this device is on (I2C/Device.hpp, SPI/Transport.hpp): it states the log
     /// id, the part's own clock and whether requests carry it; the device asks nothing else.
     using TransportT   = Transport;

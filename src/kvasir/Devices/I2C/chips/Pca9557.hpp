@@ -27,6 +27,13 @@ namespace Kvasir::I2C::Chips {
 /// inputs read straight sets `Polarity` to 0x00 once and the engine keeps it there. They are
 /// restored in the order Output, Direction, Polarity, so a replay after a reset never
 /// drives a pin from a stale latch. 0x18..0x1F by A2..A0.
+///
+/// A pulse on RESET puts all three back at their reset values (Output 0x00, Polarity 0xF0,
+/// Configuration 0xFF: Tables 7-5..7-7). A long one shows as NAKs, and the part is brought up
+/// again when it answers; one too short for that leaves it answering with every pin an input
+/// and the upper four read inverted, and nothing on the bus says so. All three read back as
+/// written, so a Config's readBackInterval (EngineDefaults) is what finds it and writes them
+/// again.
 struct Pca9557 {
     static constexpr std::string_view name          = "PCA9557";
     static constexpr Address7         address       = 0x18;

@@ -204,6 +204,21 @@ struct Tmp117 {
             putBe16(buffer, 0, raw);
             return Engine::Step::writeBuffer({.reg = 0x01, .offset = 0, .count = 2});
         }
+
+        /// A read-back (a Config's readBackInterval) compares what the part keeps of a write, bits 11:2 (Table 7-6):
+        /// 15:12 are flags (HIGH_Alert, LOW_Alert, Data_Ready, EEPROM_Busy - a finished conversion sets Data_Ready, so
+        /// 0x2220 comes back after 0x0220), Soft_Reset "will always read back 0" and bit 0 is not used. A one-shot (MOD
+        /// 11) "goes to the low-power shutdown mode" after its conversion (7.4.3), so MOD 01 is what it may read then.
+        [[nodiscard]] static constexpr bool verify(Kvasir::Bytes want,
+                                                   Kvasir::Bytes got) {
+            constexpr std::uint16_t kept = 0x0FFCU;
+            constexpr std::uint16_t mod  = 0x0C00U;
+            auto const              w    = static_cast<std::uint16_t>(want.be16(0) & kept);
+            auto const              g    = static_cast<std::uint16_t>(got.be16(0) & kept);
+            if(w == g) { return true; }
+            return (w & mod) == mod && (g & mod) == 0x0400U
+                && (w & ~mod & kept) == (g & ~mod & kept);
+        }
     };
 
     /// THIGH then TLOW, in the same format as the result register.

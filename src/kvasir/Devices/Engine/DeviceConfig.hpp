@@ -60,6 +60,18 @@ struct EngineDefaults {
     /// the description anyway, with identified() false, for a board that must talk to a part
     /// whose id it does not know.
     static constexpr auto unidentifiedRetry = std::chrono::seconds{1};
+    /// Read every write group the chip can read back (Detail::readsBack: a state, one transaction, a register, or
+    /// what the group's `readBack` says) this often, and readBackDelay after each write. A part that was reset
+    /// without dropping off the bus -- its reset pin pulsed, a supply dip it rode through -- answers on with its
+    /// power-up registers, and nothing but a read-back can tell. A register that does not hold what it was written
+    /// has the part configured again, and bringUps() counts it: brought up again when the chip's Init writes
+    /// registers, else every write group written again in the description's order (Engine::configureAgain). A
+    /// group's own VerifyDelay / VerifyInterval stand where it states them. 0: only the groups that ask are read
+    /// back. Only for a chip whose registers read back as written: one that does not (a write-only or
+    /// self-clearing register, a status bit in the byte) says so first (`readBack = false`, or a `verify()`), or
+    /// it is configured again at every interval.
+    static constexpr auto readBackInterval = std::chrono::milliseconds{0};
+    static constexpr auto readBackDelay    = std::chrono::milliseconds{100};
 };
 
 /// No gate: the device may talk whenever the engine wants it to, which is every device that

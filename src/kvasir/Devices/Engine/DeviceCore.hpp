@@ -132,9 +132,15 @@ namespace Detail {
 
 /// Everything of a Device that depends on the chip alone: slots, buffers, the chip's State, the
 /// application's API and the engine's Ops. Devices of one chip on one port type (PortOf) with
-/// equal `Confirms` (detail::confirmsOf, it sizes the slots) share it; the rest is DeviceOps.
+/// equal `Confirms` (detail::confirmsOf, it sizes the slots) and equal `ReadBack` (the Config's
+/// readBackInterval / readBackDelay: which write groups carry read-back state) share it; the rest
+/// is DeviceOps.
 
-template<typename Port, typename Clock, typename ChipT, auto Confirms>
+template<typename Port,
+         typename Clock,
+         typename ChipT,
+         auto                   Confirms,
+         Detail::ReadBackTiming ReadBack = Detail::ReadBackTiming{}>
 struct DeviceCore : Detail::EngineState<Port, Clock> {
     /// A Bus's device set calls this chip's hooks directly (SetOps.hpp).
     template<typename, typename, Detail::SetFlags, typename...>
@@ -231,6 +237,52 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
     /// Each read group's ConfirmChange (from `Confirms`).
     template<typename G>
     static constexpr std::uint8_t confirmChange = Confirms[Detail::IndexOf<G, Reads>::value];
+
+    /// Write group G is read back because the Config reads back every group that can be
+    /// (`ReadBack`, detail::readsBack). Never a Transient one: a command whose completion its
+    /// description reads back (a calibration) is not a state to look at again later.
+    template<typename G>
+    static constexpr bool configReadsBack
+      = ReadBack.intervalMs != 0 && Detail::readsBack<G, Chip::registerBytes>();
+
+    /// Write group G is read back after its writes: its description asks (VerifyDelay /
+    /// VerifyInterval), or the Config's read-back takes it in.
+    template<typename G>
+    static constexpr bool verifies = Detail::Verifies<G> || configReadsBack<G>;
+
+    /// How long after a write G is read back, and how often again: the description's where it
+    /// states them, the Config's read-back for what it leaves out.
+    template<typename G>
+    static constexpr std::uint32_t verifyDelayMs
+      = Detail::HasVerifyDelay<G> ? static_cast<std::uint32_t>(Detail::verifyDelayOf<G>().count())
+                                  : (configReadsBack<G> ? ReadBack.delayMs : 0U);
+
+    template<typename G>
+    static constexpr std::uint32_t verifyIntervalMs
+      = Detail::HasVerifyInterval<G>
+        ? static_cast<std::uint32_t>(Detail::verifyIntervalOf<G>().count())
+        : (configReadsBack<G> ? ReadBack.intervalMs : 0U);
+
+    /// Some write group is read back: the Device carries the read-back buffers (VerifyBufs).
+    static constexpr bool anyVerify = [] {
+        bool any = false;
+        Detail::forEach<Writes>([&](auto i) {
+            any = any || verifies<typename Detail::Nth<Writes>::template type<decltype(i)::value>>;
+        });
+        return any;
+    }();
+
+    /// The widest group that is read back: what the read-back buffers hold.
+    static constexpr std::size_t maxVerifyBytes = [] {
+        std::size_t n = 0;
+        Detail::forEach<Writes>([&](auto i) {
+            using G = typename Detail::Nth<Writes>::template type<decltype(i)::value>;
+            if constexpr(verifies<G>) {
+                n = static_cast<std::size_t>(G::bytes) > n ? static_cast<std::size_t>(G::bytes) : n;
+            }
+        });
+        return n;
+    }();
 
     /// A NAK is the part still waking: resubmit it this often, this long apart, before it counts.
     static constexpr std::uint8_t wakeRetries
@@ -339,7 +391,7 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
 
     template<typename G>
     struct WriteSlot
-      : std::conditional_t<Detail::Verifies<G>,
+      : std::conditional_t<verifies<G>,
                            Detail::VerifiedWriteSlotBase<Clock>,
                            Detail::WriteSlotBase<Clock>> {
         static constexpr std::size_t items = Detail::itemsOf<G>();
@@ -376,9 +428,9 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
             infos[decltype(i)::value] = Detail::WriteGroupInfo{
               .allItems         = WriteSlot<W>::allItems,
               .periodMs         = static_cast<std::uint32_t>(periodOf<W>().count()),
-              .verifyDelayMs    = static_cast<std::uint32_t>(Detail::verifyDelayOf<W>().count()),
-              .verifyIntervalMs = static_cast<std::uint32_t>(Detail::verifyIntervalOf<W>().count()),
-              .verifies         = Detail::Verifies<W>,
+              .verifyDelayMs    = verifyDelayMs<W>,
+              .verifyIntervalMs = verifyIntervalMs<W>,
+              .verifies         = verifies<W>,
               .initial          = Detail::HasInitial<W>,
               .transient        = Detail::HasTransient<W>};
         });
@@ -427,7 +479,7 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
                     W::applied(std::get<idx>(d.writes_).values[item], d.state_);
                 };
             }
-            if constexpr(Detail::Verifies<W>) {
+            if constexpr(verifies<W>) {
                 // A read-back compares one register against one encoded payload; a
                 // multi-transaction item has no single register to read back from. groupOk()
                 // rejects the combination -- this says why here, at the place that relies on it.
@@ -448,7 +500,15 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
                         wrote = W::encode(s.values[0], std::span<std::byte>{s.buf});
                     }
                     if(wrote.count == 0) { return {}; }
-                    constexpr std::size_t maxBytes = Detail::maxVerifyBytesOf<Writes>();
+                    if constexpr(!Detail::Verifies<W> && !Detail::HasReadBack<W>
+                                 && registerBytes != 0)
+                    {
+                        // Taken in by the Config's read-back as a register write: a command to a chip that has
+                        // registers (a UBX frame into a receiver's stream) is none, and a bare read would take
+                        // whatever the part sends next for what it was told.
+                        if(!wrote.hasRegister) { return {}; }
+                    }
+                    constexpr std::size_t maxBytes = maxVerifyBytes;
                     auto const            n = static_cast<std::size_t>(wrote.count) > maxBytes
                                               ? maxBytes
                                               : static_cast<std::size_t>(wrote.count);
@@ -491,8 +551,6 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
         return n == 0 ? std::size_t{1} : n;
     }();
 
-    static constexpr bool anyVerify = Detail::anyVerifies<Writes>();
-
     /// Whether this chip needs a hook at all (SetOps): a hook no chip of a Bus's device set
     /// needs is a constant there, and the engine's path behind it folds away at compile time.
     template<typename P>
@@ -511,10 +569,9 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
     static constexpr bool needsReady = anyRead_([]<typename G>() { return Detail::HasReady<G>; });
     static constexpr bool needsDynamicPeriod
       = anyRead_([]<typename G>() { return Detail::HasDynamicPeriod<G>; });
-    static constexpr bool        needsOracle    = hasIdentity;
-    static constexpr bool        needsVerify    = anyVerify;
-    static constexpr bool        needsInitial   = Detail::anyInitial<Writes>();
-    static constexpr std::size_t maxVerifyBytes = Detail::maxVerifyBytesOf<Writes>();
+    static constexpr bool needsOracle  = hasIdentity;
+    static constexpr bool needsVerify  = anyVerify;
+    static constexpr bool needsInitial = Detail::anyInitial<Writes>();
 
     // A read-back is addressed by the register the write went to; on a chip without registers
     // (an I2C switch, a DAC with one word) it is a bare read of as many bytes as were written,
@@ -926,6 +983,11 @@ private:
         static constexpr std::uint8_t     registerBytes
           = static_cast<std::uint8_t>(DeviceCore::registerBytes);
         static constexpr bool initEmpty = initSteps.empty();
+        /// The Init tells the part something (a payload, not a bare pointer set): a part that lost
+        /// its registers needs it again (Engine::configureAgain).
+        static constexpr bool initWrites = std::ranges::any_of(initSteps, [](Step const& s) {
+            return s.kind == Step::Kind::write && s.count != 0;
+        });
     };
 
     /// The hooks the engine's reset() needs, called directly (restart() runs it outside any
@@ -1032,8 +1094,9 @@ public:
     [[nodiscard]] bool offline() const { return link() == Link::offline; }
 
     /// Bring-ups finished since power-up. It steps whenever the device is configured again --
-    /// a probe that found the part back, the fault threshold, a reset -- which is when anything
-    /// the application set up on the part beyond the engine's own write groups is owed again.
+    /// a probe that found the part back, the fault threshold, a reset, a read-back that found
+    /// the part had lost its registers -- which is when anything the application set up on the
+    /// part beyond the engine's own write groups is owed again.
     [[nodiscard]] std::uint16_t bringUps() const { return bringUps_; }
 
     /// True once per bring-up for the reader that keeps `seen`: the place to redo whatever the
@@ -1440,7 +1503,7 @@ public:
     /// Read-backs of write group W that did not match what was written.
     template<typename W>
     [[nodiscard]] std::uint32_t mismatches() const
-        requires(Detail::Verifies<W>)
+        requires(verifies<W>)
     {
         return std::get<WriteSlot<W>>(writes_).verify.mismatches;
     }
@@ -1581,7 +1644,7 @@ private:
         if constexpr(I >= Writes::size) {
             std::unreachable();
         } else {
-            if constexpr(Detail::Verifies<typename Detail::Nth<Writes>::template type<I>>) {
+            if constexpr(verifies<typename Detail::Nth<Writes>::template type<I>>) {
                 if(w == I) { return std::get<I>(writes_); }
             }
             return verifySlot_<I + 1>(w);

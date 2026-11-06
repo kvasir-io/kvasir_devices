@@ -1037,6 +1037,74 @@ void limitsReadBack() {
           "TCRIT again");
 }
 
+/// A Config's read-back of every write group (EngineDefaults::readBackInterval).
+struct ReadBackAll {
+    static constexpr std::chrono::milliseconds readBackInterval{200};
+    static constexpr std::chrono::milliseconds readBackDelay{10};
+};
+
+// TMP117 / TMP119 (Table 7-6 of either): the flags in 15:12, Soft_Reset and bit 0 are not what was written; a one-shot
+// reads back as shutdown once its conversion is over.
+static_assert([] {
+    using C       = Chips::Tmp117::Config;
+    auto const be = [](std::uint16_t v) {
+        return frame(static_cast<std::uint8_t>(v >> 8), static_cast<std::uint8_t>(v));
+    };
+    auto const ok = [&](std::uint16_t want, std::uint16_t got) {
+        auto const w = be(want);
+        auto const g = be(got);
+        return C::verify(Kvasir::Bytes{w}, Kvasir::Bytes{g});
+    };
+    return ok(0x0220, 0x2220)     // Data_Ready set by a finished conversion
+        && ok(0x0220, 0xF223)     // every flag, Soft_Reset and bit 0
+        && !ok(0x0220, 0x0200)    // AVG lost
+        && !ok(0x0220, 0x0620)    // shutdown, though continuous was written
+        && ok(0x0C20, 0x0420)     // a one-shot over: shutdown
+        && ok(0x0C20, 0x0C20)     // still converting
+        && !ok(0x0C20, 0x0400);   // a one-shot whose averaging was lost
+}());
+
+void tmp1075ConfigReadBack() {
+    I2cCase testcase{
+      "TMP1075: a Config's read-back takes its configuration as it reads: OS 0, the unused byte "
+      "FFh"};
+    RegisterModel<1, 2> t75{0x48};
+    t75.set(0x0F, {0x75, 0x00});
+    t75.set(0x00, {0x19, 0x00});
+    t75.set(0x01, {0x00, 0xFF});
+    t75.readOnly = {0x00, 0x0F};
+    // Table 7-8: OS "Read returns 0"; the low byte, "Not used", keeps its FFh whatever is written.
+    t75.onWrite = [&](std::uint32_t reg, std::array<std::uint8_t, 2> const& v) {
+        if(reg == 0x01) { t75.set(0x01, {static_cast<std::uint8_t>(v[0] & 0x7FU), 0xFF}); }
+    };
+    FakeBus::respond = std::ref(t75);
+    using T          = Chips::Tmp1075<>;
+    Dev<T, ReadBackAll> tt{};
+    static_assert(Dev<T, ReadBackAll>::verifies<T::Config>);
+    check(runUntil(tt, [&] { return tt.samples() == 1; }, 500ms), "up");
+    Log::reset();
+    tt.modify<T::Config>([](auto& c) {
+        c.rate    = T::Rate::ms110;
+        c.oneShot = T::OneShot::start;
+    });
+    check(runUntil(tt, [&] { return (t75.word(0x01) & 0x7F00U) == 0x4000U; }, 200ms), "written");
+    runFor(tt, 1000ms);   // five read-back intervals
+    checkEq(tt.mismatches<T::Config>(), 0U, "0x40FF read back after 0xC000 written is no mismatch");
+    checkEq(Log::warnings, 0, "and nothing said");
+    auto const ups = tt.bringUps();
+
+    testcase.step("TMP1075: a field it lost is a part that lost its registers");
+    t75.set(0x01, {0x00, 0xFF});   // its reset value: the rate back at 27.5 ms
+    check(runUntil(
+            tt,
+            [&] { return (t75.word(0x01) & 0x7F00U) == 0x4000U; },
+            400ms),
+          "written again within one interval");
+    checkEq(tt.mismatches<T::Config>(), 1U, "one mismatch");
+    checkEq(tt.bringUps(), ups + 1, "counted as configured again");
+    checkEq(Log::warnings, 1, "said once");
+}
+
 void mcp9808() {
     I2cCase const       testcase{"MCP9808"};
     RegisterModel<1, 2> c{0x18};
@@ -1331,6 +1399,7 @@ void mpl3115a2() {
 
 int main() {
     limitsReadBack();
+    tmp1075ConfigReadBack();
     bme280();
     sht3x();
     aht20();

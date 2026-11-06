@@ -292,6 +292,11 @@ struct VerifySlot<true, TP> {
     TP                         due{};
     std::uint32_t              mismatches{};
     std::uint8_t               tries{};   ///< consecutive rewrites of the same item
+    /// "Lost its registers" and "will not hold its value" were logged and no read-back has
+    /// matched since: a register that never holds its value says each once, not at every
+    /// interval.
+    bool lostLogged{};
+    bool stuckLogged{};
 };
 
 /// A write group's slot when it reads back: the engine's read-back flow works on this,
@@ -905,9 +910,52 @@ struct Engine {
         }
     }
 
-    /// The read-back came in: compare it against what was written. A mismatch re-dirties
-    /// the item, bounded by maxRetries so a bit that cannot hold its value is not rewritten
-    /// for ever.
+    /// A state register did not read back what it was told: the part lost its registers (reset
+    /// without dropping off the bus, or a supply dip it rode through) and is configured again
+    /// -- everything it was told, not just the register that showed it, and bringUps() counts
+    /// it, since whatever the application set up beyond the write groups is lost too. A chip
+    /// whose Init writes registers (a power mode, a config load) is brought up again: that is
+    /// state no write group restores. Any other chip keeps its bring-up and has its write groups
+    /// written again as a bring-up would (scheduleWrites): in the order of Writes, so an
+    /// expander's output latch is back before its directions drive the pins; a Transient group
+    /// is a command, not a state, and is not. Either way no sample taken from the reset part
+    /// stands: valid() waits for one read after it.
+    template<typename O>
+    static void configureAgain(State&   e,
+                               O const& ops) {
+        ops.forgetSamples(e);
+        if(initWrites_(ops, e)) {
+            // the next turn begins the Init (step: Phase::run, not up); its end counts the
+            // bring-up and owes every write group again
+            e.up_ = false;
+            return;
+        }
+        ++e.bringUps_;
+        for(std::uint8_t w = 0; w < static_cast<std::uint8_t>(writes_(ops, e).size()); ++w) {
+            if(writes_(ops, e)[w].transient) { continue; }
+            auto& s = ops.writeSlot(e, w);
+            // `known`: what the chip holds or is owed. An item never set and without an Initial
+            // was never told anything, and must not be told a default-constructed Value now.
+            if(s.known != 0) { s.dirty.fetch_or(s.known, std::memory_order_relaxed); }
+        }
+    }
+
+    /// What the read-back on the wire returned, its first four bytes big-endian: for the log.
+    template<typename O>
+    [[nodiscard]] static std::uint32_t readBackWord(State&   e,
+                                                    O const& ops) {
+        auto const  got = ops.buffer(e);
+        std::size_t n   = got.size() < 4U ? got.size() : 4U;
+        if(e.current_.count < n) { n = e.current_.count; }
+        std::uint32_t v = 0;
+        for(std::size_t i = 0; i < n; ++i) { v = (v << 8U) | static_cast<std::uint8_t>(got[i]); }
+        return v;
+    }
+
+    /// The read-back came in: compare it against what was written. A mismatch of a state has
+    /// the part configured again (configureAgain); one of a Transient command (a calibration
+    /// that has not finished) sends that item again. Either is bounded by maxRetries, so a bit
+    /// that cannot hold its value is not rewritten for ever.
     template<typename O>
     static void finishVerify(State&    e,
                              O const&  ops,
@@ -923,17 +971,35 @@ struct Engine {
                 auto& s = ops.verifySlot(e, w);
                 if(ops.verifyMatches(e, w)) {
                     s.verify.unverified.fetch_and(~(1U << e.item_), std::memory_order_relaxed);
-                    s.verify.tries = 0;
+                    s.verify.tries       = 0;
+                    s.verify.lostLogged  = false;
+                    s.verify.stuckLogged = false;
                 } else {
                     ++s.verify.mismatches;
+                    auto const got = readBackWord(e, ops);
                     if(s.verify.tries < e.dev_->knobs.maxRetries) {
+                        if(gi.transient) {
+                            s.dirty.fetch_or(1U << e.item_, std::memory_order_relaxed);
+                        } else {
+                            if(!s.verify.lostLogged) {
+                                s.verify.lostLogged = true;
+                                logRegistersLost(name_(ops, e),
+                                                 e.dev_->address,
+                                                 e.current_.reg,
+                                                 got);
+                            }
+                            configureAgain(e, ops);
+                        }
                         ++s.verify.tries;
-                        s.dirty.fetch_or(1U << e.item_, std::memory_order_relaxed);
                     } else {
-                        logVerifyStuck(name_(ops, e),
-                                       e.dev_->address,
-                                       e.current_.reg,
-                                       static_cast<std::uint32_t>(s.verify.mismatches));
+                        if(!s.verify.stuckLogged) {
+                            s.verify.stuckLogged = true;
+                            logVerifyStuck(name_(ops, e),
+                                           e.dev_->address,
+                                           e.current_.reg,
+                                           got,
+                                           static_cast<std::uint32_t>(s.verify.mismatches));
+                        }
                         s.verify.unverified.fetch_and(~(1U << e.item_), std::memory_order_relaxed);
                         s.verify.tries = 0;
                     }
@@ -972,8 +1038,14 @@ struct Engine {
         // Re-encode to recover the register and the bytes that were sent.
         auto const r = ops.encodeForVerify(e, w, item);
         if(r.count == 0) {
-            // a bare pointer set: there is nothing to read back
-            s.verify.unverified.fetch_and(~(1U << item), std::memory_order_relaxed);
+            // Nothing to read back (a bare pointer set, a command): not owed. Once no item is left the periodic look
+            // waits for its interval again, or it would start over at every turn and the device never rest.
+            auto const left
+              = s.verify.unverified.fetch_and(~(1U << item), std::memory_order_relaxed)
+              & ~(1U << item);
+            if(left == 0 && gi.verifyIntervalMs != 0) {
+                s.verify.due = now + ms(gi.verifyIntervalMs);
+            }
             return false;
         }
         e.running_ = Running::verify;

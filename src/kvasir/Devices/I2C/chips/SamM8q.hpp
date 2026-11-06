@@ -169,9 +169,12 @@ struct UbloxM8 {
         constexpr bool operator==(Protocols const&) const = default;
     };
 
+    /// The three configuration frames below are UBX commands into the receiver's input: a read returns its output
+    /// stream, never what it was told (`readBack` false: a Config's readBackInterval leaves them alone).
     struct Port {
-        using Value                        = Protocols;
-        static constexpr std::size_t bytes = 28;
+        using Value                           = Protocols;
+        static constexpr std::size_t bytes    = 28;
+        static constexpr bool        readBack = false;
         static constexpr Value       initial
           = {.in = Kvasir::Gnss::Ublox::protoUbx, .out = Kvasir::Gnss::Ublox::protoUbx};
 
@@ -202,8 +205,9 @@ struct UbloxM8 {
         using Value = std::uint8_t;
         static constexpr bool perPort
           = static_cast<bool>(KVASIR_CONFIG_OR(Timing, messageRatePerPort, false));
-        static constexpr std::size_t bytes   = perPort ? 16 : 11;
-        static constexpr Value       initial = 1;
+        static constexpr std::size_t bytes    = perPort ? 16 : 11;
+        static constexpr Value       initial  = 1;
+        static constexpr bool        readBack = false;
 
         [[nodiscard]] static constexpr auto frame(Value value) {
             if constexpr(perPort) {
@@ -228,9 +232,10 @@ struct UbloxM8 {
 
     /// The measurement rate (UBX-CFG-RATE), 50 ms .. 65535 ms.
     struct MeasurementRate {
-        using Value                          = std::chrono::milliseconds;
-        static constexpr std::size_t bytes   = 14;
-        static constexpr Value       initial = measRate;
+        using Value                           = std::chrono::milliseconds;
+        static constexpr std::size_t bytes    = 14;
+        static constexpr Value       initial  = measRate;
+        static constexpr bool        readBack = false;
 
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {

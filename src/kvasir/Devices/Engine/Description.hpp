@@ -565,25 +565,37 @@ namespace Detail {
         return n;
     }
 
-    template<typename L>
-    constexpr std::size_t maxVerifyBytesOf() {
-        std::size_t n = 0;
-        forEach<L>([&](auto i) {
-            using G = typename Nth<L>::template type<decltype(i)::value>;
-            if constexpr(Verifies<G>) {
-                n = static_cast<std::size_t>(G::bytes) > n ? static_cast<std::size_t>(G::bytes) : n;
-            }
-        });
-        return n;
-    }
+    /// A Config's read-back of every write group that can be read back (EngineDefaults::readBackInterval), in
+    /// milliseconds: how long after a write to look, how often to look again. An interval of 0 reads back only the
+    /// groups whose description asks for it (Verifies). Structural, so the DeviceCore takes it as a template
+    /// argument: devices of one chip with equal timings share the chip's code, as with equal Confirms.
+    struct ReadBackTiming {
+        std::uint32_t delayMs{};
+        std::uint32_t intervalMs{};
+    };
 
-    template<typename L>
-    constexpr bool anyVerifies() {
-        bool any = false;
-        forEach<L>([&](auto i) {
-            any = any || Verifies<typename Nth<L>::template type<decltype(i)::value>>;
-        });
-        return any;
+    /// The group says whether a Config's read-back may read it (`static constexpr bool readBack`).
+    template<typename G>
+    concept HasReadBack = requires {
+        { G::readBack } -> std::convertible_to<bool>;
+    };
+
+    /// A write group a Config's readBackInterval reads back: a state, not a one-shot command (Transient), written in
+    /// one transaction, to a register. `readBack` overrides the last: false for a register that does not read back
+    /// as written (a write-only command register, a DAC that answers a read with the last command), true for a
+    /// part without registers whose read returns what it was sent (an I2C switch's control byte). Whether a write
+    /// went to a register is what its Step says: a command to a chip that has registers (a UBX frame into a GNSS
+    /// receiver's stream) is not read back either (DeviceCore's encodeForVerify).
+    template<typename G,
+             std::size_t RegisterBytes>
+    constexpr bool readsBack() {
+        if constexpr(HasTransient<G> || writeStepsOf<G>() != 1) {
+            return false;
+        } else if constexpr(HasReadBack<G>) {
+            return static_cast<bool>(G::readBack);
+        } else {
+            return RegisterBytes != 0;
+        }
     }
 
     template<typename L>

@@ -1662,6 +1662,426 @@ void statsOffVerify() {
     checkEq(x.writes<VerifyChip::Config>(), 1U, "the read-back matched: never rewritten");
 }
 
+// -- a Config's read-back of every write group: a part reset behind the engine's back -------
+
+namespace ReadBackTest {
+
+    /// An expander as far as the engine is concerned (a PCA9557): an Init that only reads, an
+    /// input port it reads, an output latch, polarity and direction it writes, each with its
+    /// power-up value as Initial, written in that order. Plus a write-only command register
+    /// (`readBack = false`) and a one-shot command (Transient), which a read-back must leave
+    /// alone.
+    struct ExpChip {
+        static constexpr std::string_view name          = "EXP";
+        static constexpr Address7         address       = 0x1A;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+
+        struct Pins {
+            static constexpr auto       period = std::chrono::milliseconds{20};
+            static constexpr std::array steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            using Sample = std::uint8_t;
+
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
+        };
+
+        using Output    = Kvasir::Engine::Groups::InitialByte<0x01, 0x00>;
+        using Direction = Kvasir::Engine::Groups::InitialByte<0x03, 0xFF>;
+        using Polarity  = Kvasir::Engine::Groups::InitialByte<0x02, 0xF0>;
+
+        struct Command : Kvasir::Engine::Groups::Byte<0x05> {
+            static constexpr bool readBack = false;
+        };
+
+        struct Strobe : Kvasir::Engine::Groups::Byte<0x06> {
+            static constexpr bool transient = true;
+        };
+
+        using Reads  = Kvasir::Engine::List<Pins>;
+        using Writes = Kvasir::Engine::List<Output, Direction, Polarity, Command, Strobe>;
+    };
+
+    struct ReadBack {
+        static constexpr std::chrono::milliseconds readBackInterval{200};
+        static constexpr std::chrono::milliseconds readBackDelay{10};
+    };
+
+    /// A chip whose Init writes a register no write group holds (a power mode, as a part that
+    /// is switched on by its bring-up): one that lost its registers is brought up again, not
+    /// only written again.
+    struct InitChip {
+        static constexpr std::string_view name          = "INIT";
+        static constexpr Address7         address       = 0x3C;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
+          Kvasir::Engine::Step::write({.reg = 0x10, .payload = {0x01}})};
+
+        struct Data {
+            static constexpr auto       period = std::chrono::milliseconds{20};
+            static constexpr std::array steps{
+              Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+            using Sample = std::uint8_t;
+
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data) { return data.u8(0); }
+        };
+
+        using Setting = Kvasir::Engine::Groups::Byte<0x01>;
+
+        using Reads  = Kvasir::Engine::List<Data>;
+        using Writes = Kvasir::Engine::List<Setting>;
+    };
+
+    /// A state register and a one-shot command whose completion is read back (a calibration that
+    /// is done when the chip has cleared its start bit).
+    struct CommandChip {
+        static constexpr std::string_view name          = "CMD";
+        static constexpr Address7         address       = 0x2B;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
+          Kvasir::Engine::Step::read({.reg = 0x00, .count = 1, .offset = 0})};
+
+        using Setting = Kvasir::Engine::Groups::InitialByte<0x01, 0x10>;
+
+        struct Calibrate : Kvasir::Engine::Groups::Byte<0x02> {
+            static constexpr bool transient   = true;
+            static constexpr auto verifyDelay = std::chrono::milliseconds{10};
+        };
+
+        using Writes = Kvasir::Engine::List<Setting, Calibrate>;
+    };
+
+    /// A part without registers that returns on a bare read what it was sent says so
+    /// (`readBack = true`); one that does not say it is left out.
+    template<bool Says>
+    struct EchoChip {
+        static constexpr std::string_view name          = "ECHO";
+        static constexpr Address7         address       = 0x71;
+        static constexpr std::size_t      registerBytes = 0;
+
+        struct Control {
+            using Value                           = std::uint8_t;
+            static constexpr std::size_t bytes    = 1;
+            static constexpr bool        readBack = Says;
+
+            [[nodiscard]] static constexpr Kvasir::Engine::Step
+            encode(Value const&         value,
+                   std::span<std::byte> buffer) {
+                buffer[0] = std::byte{value};
+                return Kvasir::Engine::Step::commandBuffer({.offset = 0, .count = 1});
+            }
+        };
+
+        struct Plain : Control {
+            static constexpr bool readBack = false;
+        };
+
+        using Writes = Kvasir::Engine::List<Control>;
+    };
+
+    /// A receiver that has registers (its output stream behind 0xFF) and is told things by commands, not register
+    /// writes: what a bare read returns is its stream, never what it was sent.
+    struct StreamChip {
+        static constexpr std::string_view name          = "STREAM";
+        static constexpr Address7         address       = 0x42;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       init{
+          Kvasir::Engine::Step::read({.reg = 0xFD, .count = 2, .offset = 0})};
+
+        struct Rate {
+            using Value                          = std::uint8_t;
+            static constexpr std::size_t bytes   = 2;
+            static constexpr Value       initial = 1;
+
+            [[nodiscard]] static constexpr Kvasir::Engine::Step
+            encode(Value const&         value,
+                   std::span<std::byte> buffer) {
+                buffer[0] = std::byte{0xB5};
+                buffer[1] = std::byte{value};
+                return Kvasir::Engine::Step::commandBuffer({.offset = 0, .count = 2});
+            }
+        };
+
+        using Writes = Kvasir::Engine::List<Rate>;
+    };
+
+    using Exp    = Dev<ExpChip, ReadBack>;
+    using ExpOff = Dev<ExpChip>;
+
+    // What the Config's read-back takes in, and what it leaves out.
+    static_assert(Exp::verifies<ExpChip::Output> && Exp::verifies<ExpChip::Direction>
+                  && Exp::verifies<ExpChip::Polarity>);
+    static_assert(!Exp::verifies<ExpChip::Command>,
+                  "readBack = false is left alone");
+    static_assert(!Exp::verifies<ExpChip::Strobe>,
+                  "a Transient command is not a state");
+    static_assert(!ExpOff::verifies<ExpChip::Output>,
+                  "without the knob nothing is read back");
+    static_assert(!ExpOff::anyVerify,
+                  "and the device carries no read-back state");
+    static_assert(Exp::verifyIntervalMs<ExpChip::Output> == 200
+                  && Exp::verifyDelayMs<ExpChip::Output> == 10);
+    static_assert(Dev<CommandChip,
+                      ReadBack>::verifies<CommandChip::Calibrate>
+                    && Dev<CommandChip,
+                           ReadBack>::verifyIntervalMs<CommandChip::Calibrate>
+                         == 0,
+                  "a Transient command that reads back its completion keeps its own timing only");
+    static_assert(Dev<EchoChip<true>,
+                      ReadBack>::verifies<EchoChip<true>::Control>,
+                  "a part without registers that says its read returns what it was sent");
+    static_assert(!Dev<EchoChip<false>,
+                       ReadBack>::verifies<EchoChip<false>::Control>,
+                  "one without registers that does not say so is left out");
+    // A group's own VerifyDelay / VerifyInterval stand; the knob does not shorten them.
+    static_assert(Dev<Chips::Emc2101,
+                      ReadBack>::verifyDelayMs<Chips::Emc2101::Config>
+                    == 100
+                  && Dev<Chips::Emc2101,
+                         ReadBack>::verifyIntervalMs<Chips::Emc2101::Config>
+                       == 10000);
+    // Real descriptions: the expanders' registers read back; the AD5665R's read is the last
+    // command and the MCP4725's a status frame (no registers), the AD7291's command register is
+    // write-only (Table 9 of its data sheet).
+    static_assert(Dev<Chips::Pca9557,
+                      ReadBack>::verifies<Chips::Pca9557::Direction>
+                  && Dev<Chips::Pca9557,
+                         ReadBack>::verifies<Chips::Pca9557::Polarity>
+                  && Dev<Chips::Pca9557,
+                         ReadBack>::verifies<Chips::Pca9557::Output>);
+    static_assert(Dev<Chips::Tca9555,
+                      ReadBack>::verifies<Chips::Tca9555::Direction>);
+    static_assert(!Dev<Chips::Ad5665,
+                       ReadBack>::verifies<Chips::Ad5665::Level>);
+    static_assert(!Dev<Chips::Mcp4725<>,
+                       ReadBack>::verifies<Chips::Mcp4725<>::Level>);
+    static_assert(!Dev<Chips::Ad7291<0x20>,
+                       ReadBack>::verifies<Chips::Ad7291<0x20>::Command>);
+    static_assert(Dev<Chips::Ina238<>,
+                      ReadBack>::verifies<Chips::Ina238<>::ShuntCal>
+                  && !Dev<Chips::Ina238<>,
+                          ReadBack>::verifies<Chips::Ina238<>::Reset>);
+    static_assert(Dev<Chips::Tmp1075<>,
+                      ReadBack>::verifies<Chips::Tmp1075<>::Config>);
+    static_assert(!Dev<Chips::SamM8q<>,
+                       ReadBack>::verifies<Chips::SamM8q<>::Port>
+                    && !Dev<Chips::SamM8q<>,
+                            ReadBack>::verifies<Chips::SamM8q<>::NavPvtRate>
+                    && !Dev<Chips::SamM8q<>,
+                            ReadBack>::verifies<Chips::SamM8q<>::MeasurementRate>,
+                  "UBX commands into a receiver's stream");
+    using Led = Chips::Pca9956b<0x3F>;
+    static_assert(!Dev<Led,
+                       ReadBack>::verifies<Led::PwmAll>
+                    && !Dev<Led,
+                            ReadBack>::verifies<Led::IrefAll>
+                    && Dev<Led,
+                           ReadBack>::verifies<Led::Mode2>,
+                  "the PCA9956B's two write-only registers are left out");
+    static_assert(
+      [] {
+          auto const one = [](std::uint8_t v) { return std::array<std::byte, 1>{std::byte{v}}; };
+          auto const ok  = [&](std::uint8_t want, std::uint8_t got) {
+              auto const w = one(want);
+              auto const g = one(got);
+              return Led::Mode2::verify(Kvasir::Bytes{w}, Kvasir::Bytes{g});
+          };
+          return ok(0x00, 0x05) && ok(0x10, 0xC5) && ok(0x28, 0x2D) && !ok(0x20, 0x05)
+              && !ok(0x08, 0x25);
+      }(),
+      "MODE2: reserved 101, the flags and CLRERR are no mismatch; DMBLNK and OCH are");
+
+    /// The PCA9557 after a pulse on its RESET pin: the three registers at their power-up values.
+    void resetPart(RegisterModel<1>& m) {
+        m.set(0x01, {0x00});
+        m.set(0x02, {0xF0});
+        m.set(0x03, {0xFF});
+    }
+
+}   // namespace ReadBackTest
+
+void readBack() {
+    using namespace ReadBackTest;
+    I2cCase testcase{
+      "read-back: a part reset without leaving the bus gets everything written again, output "
+      "first"};
+    RegisterModel<1> m{0x1A};
+    m.set(0x00, {0x5A});
+    resetPart(m);
+    std::vector<std::uint32_t> order;
+    m.onWrite
+      = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const&) { order.push_back(reg); };
+    FakeBus::respond = std::ref(m);
+    Exp d{};
+    d.set<ExpChip::Output>(0x0F);
+    d.set<ExpChip::Direction>(0xF0);
+    d.set<ExpChip::Polarity>(0x00);
+    d.set<ExpChip::Command>(0x42);
+    d.set<ExpChip::Strobe>(0x01);
+    check(runUntil(d, [&] { return d.valid() && !d.pending(); }, 500ms), "up and written");
+    checkEq(m.word(0x03), 0xF0U, "directions as set");
+    runFor(d, 500ms);   // two read-back intervals of a part that holds its registers
+    checkEq(d.mismatches<ExpChip::Direction>(), 0U, "nothing to rewrite while it holds them");
+    checkEq(d.writes<ExpChip::Direction>(), 1U, "written once");
+    auto const    bringUps = d.bringUps();
+    std::uint16_t seen     = bringUps;
+    order.clear();
+    Log::reset();
+    resetPart(m);
+    bool linkDropped = false;
+    bool sawInvalid  = false;
+    auto watch       = [&] {
+        linkDropped = linkDropped || !d.answering();
+        sawInvalid  = sawInvalid || !d.valid();
+    };
+    check(runUntil(
+            d,
+            [&] {
+                watch();
+                return m.word(0x01) == 0x0FU && m.word(0x02) == 0x00U && m.word(0x03) == 0xF0U;
+            },
+            300ms),
+          "the next read-back finds it and the registers are back within one interval");
+    check(runUntil(
+            d,
+            [&] {
+                watch();
+                return !d.pending();
+            },
+            100ms),
+          "and the rest of the replay is out");
+    check(order.size() >= 3 && order[0] == 0x01U && order[1] == 0x03U && order[2] == 0x02U,
+          "in the description's order: the output latch before the directions drive the pins");
+    check(std::ranges::find(order, 0x05U) != order.end(),
+          "the write-only command is told again too");
+    check(std::ranges::find(order, 0x06U) == order.end(), "the one-shot command is not");
+    checkEq(Log::warnings, 1, "one line says the part lost its registers");
+    check(!linkDropped, "its Init only reads: no bring-up, the link stayed up throughout");
+    checkEq(d.bringUps(), bringUps + 1, "but counted as one: what else it was told is owed again");
+    check(d.broughtUp(seen) && !d.broughtUp(seen), "broughtUp() says so, once");
+    check(sawInvalid, "a sample read from the reset part does not stand");
+    check(runUntil(d, [&] { return d.valid(); }, 100ms), "valid again with the next sample");
+    runFor(d, 500ms);
+    checkEq(Log::warnings, 1, "and it holds them from then on");
+    checkEq(d.bringUps(), bringUps + 1, "nothing more counted");
+
+    testcase.step("read-back: a register that says readBack = false is never read back");
+    m.set(0x05, {0x00});   // the command register reads back nothing that was written
+    order.clear();
+    runFor(d, 500ms);
+    checkEq(order.size(), std::size_t{0}, "so nothing is rewritten for it");
+
+    testcase.next(
+      "read-back: a command to a chip that has registers is not read back, and the device rests");
+    RegisterModel<1> g{0x42};
+    g.set(0xFD, {0x00, 0x00});
+    FakeBus::respond = std::ref(g);
+    Dev<StreamChip, ReadBack> rx{};
+    check(runUntil(rx, [&] { return rx.answering() && !rx.pending(); }, 500ms), "up and told");
+    auto const rxReads = g.reads;
+    auto const rxTurns = rx.turns();
+    runFor(rx, 1000ms);   // five read-back intervals
+    checkEq(g.reads - rxReads, 0, "no bare read took the stream for what it was sent");
+    checkEq(rx.mismatches<StreamChip::Rate>(), 0U, "nothing to mismatch");
+    check(rx.turns() - rxTurns <= 30, "a few full turns per interval, not one every millisecond");
+
+    testcase.next("read-back: a part whose Init writes is brought up again, its Init first");
+    RegisterModel<1> p{0x3C};
+    p.set(0x00, {0x00});
+    p.set(0x01, {0x00});
+    p.set(0x10, {0x00});   // the power mode: off at reset
+    std::vector<std::uint32_t> told;
+    p.onWrite = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const&) { told.push_back(reg); };
+    FakeBus::respond = std::ref(p);
+    Dev<InitChip, ReadBack> q{};
+    q.set<InitChip::Setting>(0x5A);
+    check(runUntil(q, [&] { return q.valid() && !q.pending(); }, 500ms), "up and written");
+    runFor(q, 500ms);
+    checkEq(q.bringUps(), 1U, "one bring-up while it holds its registers");
+    told.clear();
+    Log::reset();
+    p.set(0x01, {0x00});
+    p.set(0x10, {0x00});
+    bool qDropped = false;
+    check(runUntil(
+            q,
+            [&] {
+                qDropped = qDropped || !q.answering();
+                return p.word(0x01) == 0x5AU;
+            },
+            300ms),
+          "the setting is back within one interval");
+    check(qDropped, "through a bring-up");
+    check(told.size() >= 2 && told[0] == 0x10U && told[1] == 0x01U,
+          "the Init's write first, then the write groups");
+    checkEq(p.word(0x10), 0x01U, "the power mode no write group holds is back too");
+    checkEq(q.bringUps(), 2U, "counted");
+    checkEq(Log::warnings, 1, "one line says the part lost its registers");
+    check(runUntil(q, [&] { return q.valid(); }, 100ms), "valid with a sample after it");
+    runFor(q, 500ms);
+    checkEq(q.bringUps(), 2U, "and it holds them from then on");
+    checkEq(Log::warnings, 1, "said once");
+
+    testcase.next("read-back: a Transient command that did not finish is sent again, alone");
+    RegisterModel<1> c{0x2B};
+    c.set(0x00, {0x00});
+    int calibrations = 0;
+    c.onWrite        = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const&) {
+        if(reg == 0x02 && ++calibrations == 1) {
+            c.set(0x02, {0x00});
+        }   // the first one did not take
+    };
+    FakeBus::respond = std::ref(c);
+    Dev<CommandChip, ReadBack> k{};
+    check(runUntil(k, [&] { return k.answering() && !k.pending(); }, 500ms), "up");
+    auto const kUps = k.bringUps();
+    k.set<CommandChip::Calibrate>(0x81);
+    check(runUntil(
+            k,
+            [&] { return k.writes<CommandChip::Calibrate>() == 2; },
+            300ms),
+          "sent again");
+    runFor(k, 300ms);
+    checkEq(k.writes<CommandChip::Setting>(), 1U, "the state beside it was not replayed");
+    checkEq(k.bringUps(), kUps, "and nothing counted as configured again");
+
+    testcase.next("read-back: a register that never holds its value says the part lost them once");
+    RegisterModel<1> s{0x1A};
+    s.set(0x00, {0x00});
+    resetPart(s);
+    FakeBus::respond = std::ref(s);
+    Exp x{};
+    x.set<ExpChip::Direction>(0xF0);
+    check(runUntil(x, [&] { return x.valid() && !x.pending(); }, 500ms), "up");
+    s.onWrite = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const&) {
+        if(reg == 0x03) { s.set(0x03, {0xFF}); }   // stuck at its reset value from now on
+    };
+    Log::reset();
+    resetPart(s);
+    runFor(x, 2000ms);
+    // One episode is the first mismatch and maxRetries rewrites; the last mismatch gives up
+    // until the next interval.
+    auto const     mismatches = x.mismatches<ExpChip::Direction>();
+    constexpr auto perEpisode = static_cast<std::uint32_t>(Exp::maxRetries) + 1U;
+    check(mismatches > 2 * perEpisode, "it was tried again at every interval");
+    checkEq(Log::warnings, 2, "one line that the part lost them, one that this one will not hold");
+    s.onWrite = nullptr;   // it holds again
+    check(runUntil(
+            x,
+            [&] { return s.word(0x03) == 0xF0U; },
+            500ms),
+          "rewritten at the next interval");
+    runFor(x, 100ms);
+    Log::reset();
+    s.onWrite = [&](std::uint32_t reg, std::array<std::uint8_t, 1> const&) {
+        if(reg == 0x03) { s.set(0x03, {0xFF}); }
+    };
+    resetPart(s);
+    runFor(x, 700ms);
+    checkEq(Log::warnings, 2, "and a new spell after it held is said again");
+}
+
 void nets() {
     using namespace NetTest;
 
@@ -3183,6 +3603,7 @@ int main() {
     presence();
     features();
     statsOffVerify();
+    readBack();
     linkState();
     ticketsAndWrites();
     engine();
