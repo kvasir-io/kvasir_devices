@@ -40,11 +40,17 @@ struct FakeHw {
 
     static constexpr unsigned instance = 0;
 
+    /// What finish() reaches before any start(): a failed check, never a call through a null pointer.
+    static void noTransfer(std::uint32_t,
+                           bool) {
+        check(false, "the fake finished a transfer no start() began");
+    }
+
     static inline bool          masked{};
     static inline Transfer      last{};
     static inline std::uint32_t gen{};
     static inline void (*done)(std::uint32_t,
-                               bool){};
+                               bool){&noTransfer};
     static inline int                aborts{};
     static inline int                reinits{};
     static inline std::vector<Setup> configured{};
@@ -89,7 +95,7 @@ struct FakeHw {
         masked = false;
         last   = {};
         gen    = 0;
-        done   = nullptr;
+        done   = &noTransfer;
         aborts = reinits = 0;
         configured.clear();
     }
