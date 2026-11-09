@@ -12,9 +12,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # too.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# Release unless named, and with its assert()s: the drivers' asserts are part of what these tests check, and no firmware
+# defines NDEBUG. CMake's Release flags would (-O3 -DNDEBUG), so this tree's leave it out - a lone `cmake -S test` is
+# the CI build (.github/workflows/ci.yml).
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Debug)
+    set(CMAKE_BUILD_TYPE Release)
 endif()
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 get_filename_component(KVASIR_DEVICES_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 

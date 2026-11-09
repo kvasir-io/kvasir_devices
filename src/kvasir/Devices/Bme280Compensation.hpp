@@ -31,16 +31,22 @@ struct Trim {
     std::int8_t                 h6{};
     std::uint8_t                deviceId{};
 
-    /// Registers 0x88..0xA1 as 26 bytes at `at`, little-endian words.
+    /// Registers 0x88..0xA1 as 26 bytes at `at`, little-endian words. dig_P1..P9 are decoded into a
+    /// local array first: stored straight into `p`, the stores may alias the bytes they are read
+    /// from (std::byte), and when both lie in one device object gcc -O3 versions the loop with a
+    /// run-time overlap check of two addresses off the same base, which -Wstrict-overflow reports
+    /// (no location given).
     constexpr void loadTemperaturePressure(Bytes       data,
                                            std::size_t at) {
         t1 = data.le16(at);
         t2 = data.s16le(at + 2);
         t3 = data.s16le(at + 4);
-        for(std::size_t i = 0; i < 9; ++i) {
-            p[i] = i == 0 ? static_cast<std::int32_t>(data.le16(at + 6 + 2 * i))
-                          : static_cast<std::int32_t>(data.s16le(at + 6 + 2 * i));
+        std::array<std::int32_t, 9> decoded{};
+        for(std::size_t i = 0; i < decoded.size(); ++i) {
+            decoded[i] = i == 0 ? static_cast<std::int32_t>(data.le16(at + 6 + 2 * i))
+                                : static_cast<std::int32_t>(data.s16le(at + 6 + 2 * i));
         }
+        p  = decoded;
         h1 = data.u8(at + 25);   // 0xA1
     }
 

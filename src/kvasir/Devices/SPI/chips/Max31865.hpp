@@ -306,7 +306,9 @@ namespace Kvasir { namespace SPI {
             std::uint16_t    code{};   ///< the 15-bit RTD code
         };
 
-        Max31865() { apply(makeInput(Drdy{}), makeOutput(Cs{}), set(Cs{})); }
+        // CS released (high) from its first store: makeOutput(Cs) with set(Cs) in one apply() left it low on a SAM
+        // (the step goes out highest address first, OUTSET before makeOutput's OUTCLR) and is refused there now
+        Max31865() { apply(makeInput(Drdy{}), makeOutputInitHigh(Cs{})); }
 
         Max31865(Max31865 const&)            = delete;   // the engine's callbacks point at it
         Max31865& operator=(Max31865 const&) = delete;

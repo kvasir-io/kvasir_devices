@@ -80,20 +80,30 @@ guard dir src:
         rm -rf "{{ dir }}"
     fi
 
-# Configure build/<config> if it does not exist yet (no-op afterwards)
+# Configure build/<config> if it does not exist yet, as CI does (.github/workflows/ci.yml): Release with its assert()s
+# (-O3 without -DNDEBUG), warnings as errors. A tree configured with other values (the Debug trees of before, -O0) gets
+# them in place, once.
 configure config=default_config: (guard (build_root / config) (root / "test"))
     #!/usr/bin/env bash
     set -euo pipefail
     dir="{{ build_root }}/{{ config }}"
-    if [ -f "$dir/build.ninja" ]; then exit 0; fi
+    opts=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE=-O3 -DCMAKE_COMPILE_WARNING_AS_ERROR=ON)
+    if [ -f "$dir/build.ninja" ]; then
+        stale=()
+        for opt in "${opts[@]}"; do
+            kv=${opt#-D}
+            [ "$(sed -n "s/^${kv%%=*}:[A-Z]*=//p" "$dir/CMakeCache.txt")" = "${kv#*=}" ] || stale+=("$opt")
+        done
+        [ ${#stale[@]} -eq 0 ] || cmake -S "{{ root }}/test" -B "$dir" "${stale[@]}" > /dev/null
+        exit 0
+    fi
     sdk=""
     [ -f "{{ kvasir_root }}/cmake/kvasir_sdk_targets.cmake" ] && sdk="-DKVASIR_ROOT={{ kvasir_root }}"
     read -r cc cxx < <(just --justfile "{{ self }}" flags "{{ config }}")
     launcher=""
     command -v ccache >/dev/null && launcher="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
     env CC="$cc" CXX="$cxx" cmake -S "{{ root }}/test" -B "$dir" -G Ninja \
-        -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        $sdk $launcher
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${opts[@]}" $sdk $launcher
 
 # Wipe build/<config> and configure it again
 reconfigure config=default_config: (clean config) (configure config)

@@ -1,6 +1,6 @@
 /// The bit-banged 1-Wire master (OneWire.hpp) against a model of a slave on a simulated open-drain line: reset and
 /// presence, no part on the line, write slots (LSB first), read slots, write then read, the transaction deadline, one
-/// transaction at a time, and the CRC-8. The model checks every slot against the MAX31820's timing limits (Maxim
+/// transaction at a time, the CRC-8, and an interrupt after every timed wait. The model checks every slot against the MAX31820's timing limits (Maxim
 /// MAX31820 data sheet, AC electrical characteristics, other/MAX31820.md l.132-141): tSLOT >= 60 us, tREC >= 1 us,
 /// tLOW0 60-120 us, tLOW1 1-15 us, tRDV 15 us max (the master's sample), tRSTL and tRSTH >= 480 us, the presence pulse
 /// tPDHIGH 15-60 us after the release and tPDLOW 60-240 us long.
@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <kd/Check.hpp>
+#include <kvasir/Atomic/CriticalSection.hpp>
 #include <kvasir/Devices/Bytes.hpp>
 #include <kvasir/Devices/OneWire.hpp>
 #include <span>
@@ -25,6 +26,43 @@ namespace Kvasir::Test::OneWireLine {
 
 using Us = std::chrono::microseconds;
 
+/// An interrupt of `length` that runs at the end of every timed wait while `armed` - the worst moment for a bit-banged
+/// slot - unless the master masked interrupts there (a criticalSection: the policy below counts them).
+struct Interrupt {
+    static inline bool armed{};
+    static inline Us   length{
+      126};   // an ADC handler with a soft-float PID update on a 48 MHz Cortex-M0+
+    static inline int every{1};   // at the end of every `every`-th timed wait
+    static inline int waits{};
+    static inline int masked{};
+    static inline int ran{};
+    static inline int heldOff{};
+};
+
+/// This test's critical-section policy: no lock (one thread), it says whether interrupts are masked.
+struct MaskCounting {
+    template<typename Tag,
+             typename F>
+    static decltype(auto) run(F&& f) {
+        ++Interrupt::masked;
+
+        struct Unmask {
+            ~Unmask() { --Interrupt::masked; }
+        } const unmask{};
+
+        return std::forward<F>(f)();
+    }
+
+    template<typename Tag,
+             typename F,
+             typename Pred>
+    static decltype(auto) run(F&&    f,
+                              Pred&& pred) {
+        while(!pred()) {}
+        return run<Tag>(std::forward<F>(f));
+    }
+};
+
 /// Simulated time only: a delay winds the clock (rule: no test reads the real clock).
 struct Clock : Kvasir::Test::FakeClock {
     template<typename Rep,
@@ -32,6 +70,13 @@ struct Clock : Kvasir::Test::FakeClock {
     static void delay(std::chrono::duration<Rep,
                                             Period> d) {
         advance(d);
+        if(!Interrupt::armed || ++Interrupt::waits % Interrupt::every != 0) { return; }
+        if(Interrupt::masked == 0) {
+            ++Interrupt::ran;
+            advance(Interrupt::length);
+        } else {
+            ++Interrupt::heldOff;   // it runs once the section ends, after the slot's timed part
+        }
     }
 };
 
@@ -49,6 +94,7 @@ struct Slave {
     std::vector<std::uint8_t> written;
     int                       readSlots{};
     std::vector<std::string>  errors;
+    std::size_t               errorsAtLastReset{};
 
     void masterLow(Us t) {
         if(haveRise_ && t - rise_ < Us{1}) { error("tREC under 1 us"); }
@@ -79,12 +125,14 @@ struct Slave {
         haveRise_      = true;
         if(low >= Us{480}) {
             ++resets;
-            afterReset_ = true;
-            haveFall_   = false;
-            bit_        = 0;
-            byte_       = 0;
-            answerBit_  = 0;
-            presenceAt_ = t + Us{30};   // tPDHIGH 15-60 us
+            errorsAtLastReset  = errors.size();
+            writtenSinceReset_ = 0;   // a reset starts the command over (a master's restart)
+            afterReset_        = true;
+            haveFall_          = false;
+            bit_               = 0;
+            byte_              = 0;
+            answerBit_         = 0;
+            presenceAt_        = t + Us{30};   // tPDHIGH 15-60 us
             phase_ = !present ? Phase::idle : expectWrite == 0 ? Phase::answer : Phase::command;
             return;
         }
@@ -104,7 +152,7 @@ struct Slave {
             written.push_back(byte_);
             bit_  = 0;
             byte_ = 0;
-            if(written.size() == expectWrite) { phase_ = Phase::answer; }
+            if(++writtenSinceReset_ == expectWrite) { phase_ = Phase::answer; }
         }
     }
 
@@ -135,6 +183,7 @@ struct Slave {
     unsigned     bit_{};
     std::uint8_t byte_{};
     std::size_t  answerBit_{};
+    std::size_t  writtenSinceReset_{};
 
     void error(std::string what) { errors.push_back(std::move(what)); }
 };
@@ -194,6 +243,11 @@ bool apply(PinOp first,
 
 }   // namespace Kvasir::Test::OneWireLine
 
+template<>
+struct Kvasir::Atomic::CriticalSectionPolicy<Kvasir::Tag::User> {
+    using type = Kvasir::Test::OneWireLine::MaskCounting;
+};
+
 namespace {
 using Kvasir::Test::OneWireLine::Clock;
 using Kvasir::Test::OneWireLine::Dq;
@@ -201,6 +255,31 @@ using Kvasir::Test::OneWireLine::Line;
 using Kvasir::Test::OneWireLine::Slave;
 using Bus = Kvasir::OneWire<Clock, Dq, 16>;
 using Op  = Bus::OperationState;
+
+/// The checked mode (OneWireSlotTiming::checked): nothing masked, every timed part measured.
+struct CheckedConfig : Kvasir::OneWireDefaults {
+    static constexpr auto slotTiming = Kvasir::OneWireSlotTiming::checked;
+};
+
+using CheckedBus = Kvasir::OneWire<Clock, Dq, 16, CheckedConfig>;
+
+/// A SlotGate closed until `openFrom`; it notes the time it was first asked.
+struct TestGate {
+    static inline Kvasir::Test::OneWireLine::Us openFrom{};
+    static inline int                           closedAnswers{};
+
+    static bool open(std::chrono::microseconds) {
+        bool const o = Kvasir::Test::OneWireLine::now() >= openFrom;
+        if(!o) { ++closedAnswers; }
+        return o;
+    }
+};
+
+struct GatedConfig : CheckedConfig {
+    using SlotGate = TestGate;
+};
+
+using GatedBus = Kvasir::OneWire<Clock, Dq, 16, GatedConfig>;
 
 void fresh(Slave& s) {
     Clock::reset();
@@ -211,14 +290,16 @@ void fresh(Slave& s) {
 }
 
 /// turn() every microsecond until the transaction is no longer ongoing (or `limit` simulated time passed).
-Op run(std::chrono::microseconds limit = std::chrono::milliseconds{50}) {
+template<typename B = Bus>
+typename B::OperationState run(std::chrono::microseconds limit = std::chrono::milliseconds{50}) {
+    using O        = typename B::OperationState;
     auto const end = Clock::now() + limit;
     while(Clock::now() < end) {
         Clock::advance(std::chrono::microseconds{1});
-        Bus::turn();
-        if(auto const op = Bus::operationState(Clock::now()); op != Op::ongoing) { return op; }
+        B::turn();
+        if(auto const op = B::operationState(Clock::now()); op != O::ongoing) { return op; }
     }
-    return Op::ongoing;
+    return O::ongoing;
 }
 
 void checkClean(Slave const& s) {
@@ -312,6 +393,43 @@ void readOnly() {
     detach();
 }
 
+void interruptAfterEveryWait() {
+    testCase(
+      "7 an interrupt after every timed wait (126 us): the presence is seen, no slot "
+      "stretched past its limit, write and read bytes intact");
+    using Kvasir::Test::OneWireLine::Interrupt;
+    std::array<std::uint8_t, 9> pad{0x91, 0x01, 0x4B, 0x46, 0x7F, 0xFF, 0x0F, 0x10, 0x00};
+    auto const                  head = bytes(pad);
+    pad[8]                           = Kvasir::Dallas::crc8(Kvasir::Bytes{
+      std::span<std::byte const>{head.data(), 8}
+    });
+    Slave s{};
+    s.expectWrite = 2;
+    s.answer      = {pad.begin(), pad.end()};
+    fresh(s);
+    Interrupt::armed   = true;
+    Interrupt::ran     = 0;
+    Interrupt::heldOff = 0;
+    check(Bus::acquire(), "acquire");
+    Bus::sendReceive(Clock::now(), bytes(std::array<std::uint8_t, 2>{0xCC, 0xBE}), 9);
+    auto const op    = run(std::chrono::milliseconds{200});
+    Interrupt::armed = false;
+    checkEq(static_cast<int>(op), static_cast<int>(Op::succeeded), "sendReceive succeeds");
+    check(s.written == std::vector<std::uint8_t>{0xCC, 0xBE}, "Skip ROM, Read Scratchpad out");
+    if(op == Op::succeeded && s.readSlots == 72) {
+        std::array<std::byte, 9> got{};
+        Bus::getReceivedBytes(got);
+        check(got == bytes(pad), "the scratchpad as the slave sent it");
+    } else {
+        check(false, "72 read slots and a finished transaction, to compare the scratchpad");
+    }
+    checkClean(s);
+    checkEq(Interrupt::ran, 0, "no interrupt inside a timed part of a slot");
+    check(Interrupt::heldOff > 0, "the interrupt was there: held off until the timed parts ended");
+    Bus::release();
+    detach();
+}
+
 void deadlineAndOwnership() {
     testCase("5 one transaction at a time; the deadline fails one that is still running");
     Slave s{};
@@ -372,6 +490,131 @@ void crc() {
         checkEq(Bus::crc(withCrc.begin(), withCrc.end()), 0, "0 over data + its CRC");
     }
 }
+
+/// Read Scratchpad's answer: 8 bytes and their CRC.
+std::array<std::uint8_t,
+           9>
+scratchpad() {
+    std::array<std::uint8_t, 9> pad{0x91, 0x01, 0x4B, 0x46, 0x7F, 0xFF, 0x0F, 0x10, 0x00};
+    auto const                  head = bytes(pad);
+    pad[8]                           = Kvasir::Dallas::crc8(Kvasir::Bytes{
+      std::span<std::byte const>{head.data(), 8}
+    });
+    return pad;
+}
+
+void checkedEveryWaitStretched() {
+    testCase(
+      "8 checked, an interrupt (126 us) after every timed wait: every part comes out too long - "
+      "restarted "
+      "timingRetries times, then failed; nothing masked, nothing handed out");
+    using Kvasir::Test::OneWireLine::Interrupt;
+    auto const pad = scratchpad();
+    Slave      s{};
+    s.expectWrite = 2;
+    s.answer      = {pad.begin(), pad.end()};
+    fresh(s);
+    Interrupt::armed   = true;
+    Interrupt::every   = 1;
+    Interrupt::ran     = 0;
+    Interrupt::heldOff = 0;
+    auto const faults  = CheckedBus::timingFaults();
+    check(CheckedBus::acquire(), "acquire");
+    CheckedBus::sendReceive(Clock::now(), bytes(std::array<std::uint8_t, 2>{0xCC, 0xBE}), 9);
+    auto const op    = run<CheckedBus>(std::chrono::milliseconds{200});
+    Interrupt::armed = false;
+    checkEq(static_cast<int>(op), static_cast<int>(CheckedBus::OperationState::failed), "fails");
+    checkEq(static_cast<int>(CheckedBus::timingFaults() - faults),
+            CheckedBus::timingRetries + 1,
+            "one fault per try: the first and timingRetries restarts");
+    checkEq(Interrupt::heldOff, 0, "nothing masked");
+    check(Interrupt::ran > 0, "the interrupts ran inside the parts");
+    checkEq(s.resets, CheckedBus::timingRetries + 1, "a reset pulse for every try");
+    check(s.written.empty(), "no byte reached the slave: each try ended at its first part");
+    CheckedBus::release();
+    detach();
+}
+
+void checkedSomeStretched() {
+    testCase(
+      "9 checked, a 30 us interrupt in the first try's 20th timed wait (a read slot's low pulse): "
+      "that try "
+      "restarts, the next one is clean - it succeeds intact, the slave sees nothing out of its "
+      "limits after the "
+      "restart");
+    using Kvasir::Test::OneWireLine::Interrupt;
+    auto const pad = scratchpad();
+    Slave      s{};
+    s.expectWrite = 2;
+    s.answer      = {pad.begin(), pad.end()};
+    fresh(s);
+    Interrupt::armed = true;
+    Interrupt::length
+      = Kvasir::Test::OneWireLine::Us{30};   // about a station's ADC handler, integer
+    Interrupt::every = 200;                  // more waits than a try has: one hit, then none
+    Interrupt::waits
+      = 180;   // the first at the try's 20th wait: presence 1 + 16 write bits, then read slots
+    Interrupt::ran    = 0;
+    auto const faults = CheckedBus::timingFaults();
+    check(CheckedBus::acquire(), "acquire");
+    CheckedBus::sendReceive(Clock::now(), bytes(std::array<std::uint8_t, 2>{0xCC, 0xBE}), 9);
+    auto const op     = run<CheckedBus>(std::chrono::milliseconds{200});
+    Interrupt::armed  = false;
+    Interrupt::every  = 1;
+    Interrupt::length = Kvasir::Test::OneWireLine::Us{126};
+    checkEq(static_cast<int>(op),
+            static_cast<int>(CheckedBus::OperationState::succeeded),
+            "succeeds");
+    auto const restarts = CheckedBus::timingFaults() - faults;
+    checkEq(static_cast<int>(restarts), 1, "the one stretched read slot restarted it");
+    checkEq(Interrupt::ran, 1, "the interrupt ran, inside the slot");
+    check(!s.errors.empty() && s.errors.size() == s.errorsAtLastReset,
+          "the slave saw the stretched slot out of its limits, and nothing out of them after the "
+          "restart's reset");
+    if(op == CheckedBus::OperationState::succeeded) {
+        std::array<std::byte, 9> got{};
+        CheckedBus::getReceivedBytes(got);
+        check(got == bytes(pad), "the scratchpad as the slave sent it");
+    }
+    checkEq(s.resets, static_cast<int>(restarts) + 1, "one reset per try");
+    check(s.written.size() >= 2
+            && std::vector<std::uint8_t>(s.written.end() - 2, s.written.end())
+                 == std::vector<std::uint8_t>{0xCC, 0xBE},
+          "the last try sent Skip ROM, Read Scratchpad");
+    CheckedBus::release();
+    detach();
+}
+
+void gateHoldsSlots() {
+    testCase(
+      "10 a closed SlotGate: no slot starts while it is closed - the reset pulse just stays low - "
+      "then the "
+      "transaction runs as usual");
+    auto const pad = scratchpad();
+    Slave      s{};
+    s.expectWrite = 2;
+    s.answer      = {pad.begin(), pad.end()};
+    fresh(s);
+    auto const start        = Kvasir::Test::OneWireLine::now();
+    TestGate::openFrom      = start + Kvasir::Test::OneWireLine::Us{700};
+    TestGate::closedAnswers = 0;
+    check(GatedBus::acquire(), "acquire");
+    GatedBus::sendReceive(Clock::now(), bytes(std::array<std::uint8_t, 2>{0xCC, 0xBE}), 9);
+    auto const op = run<GatedBus>(std::chrono::milliseconds{200});
+    checkEq(static_cast<int>(op),
+            static_cast<int>(GatedBus::OperationState::succeeded),
+            "succeeds");
+    check(TestGate::closedAnswers > 0, "the gate was asked while closed");
+    checkEq(s.resets, 1, "one reset pulse - longer than 480 us, no second one");
+    check(s.written == std::vector<std::uint8_t>{0xCC, 0xBE}, "the bytes out");
+    std::array<std::byte, 9> got{};
+    GatedBus::getReceivedBytes(got);
+    check(got == bytes(pad), "the scratchpad in");
+    checkClean(s);
+    GatedBus::release();
+    detach();
+}
+
 }   // namespace
 
 int main() {
@@ -381,5 +624,9 @@ int main() {
     readOnly();
     deadlineAndOwnership();
     crc();
+    interruptAfterEveryWait();
+    checkedEveryWaitStretched();
+    checkedSomeStretched();
+    gateHoldsSlots();
     return finish();
 }

@@ -50,6 +50,12 @@ constexpr PinOp makeOutput(Pin<Id>) {
     return {};
 }
 
+/// an output that starts high: its level, as a set
+template<std::size_t Id>
+constexpr PinOp makeOutputInitHigh(Pin<Id>) {
+    return {PinOp::Kind::set, Id};
+}
+
 template<std::size_t Id>
 constexpr PinOp set(Pin<Id>) {
     return {PinOp::Kind::set, Id};

@@ -41,12 +41,16 @@ struct Ht16k33 {
         /// The RAM address byte, then two bytes a row.
         static constexpr std::size_t bytes = 1 + 2 * rowCount;
 
+        /// From a copy of the rows: read from `value` itself, the byte stores may alias it, and with both in one
+        /// device object gcc -O3 versions the loop with a run-time overlap check of two addresses off the same base,
+        /// which -Wstrict-overflow reports (no location given).
         [[nodiscard]] static constexpr Engine::Step encode(Value const&         value,
                                                            std::span<std::byte> buffer) {
-            buffer[0] = std::byte{0x00};
+            Rows const rows = value;
+            buffer[0]       = std::byte{0x00};
             for(std::size_t i = 0; i < rowCount; ++i) {
-                buffer[1 + 2 * i] = static_cast<std::byte>(value[i] & 0xFF);
-                buffer[2 + 2 * i] = static_cast<std::byte>(value[i] >> 8);
+                buffer[1 + 2 * i] = static_cast<std::byte>(rows[i] & 0xFF);
+                buffer[2 + 2 * i] = static_cast<std::byte>(rows[i] >> 8);
             }
             return Engine::Step::commandBuffer({.offset = 0, .count = bytes});
         }

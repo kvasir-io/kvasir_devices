@@ -1,17 +1,68 @@
 #pragma once
 #include "Bytes.hpp"
 #include "Duration.hpp"
+#include "kvasir/Atomic/CriticalSection.hpp"
 #include "kvasir/Atomic/Queue.hpp"
 #include "kvasir/Util/Config.hpp"
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <span>
+#include <utility>
 
 namespace Kvasir {
+
+/// How a bit slot's timed part stays inside the 1-Wire limits (OneWireDefaults::slotTiming).
+enum class OneWireSlotTiming : std::uint8_t {
+    /// Interrupts masked over each timed part (criticalSection: up to the 70 us of the presence wait). A slot cannot
+    /// be stretched; the firmware's interrupts wait that long.
+    masked,
+    /// No interrupt masked. Each timed part is measured against its limit afterwards (a clock read before its first
+    /// pin change and after its last); one an interrupt stretched past it starts the transaction again from its reset
+    /// pulse (timingFaults() counts them; after timingRetries in a row it fails). SlotGate keeps the slots out of the
+    /// way of interrupts the firmware knows are coming.
+    checked,
+};
+
+/// The default SlotGate: every slot may start at once.
+struct OneWireAnyTime {
+    static constexpr bool open(std::chrono::microseconds) { return true; }
+};
+
+/// The SlotTimer of a Clock without a ShortInterval: its now() and delay(). A checked part reads it at its start, at
+/// each step and at its end, so a clock that is slow to read (a 64-bit tick count assembled from a counter and its
+/// overruns) eats the part's margins.
+template<typename Clock>
+struct OneWireClockTimer {
+    using Stamp = typename Clock::time_point;
+
+    static Stamp stamp() { return Clock::now(); }
+
+    static auto since(Stamp s) { return Clock::now() - s; }
+
+    template<typename D>
+    static void wait(D d) {
+        Clock::delay(d);
+    }
+};
+
+namespace Detail {
+    /// The default SlotTimer: the Clock's ShortInterval (the SysTick clock's: one counter read), else the Clock.
+    template<typename Clock>
+    struct OneWireDefaultTimer {
+        using type = OneWireClockTimer<Clock>;
+    };
+
+    template<typename Clock>
+        requires requires { typename Clock::ShortInterval; }
+    struct OneWireDefaultTimer<Clock> {
+        using type = typename Clock::ShortInterval;
+    };
+}   // namespace Detail
 
 /// The knobs of the 1-Wire bus, with their defaults; derive and redeclare what you change.
 struct OneWireDefaults {
@@ -21,6 +72,18 @@ struct OneWireDefaults {
     /// that has stopped answering.
     static constexpr auto transactionTimeout = std::chrono::milliseconds{100};
     static constexpr auto slotBudget         = std::chrono::milliseconds{2};
+    static constexpr auto slotTiming         = OneWireSlotTiming::masked;
+    /// checked: a transaction a stretched slot restarted this often in a row fails.
+    static constexpr std::uint8_t timingRetries = 3;
+    // SlotTimer (a type, no default member here: it depends on the Clock): what a checked part's times are taken with -
+    // `Stamp stamp()`, `since(Stamp)` (a std::chrono duration), `wait(d)`. When the config names none: the Clock's
+    // ShortInterval if it has one (core_cortex_common SystickClockBase), else OneWireClockTimer<Clock>. Only intervals
+    // of a part (up to ~120 us) are asked for.
+    /// `static bool open(std::chrono::microseconds length)`: may a timed part this long start now? Asked before the
+    /// presence wait, every write and every read slot; closed, the slot waits for a later turn() (between slots the
+    /// line is idle, a reset pulse just stays low longer - tRSTL has no maximum, MAX31820 Table "AC Electrical
+    /// Characteristics", but 960 us under parasite power, its Note 14).
+    using SlotGate = OneWireAnyTime;
 };
 
 /// A 1-Wire master bit-banged on `Pin` (open drain: driven low, released to an input), as a
@@ -34,13 +97,32 @@ struct OneWireDefaults {
 /// 60-120 us, tRSTL >= 480 us, presence low from 15-60 us for 60-240 us (other/MAX31820.md
 /// l.132-141).
 ///
+/// Each slot's timed part - the presence sample, a write's low pulse, a read's low pulse and sample - is kept inside
+/// its limit one of two ways (Config::slotTiming):
+/// - masked (the default): interrupts masked over the part (criticalSection, at most the 70 us of the presence wait).
+///   An interrupt there stretched a write-1 past tLOW1, a read sample past tRDV or the presence sample past a short
+///   presence pulse, and the transaction failed (a 126 us interrupt - an ADC handler with a soft-float PID on a 48 MHz
+///   Cortex-M0+ - failed about one a second). The firmware's interrupts wait up to 70 us.
+/// - checked: nothing masked; each part measured afterwards against its limit, a stretched one restarts the
+///   transaction (timingFaults()), timingRetries in a row fail it. Config::SlotGate places the slots between
+///   interrupts the firmware knows are coming (a heater's mains-synchronous ones), so few restart.
+/// The waits between slots are never masked.
+///
 ///     acquire() -> send(now, bytes) | receive(now, n) | sendReceive(now, bytes, n)
 ///     operationState(now) until it is not ongoing -> getReceivedBytes(...) -> release()
 template<typename Clock, typename Pin, std::size_t Size, typename Config = OneWireDefaults>
 struct OneWire {
+    template<typename C>
+    using SlotGateOf = typename C::SlotGate;
+    using SlotGate   = ::Kvasir::Config::TypeOr<Config, OneWireAnyTime, SlotGateOf>;
+    template<typename C>
+    using SlotTimerOf = typename C::SlotTimer;
+    using SlotTimer   = ::Kvasir::Config::
+      TypeOr<Config, typename Detail::OneWireDefaultTimer<Clock>::type, SlotTimerOf>;
+
     static constexpr std::size_t bufferSize = Size;
     using TimePoint                         = typename Clock::time_point;
-    enum class State : std::uint8_t { idle, blocked, resetPulse, sending, receiving };
+    enum class State : std::uint8_t { idle, blocked, recovering, resetPulse, sending, receiving };
     enum class OperationState : std::uint8_t { succeeded, failed, ongoing };
 
     static constexpr std::chrono::milliseconds transactionTimeout = Kvasir::asDuration(
@@ -50,6 +132,27 @@ struct OneWire {
 
     static constexpr std::chrono::milliseconds slotBudget = Kvasir::asDuration(
       KVASIR_CONFIG_OR(Config, slotBudget, std::chrono::milliseconds{OneWireDefaults::slotBudget}));
+
+    static constexpr OneWireSlotTiming slotTiming
+      = KVASIR_CONFIG_OR(Config, slotTiming, OneWireDefaults::slotTiming);
+    static constexpr bool checked = slotTiming == OneWireSlotTiming::checked;
+
+    static constexpr std::uint8_t timingRetries
+      = KVASIR_CONFIG_OR(Config, timingRetries, OneWireDefaults::timingRetries);
+
+    /// checked: timed parts an interrupt stretched past their limit (each restarted its transaction).
+    [[nodiscard]] static std::uint32_t timingFaults() { return timingFaults_; }
+
+    /// A slot's timed part, by kind.
+    enum class Part : std::uint8_t { presence, write1, write0, read };
+
+    /// checked: the last part that came out too long, and how long it took.
+    struct TimingFault {
+        Part                      part{};
+        std::chrono::microseconds took{};
+    };
+
+    [[nodiscard]] static TimingFault lastTimingFault() { return lastTimingFault_; }
 
     template<typename C>
     static void getReceivedBytes(C& c) {
@@ -98,6 +201,7 @@ struct OneWire {
     static void send(TimePoint const& currentTime,
                      C const&         c) {
         begin_(currentTime, std::size(c));
+        keep_(c);
         buffer_.push(c);
         receiveSize_ = 0;
     }
@@ -108,6 +212,7 @@ struct OneWire {
         assert(size <= buffer_.max_size());
         begin_(currentTime, size);
         receiveSize_ = size;
+        rxSize_      = size;
     }
 
     /// Reset pulse, `c` out, then `size` bytes in.
@@ -117,8 +222,10 @@ struct OneWire {
                             std::uint8_t     size) {
         assert(size <= buffer_.max_size());
         begin_(currentTime, std::size(c) + size);
+        keep_(c);
         buffer_.push(c);
         receiveSize_ = size;
+        rxSize_      = size;
     }
 
     static void turn() {
@@ -129,12 +236,26 @@ struct OneWire {
             {
             }
             break;
+        case State::recovering:
+            {
+                // a restart: the line high for a slot (tREC) before the new reset pulse
+                if(currentTime > waitTime_) {
+                    pinClear();
+                    waitTime_ = currentTime + resetLow;
+                    state_    = State::resetPulse;
+                }
+            }
+            break;
         case State::resetPulse:
             {
-                if(currentTime > waitTime_) {
-                    pinSet();
-                    Clock::delay(presenceSample);
-                    if(pinRead()) {
+                if(currentTime > waitTime_ && SlotGate::open(presenceLimit)) {
+                    bool       noPresence{};
+                    bool const inTime = presence(noPresence);
+                    if(!inTime) {
+                        restart_(
+                          Clock::
+                            now());   // sampled past the presence window: say nothing about the part
+                    } else if(noPresence) {
                         state_          = State::blocked;
                         operationState_ = OperationState::failed;
                     } else {
@@ -157,7 +278,11 @@ struct OneWire {
                     } else {
                         auto const b   = *next;
                         auto const bit = ((b >> bitCount_) & std::byte{1}) == std::byte{1};
-                        writeBit(bit);
+                        if(!SlotGate::open(bit ? write1Limit : write0Limit)) { break; }
+                        if(!writeBit(bit)) {
+                            restart_(Clock::now());
+                            break;
+                        }
                         ++bitCount_;
                         if(bitCount_ == 8) {
                             bitCount_ = 0;
@@ -175,7 +300,14 @@ struct OneWire {
                         operationState_ = OperationState::succeeded;
                         state_          = State::blocked;
                     } else {
-                        auto const b = std::byte(readBit());
+                        if(!SlotGate::open(readLimit)) { break; }
+                        bool       v{};
+                        bool const inTime = readBit(v);
+                        if(!inTime) {
+                            restart_(Clock::now());
+                            break;
+                        }
+                        auto const b = std::byte(v);
                         currentByte_ |= b << bitCount_;
                         ++bitCount_;
                         if(bitCount_ == 8) {
@@ -198,24 +330,93 @@ struct OneWire {
 
     static bool pinRead() { return apply(read(Pin{})); }
 
-    static void writeBit(bool v) {
-        if(v) {
-            pinClear();
-            Clock::delay(write1Low);
+    // The timed parts. masked: interrupts masked, each wait a Clock::delay after the step before. checked: nothing
+    // masked, every wait a deadline from the part's one start instant (the clock reads and pin writes of the steps
+    // before do not add up), the part measured against its limit at its end - false when it took longer: an interrupt
+    // stretched it, what it saw or sent may be wrong.
+
+    /// The presence sample after the reset pulse's release.
+    static bool presence(bool& noPresence) {
+        if constexpr(checked) {
+            auto const start = SlotTimer::stamp();
             pinSet();
+            until(start, presenceSample);
+            noPresence = pinRead();
+            return inTime(Part::presence, start, presenceLimit);
         } else {
-            pinClear();
-            Clock::delay(write0Low);
-            pinSet();
+            noPresence = criticalSection([] {
+                pinSet();
+                Clock::delay(presenceSample);
+                return pinRead();
+            });
+            return true;
         }
     }
 
-    static bool readBit() {
-        pinClear();
-        Clock::delay(readLow);
-        pinSet();
-        Clock::delay(readSample);
-        return pinRead();
+    /// One write slot's low pulse.
+    static bool writeBit(bool v) {
+        if constexpr(checked) {
+            auto const start = SlotTimer::stamp();
+            pinClear();
+            until(start, v ? write1Low : write0Low);
+            pinSet();
+            return v ? inTime(Part::write1, start, write1Limit)
+                     : inTime(Part::write0, start, write0Limit);
+        } else {
+            criticalSection([v] {
+                pinClear();
+                if(v) {
+                    Clock::delay(
+                      write1Low);   // each a constant: nothing computed inside the 5 us pulse
+                } else {
+                    Clock::delay(write0Low);
+                }
+                pinSet();
+            });
+            return true;
+        }
+    }
+
+    /// One read slot: the low pulse, then the sample.
+    static bool readBit(bool& v) {
+        if constexpr(checked) {
+            auto const start = SlotTimer::stamp();
+            pinClear();
+            until(start, readLow);
+            pinSet();
+            until(start, readAt);
+            v = pinRead();
+            return inTime(Part::read, start, readLimit);
+        } else {
+            v = criticalSection([] {
+                pinClear();
+                Clock::delay(readLow);
+                pinSet();
+                Clock::delay(readSample);
+                return pinRead();
+            });
+            return true;
+        }
+    }
+
+    using Stamp = typename SlotTimer::Stamp;
+
+    /// Waits until `at` after `start` (SlotTimer::wait of what is left).
+    static void until(Stamp                     start,
+                      std::chrono::microseconds at) {
+        if(auto const left = at - SlotTimer::since(start); left > decltype(left){}) {
+            SlotTimer::wait(left);
+        }
+    }
+
+    /// checked: did the part that began at `start` end inside `limit`? Notes the one that did not.
+    static bool inTime(Part                      part,
+                       Stamp                     start,
+                       std::chrono::microseconds limit) {
+        auto const took = SlotTimer::since(start);
+        if(took <= limit) { return true; }
+        lastTimingFault_ = {part, std::chrono::duration_cast<std::chrono::microseconds>(took)};
+        return false;
     }
 
     /// The Dallas/Maxim CRC-8 of `data` (Bytes.hpp): 0 over a ROM or scratchpad that
@@ -233,16 +434,60 @@ struct OneWire {
     }
 
 private:
+    using Us = std::chrono::microseconds;
     // Standard-speed slot timings: AN126's where they match it, the others inside the MAX31820
-    // limits (the class comment above).
-    static constexpr std::chrono::microseconds resetLow{480};
-    static constexpr std::chrono::microseconds presenceSample{70};
-    static constexpr std::chrono::microseconds presenceRest{410};
-    static constexpr std::chrono::microseconds slot{64};
-    static constexpr std::chrono::microseconds write1Low{5};
-    static constexpr std::chrono::microseconds write0Low{65};
-    static constexpr std::chrono::microseconds readLow{3};
-    static constexpr std::chrono::microseconds readSample{10};
+    // limits (the class comment above). checked samples earlier inside the same windows: the measured part has to
+    // stay under its limit with the clock reads and room for an interrupt.
+    static constexpr Us resetLow{480};
+    static constexpr Us presenceSample{
+      checked ? 64 : 70};                 // presence low guaranteed 60..75 us after the release
+    static constexpr Us resetHigh{480};   // tRSTH: from the release to the first slot
+    static constexpr Us presenceRest{resetHigh - presenceSample};
+    static constexpr Us slot{64};
+    static constexpr Us write1Low{5};
+    static constexpr Us write0Low{65};
+    static constexpr Us readLow{checked ? 2 : 3};
+    static constexpr Us readSample{10};   // masked: after the release
+    static constexpr Us readAt{8};        // checked: after the fall - 6 us for the line to rise
+    // The limits a checked part is measured against (MAX31820 Table "AC Electrical Characteristics"): the presence
+    // sample before tPDHIGH min + tPDLOW min = 75 us, tLOW1 15 us, tLOW0 120 us, a read's sample within tRDV 15 us
+    // of its fall. Their minimums need no check: the delays are the lower bounds, and an interrupt only lengthens.
+    static constexpr Us presenceLimit{75};
+    static constexpr Us write1Limit{15};
+    static constexpr Us write0Limit{120};
+    static constexpr Us readLimit{15};
+    static_assert(!checked
+                    || (presenceSample < presenceLimit && write1Low < write1Limit
+                        && write0Low < write0Limit && readLow < readAt && readAt < readLimit),
+                  "every checked part fits its limit with room for the clock reads");
+
+    /// What a transaction sends, for a restart.
+    template<typename C>
+    static void keep_(C const& c) {
+        txSize_ = 0;
+        for(auto const b : c) { tx_[txSize_++] = static_cast<std::byte>(b); }
+        rxSize_ = 0;
+    }
+
+    /// checked: a timed part came out too long - the transaction again from a reset pulse (a reset ends whatever the
+    /// part made of the slot) after a slot's recovery, up to timingRetries times in a row; then it fails.
+    static void restart_(TimePoint const& currentTime) {
+        ++timingFaults_;
+        if(++retries_ > timingRetries) {
+            state_          = State::blocked;
+            operationState_ = OperationState::failed;
+            pinSet();
+            return;
+        }
+        auto const receive = rxSize_;
+        buffer_.clear();
+        for(std::size_t i = 0; i < txSize_; ++i) { buffer_.push(tx_[i]); }
+        bitCount_    = 0;
+        currentByte_ = std::byte{};
+        receiveSize_ = receive;
+        state_       = State::recovering;
+        waitTime_    = currentTime + slot;
+    }
 
     /// Every transaction starts from nothing: an empty buffer, no bits of a previous byte,
     /// the reset pulse. Its deadline covers `bytes` bytes of slots.
@@ -252,6 +497,8 @@ private:
         bitCount_       = 0;
         currentByte_    = std::byte{};
         receiveSize_    = 0;
+        txSize_         = 0;
+        retries_        = 0;
         state_          = State::resetPulse;
         operationState_ = OperationState::ongoing;
         timeoutTime_
@@ -268,5 +515,11 @@ private:
     inline static std::uint8_t                                 receiveSize_{};
     inline static std::uint8_t                                 bitCount_{};
     inline static std::byte                                    currentByte_{};
+    inline static std::array<std::byte, bufferSize>            tx_{};
+    inline static std::uint8_t                                 txSize_{};
+    inline static std::uint8_t                                 rxSize_{};
+    inline static std::uint8_t                                 retries_{};
+    inline static std::uint32_t                                timingFaults_{};
+    inline static TimingFault                                  lastTimingFault_{};
 };
 }   // namespace Kvasir
