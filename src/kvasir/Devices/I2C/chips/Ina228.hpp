@@ -15,6 +15,60 @@
 
 namespace Kvasir::I2C::Chips {
 
+/// ADC_CONFIG (01h), field for field the same on the INA228, INA238 and INA237 (INA228 Table
+/// 7-6, INA238 Table 6-6): MODE 15:12 (Fh: continuous bus, shunt and temperature), VBUSCT 11:9,
+/// VSHCT 8:6, VTCT 5:3 (each 50 to 4120 us) and AVG 2:0 (1 to 1024 conversions averaged
+/// before the result registers change). Taken from the description's `Timing` type, whose
+/// knobs are `busConversion`, `shuntConversion`, `temperatureConversion` (durations) and
+/// `averages`; without them it is the reset value FB68h (1052 us each, no averaging):
+///     struct Quiet {
+///         static constexpr std::chrono::microseconds busConversion{4120};
+///         static constexpr std::chrono::microseconds shuntConversion{4120};
+///         static constexpr std::chrono::microseconds temperatureConversion{540};
+///         static constexpr unsigned                  averages = 128;
+///     };   // FFE4h: a new result every 128 x (4120 + 4120 + 540) us = 1.12 s
+/// The result registers hold the last finished average; CNVRF (DIAG_ALRT bit 1) says one finished.
+namespace Ina2xxDetail {
+    inline constexpr std::array<unsigned, 8>
+      conversionSteps{50, 84, 150, 280, 540, 1052, 2074, 4120};
+    inline constexpr std::array<unsigned, 8> averageSteps{1, 4, 16, 64, 128, 256, 512, 1024};
+
+    /// The field code of a value in the table, 8 for one that is not a step.
+    consteval unsigned code(std::array<unsigned,
+                                       8> const& steps,
+                            unsigned             value) {
+        for(unsigned i = 0; i < steps.size(); ++i) {
+            if(steps[i] == value) { return i; }
+        }
+        return 8;
+    }
+
+    template<typename Timing>
+    consteval std::uint16_t adcConfig() {
+        using us = std::chrono::microseconds;
+        constexpr auto bus
+          = std::chrono::duration_cast<us>(KVASIR_CONFIG_OR(Timing, busConversion, us{1052}));
+        constexpr auto shunt
+          = std::chrono::duration_cast<us>(KVASIR_CONFIG_OR(Timing, shuntConversion, us{1052}));
+        constexpr auto temp = std::chrono::duration_cast<us>(
+          KVASIR_CONFIG_OR(Timing, temperatureConversion, us{1052}));
+        constexpr auto busCode   = code(conversionSteps, static_cast<unsigned>(bus.count()));
+        constexpr auto shuntCode = code(conversionSteps, static_cast<unsigned>(shunt.count()));
+        constexpr auto tempCode  = code(conversionSteps, static_cast<unsigned>(temp.count()));
+        constexpr auto avgCode
+          = code(averageSteps, static_cast<unsigned>(KVASIR_CONFIG_OR(Timing, averages, 1U)));
+        static_assert(busCode < 8 && shuntCode < 8 && tempCode < 8,
+                      "busConversion, shuntConversion and temperatureConversion are one of 50, 84, "
+                      "150, 280, 540, 1052, 2074 and 4120 us");
+        static_assert(avgCode < 8, "averages is one of 1, 4, 16, 64, 128, 256, 512 and 1024");
+        return static_cast<std::uint16_t>(0xF000U | (busCode << 9U) | (shuntCode << 6U)
+                                          | (tempCode << 3U) | avgCode);
+    }
+
+    static_assert(adcConfig<Engine::DefaultTiming>() == 0xFB68,
+                  "no knobs: the reset value");
+}   // namespace Ina2xxDetail
+
 namespace Ina228Detail {
     /// ADCRANGE (CONFIG bit 4): the shunt full scale.
     enum class Range : std::uint8_t {
@@ -244,8 +298,9 @@ struct Ina228 {
         }
     };
 
-    /// Reset 0xFB68: continuous shunt, bus and temperature, 1052 us conversions, 1 average.
-    using AdcConfig = Engine::Groups::Word<0x01, 0xFB68>;
+    /// Continuous shunt, bus and temperature at the Timing's conversion times and averaging
+    /// (Ina2xxDetail::adcConfig): its reset value FB68h, 1052 us and no averaging, by default.
+    using AdcConfig = Engine::Groups::Word<0x01, Ina2xxDetail::adcConfig<Timing>()>;
     using ShuntCal  = Engine::Groups::Word<0x02, calibration>;
 
     using Reads  = Engine::List<Power>;

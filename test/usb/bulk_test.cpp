@@ -3,10 +3,12 @@
 // interface with a chip's actions plugged in. Against both kinds of controller.
 #include "UsbHost.hpp"
 //
+#include <algorithm>
 #include <chrono>
 #include <kvasir/Devices/USB/SimpleBulk.hpp>
 #include <kvasir/Devices/USB/VendorReset.hpp>
 #include <kvasir/Devices/USB/WinUsb.hpp>
+#include <span>
 #include <vector>
 
 using namespace Kvasir::Test;
@@ -169,6 +171,31 @@ void run(char const* name) {
         auto const data = pattern(100, 77);
         checkEq(Host::bulkOut(1, data), 100U, "taken");
         check(readAll() == data, "there at once");
+    }
+
+    // wipeReceived(): a request that carried a secret is read, and nothing of it stays in the receive queue or the
+    // staging - what was not read yet stays as it came. Mutation: Queue::wipeFree() leaving the slots (or
+    // wipeReceived() not calling it) - the secret is found in the queue.
+    testCase("host to device: wipeReceived() zeroes what was read and keeps what was not");
+    {
+        using Out = Kvasir::USB::Detail::BulkOutEndpoint<Clock, Device, 1, Config::recvBufferSize>;
+        auto const holdsRunOf
+          = [](std::span<std::byte const> where, std::span<std::byte const> secret) {
+                return !std::ranges::search(where, secret.first(16)).empty();
+            };
+        auto const secret = pattern(100, 91);
+        checkEq(Host::bulkOut(1, secret), 100U, "taken");
+        check(readAll() == secret, "read");
+        auto const queueBytes   = std::as_bytes(std::span{&Out::queue, 1});
+        auto const stagingBytes = std::as_bytes(std::span{Out::staging});
+        check(holdsRunOf(queueBytes, secret) || holdsRunOf(stagingBytes, secret),
+              "read and gone from the queue's size, it is still in its storage");
+        auto const unread = pattern(40, 92);
+        checkEq(Host::bulkOut(1, unread), 40U, "40 more, not read yet");
+        check(Data::wipeReceived(), "wiped");
+        check(!holdsRunOf(queueBytes, secret), "nothing of what was read is left in the queue");
+        check(!holdsRunOf(stagingBytes, secret), "nor in the staging");
+        check(readAll() == unread, "what was not read comes out as it came");
     }
 
     testCase("host to device: whole packets, then more - order is kept across the take-back");

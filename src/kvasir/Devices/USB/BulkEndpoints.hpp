@@ -844,6 +844,36 @@ public:
                                .restarting  = In::restartPending,
                                .halted      = In::halted};
     }
+
+    /// Zero what came in and has been read: the receive queue's free slots, the staging a controller that gathers a
+    /// transfer itself fills (unless the transfer armed into it holds bytes already), and the controller's own OUT
+    /// buffers where the endpoint can (its optional wipeBuffers(), Backend.hpp). Bytes still queued are kept. For a
+    /// protocol whose requests carry secrets: once one is read, before it is answered, nothing of it stays in RAM the
+    /// next image or a debugger could read. With the device's interrupt masked (Device::withIsrMasked), from the
+    /// reading side's loop, where the host sends nothing meanwhile (it waits for an answer): a packet arriving in the
+    /// middle may be damaged. False while received bytes wait in the controller to be taken: call it again later.
+    /// What the interrupt copies a packet through on its own stack (bufferDone's packet buffer) is not reached here.
+    static bool wipeReceived()
+        requires Bidirectional
+    {
+        return Derived::withIsrMasked([] {
+            Out::queue.wipeFree();
+            if constexpr(Out::receivesInPlace) {
+                if(Out::armedSize == 0 || Out::EP::receivedSoFar() == 0) {
+                    for(std::byte& b : Out::staging) {
+                        static_cast<std::byte volatile&>(b) = std::byte{};
+                    }
+                } else {
+                    return false;
+                }
+            }
+            if constexpr(requires { Out::EP::wipeBuffers(); }) {
+                return Out::EP::wipeBuffers();
+            } else {
+                return true;
+            }
+        });
+    }
 };
 
 }   // namespace Kvasir::USB::Detail

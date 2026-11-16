@@ -7,7 +7,8 @@
 //
 // The rows, in table order (`State` is the engine's view of the device, `TimePoint` the clock's):
 //   script, buffer      the script the current run walks, and the buffer its steps read into or write from
-//   sizeRead            a read group whose prepare() sized this run (only chips that need it)
+//   sizeRead            a read group whose prepare() sized this run, or whose count(State, step) sizes a step to the
+//                       part that answered (only chips that need it)
 //   countRead           a counted read whose length an earlier step read
 //   ready               the running read group's ready(): a check or stopUnless step asks it
 //   oracle, identify    the Identity registers against the data sheet, and setup() on a probe copy of the State:

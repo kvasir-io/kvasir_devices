@@ -167,6 +167,18 @@ namespace Detail {
       = HasRequest<G> && requires(typename G::Request const& r, std::span<std::byte> b) {
             { G::prepare(r, b) } -> std::convertible_to<std::size_t>;
         };
+
+    /// A read group whose byte counts follow the part that answered: one description for a
+    /// family whose members hold the same register at two widths (the INA238's 16-bit and the
+    /// INA228's 24-bit results). `count(state, step)` is how many bytes read step `step` -- its
+    /// index in `steps` -- takes from this part, from the State identified() or setup() filled.
+    /// The script's own `count` is the most it may be (buffer, offsets and the bus load are the
+    /// script's), and 0 or more than that reads the script's count. Asked for every read step
+    /// of every run of the group; Init, Identity and read-back steps never ask.
+    template<typename G, typename State>
+    concept HasStateCount = requires(State const& s, std::size_t step) {
+        { G::count(s, step) } -> std::convertible_to<std::uint8_t>;
+    };
     template<typename G>
     concept HasItems = requires {
         { G::items } -> std::convertible_to<std::size_t>;

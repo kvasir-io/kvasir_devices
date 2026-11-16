@@ -2571,6 +2571,135 @@ void countedReads() {
     checkEq(d.latest<Short>().size, std::size_t{1}, "not what the last run read");
 }
 
+// -- state counts: one description, a register two bytes wide on one part, three on the other
+
+namespace StateCountTest {
+
+    /// Two parts of one family at 0x34, told apart by the id at 0x0F (0x10 narrow, 0x11 wide):
+    /// register 0x02 is two bytes on the narrow one and three on the wide one. count() says
+    /// so per step; for 0x03 it asks for more than the script holds, which reads the script's.
+    struct Family {
+        static constexpr std::string_view name          = "FAMILY";
+        static constexpr Address7         address       = 0x34;
+        static constexpr std::size_t      registerBytes = 1;
+        static constexpr std::array       identity{
+          Kvasir::Engine::RegisterCheck{"id", 0x0F, 1, true, 0xFE, 0x10}
+        };
+
+        struct State {
+            std::uint8_t id{};
+        };
+
+        static constexpr void identified(std::span<std::uint32_t const> ids,
+                                         State&                         state) {
+            state.id = static_cast<std::uint8_t>(ids[0]);
+        }
+
+        [[nodiscard]] static constexpr bool wide(State const& s) { return (s.id & 0x01U) != 0; }
+
+        struct Value {
+            static constexpr auto       period = std::chrono::milliseconds{100};
+            static constexpr std::array steps{
+              Kvasir::Engine::Step::read({.reg = 0x01, .count = 1, .offset = 0}),
+              Kvasir::Engine::Step::read({.reg = 0x02, .count = 3, .offset = 1}),
+              Kvasir::Engine::Step::read({.reg = 0x03, .count = 2, .offset = 4})};
+
+            [[nodiscard]] static constexpr std::uint8_t count(State const& s,
+                                                              std::size_t  step) {
+                if(step == 1) { return wide(s) ? 3 : 2; }
+                if(step == 2) { return 9; }   // past the script's 2: the script's
+                return 0;                     // the script's
+            }
+
+            struct Sample {
+                std::size_t   size{};    ///< what decode was handed
+                std::uint32_t value{};   ///< register 0x02 at the part's width
+                std::uint16_t tail{};    ///< register 0x03
+            };
+
+            [[nodiscard]] static constexpr Sample decode(Kvasir::Bytes data,
+                                                         State const&  s) {
+                return {data.size(),
+                        wide(s) ? data.be24(1) : static_cast<std::uint32_t>(data.be16(1)),
+                        data.be16(4)};
+            }
+        };
+
+        using Reads = Kvasir::Engine::List<Value>;
+    };
+
+    static_assert(Kvasir::Engine::Detail::HasStateCount<Family::Value,
+                                                        Family::State>
+                    && !Kvasir::Engine::Detail::HasStateCount<PresenceTest::Probe::Value,
+                                                              Family::State>,
+                  "count(State, step) is what makes a group size its steps by the part");
+    static_assert(Dev<Family>::needsSizedRead && !Dev<PresenceTest::Probe>::needsSizedRead,
+                  "and only such a chip pays for the hook");
+
+}   // namespace StateCountTest
+
+void stateCounts() {
+    using namespace StateCountTest;
+    using Value = Family::Value;
+
+    // installed in each part: a case's start (and next()) clears the bus and its responder
+    std::uint8_t id = 0x10;
+    auto const   answer =
+      [&](std::uint8_t a, std::span<std::byte const> sent, std::span<std::byte> recv) {
+          if(a != Family::address) { return FakeBus::Result::nack; }
+          auto const reg = sent.empty() ? -1 : static_cast<int>(static_cast<std::uint8_t>(sent[0]));
+          std::array<std::uint8_t, 4> bytes{};
+          if(reg == 0x0F) { bytes = {id, 0, 0, 0}; }
+          if(reg == 0x01) { bytes = {0x5A, 0, 0, 0}; }
+          if(reg == 0x02) { bytes = {0x12, 0x34, 0x56, 0x78}; }
+          if(reg == 0x03) { bytes = {0xAB, 0xCD, 0xEF, 0x01}; }
+          for(std::size_t i = 0; i < recv.size(); ++i) {
+              recv[i] = std::byte{i < bytes.size() ? bytes[i] : std::uint8_t{0xFF}};
+          }
+          return FakeBus::Result::ok;
+      };
+    auto const lengthsOf = [](int reg) {
+        std::vector<std::size_t> lengths;
+        for(auto const& t : FakeBus::log) {
+            if(t.isRead() && !t.sent.empty() && t.sent[0] == reg) { lengths.push_back(t.recvLen); }
+        }
+        return lengths;
+    };
+
+    I2cCase testcase{"state count: the narrow part reads two bytes where the script says three"};
+    {
+        ScopedHook const answering{FakeBus::respond, answer};
+        Dev<Family>      d{};
+        check(runUntil(d, [&] { return d.samples<Value>() >= 2; }, 1s), "sampling");
+        check(!lengthsOf(0x02).empty()
+                && std::ranges::all_of(lengthsOf(0x02), [](std::size_t n) { return n == 2; }),
+              "two bytes of 0x02, every run");
+        check(!lengthsOf(0x03).empty()
+                && std::ranges::all_of(lengthsOf(0x03), [](std::size_t n) { return n == 2; }),
+              "a count past the script's reads the script's two");
+        check(std::ranges::all_of(lengthsOf(0x0F), [](std::size_t n) { return n == 1; }),
+              "the identity read is not asked");
+        checkEq(d.latest<Value>().value, 0x1234U, "decoded at the narrow width");
+        checkEq(d.latest<Value>().tail, 0xABCDU, "the next step at its offset");
+        checkEq(d.latest<Value>().size, std::size_t{6}, "decode sees the script's whole buffer");
+        checkEq(d.errors(), 0U, "and nothing failed");
+    }
+
+    testcase.next("state count: the wide part reads all three, at the same offsets");
+    id = 0x11;
+    {
+        ScopedHook const answering{FakeBus::respond, answer};
+        Dev<Family>      d{};
+        check(runUntil(d, [&] { return d.samples<Value>() >= 2; }, 1s), "sampling");
+        check(!lengthsOf(0x02).empty()
+                && std::ranges::all_of(lengthsOf(0x02), [](std::size_t n) { return n == 3; }),
+              "three bytes of 0x02");
+        checkEq(d.latest<Value>().value, 0x123456U, "decoded at the wide width");
+        checkEq(d.latest<Value>().tail, 0xABCDU, "0x03 where the script put it");
+        checkEq(d.errors(), 0U, "and nothing failed");
+    }
+}
+
 // -- wake retries: a part that NAKs until it is awake --------------------------------------
 
 namespace WakeTest {
@@ -3610,6 +3739,7 @@ int main() {
     nets();
     knobs();
     countedReads();
+    stateCounts();
     wakeRetries();
     mayNak();
     confirmChange();

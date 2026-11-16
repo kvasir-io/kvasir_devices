@@ -4,6 +4,7 @@
 #include "../../Engine/Groups.hpp"
 #include "../Address.hpp"
 #include "../Quantities.hpp"
+#include "Ina228.hpp"   // Ina2xxDetail (ADC_CONFIG), and the INA228 half of Ina238Or228
 #include "kvasir/Util/Config.hpp"
 
 #include <array>
@@ -222,7 +223,9 @@ struct Ina238 {
         }
     };
 
-    using AdcConfig = Engine::Groups::Word<0x01, 0xFB68>;
+    /// Continuous shunt, bus and temperature at the Timing's conversion times and averaging
+    /// (Ina2xxDetail::adcConfig, the INA228's field layout): FB68h, the reset value, by default.
+    using AdcConfig = Engine::Groups::Word<0x01, Ina2xxDetail::adcConfig<Timing>()>;
     /// Computed from the template parameters, written after every bring-up.
     using ShuntCal = Engine::Groups::Word<0x02, calibration>;
 
@@ -261,6 +264,160 @@ struct Ina237 : Ina238<Shunt, MaxCurrent, Range, Timing> {
         state.manufacturer = static_cast<std::uint16_t>(ids[0]);
         state.deviceId     = 0;
     }
+};
+
+/// An INA238 or an INA228, whichever is fitted, each at its own resolution: one board design
+/// takes either part at the same address (the same VSSOP-10 pinout, the same register
+/// addresses), and the firmware does not have to know which (INA228 SLYS021A Table 7-3).
+///
+/// What differs: the INA228's shunt voltage, bus voltage and current are 24-bit registers with
+/// a 20-bit value in bits 23:4 (Tables 7-9, 7-10, 7-12), the INA238's are 16 bits, and the
+/// INA228's DIETEMP is all 16 bits at 7.8125 m degC (Table 7-11) where the INA238's is 12 at
+/// 125. The Power group's script reads three bytes of 0x04, 0x05 and 0x07, and count() asks
+/// the engine for two of each on an INA238, so an INA238 sees exactly the transfers its own
+/// description makes. decode() then hands the bytes, laid out as each part's own description
+/// expects, to Ina228's or Ina238's decode: the scales and the MATHOF rejection are theirs.
+/// What is the same: SHUNT_CAL comes out one number for both (13107.2e6 / 2^19 = 819.2e6 /
+/// 2^15 per amp-ohm, static_asserted), CONFIG (CONVDLY 13:6, ADCRANGE 4; the INA228's
+/// TEMPCOMP in bit 5 stays 0, reserved on the INA238; its RSTACC is never set), ADC_CONFIG
+/// (Ina2xxDetail::adcConfig, from the Timing) and the DIAG_ALRT bits (MATHOF 9, TMPOL 7,
+/// BUSOL 4, BUSUL 3, POL 2, CNVRF 1). The INA228's energy and charge accumulators are not read.
+///
+/// DIAG_ALRT is read first, and a frame whose CNVRF (bit 1) is clear is Outcome::unchanged():
+/// reading DIAG_ALRT clears CNVRF, so it is set only when an average finished since the last
+/// frame (INA228 7.3.4, INA238 6.3.4). With averaging the result registers change once a
+/// period of seconds, and after a bring-up they read 0 until the first average is done -- so
+/// no sample stands (valid() false) until a real one is in, and seq steps once per average.
+///
+/// The identity takes DIEID 238h or 228h (DEVICE_ID 15:4, mask 0xFEF0: the two differ in bit
+/// 8 alone, and no other DIEID the family uses -- 229h, 239h -- passes it); `isIna228` says
+/// which one answered.
+template<MicroOhm            Shunt      = Units::microOhm(2000),
+         MilliAmp            MaxCurrent = Units::milliAmp(10000),
+         Ina238Detail::Range Range      = Ina238Detail::Range::mV160,
+         typename Timing                = Engine::DefaultTiming>
+struct Ina238Or228 : Ina238<Shunt, MaxCurrent, Range, Timing> {
+    using Base  = Ina238<Shunt, MaxCurrent, Range, Timing>;
+    using Wide  = Ina228<Shunt,
+                         MaxCurrent,
+                         Range == Ina238Detail::Range::mV40 ? Ina228Detail::Range::mV40
+                                                            : Ina228Detail::Range::mV160,
+                         Timing>;
+    using State = typename Base::State;
+
+    static_assert(Wide::calibration == Base::calibration,
+                  "SHUNT_CAL rounds to two numbers for the INA228 and the INA238 at this shunt "
+                  "and full scale; Ina238Or228 writes one");
+
+    static constexpr std::string_view name = "INA238/INA228";
+    static constexpr std::array       identity{
+      Engine::RegisterCheck{"manufacturer-id", 0x3E, 2, true, 0xFFFF, 0x5449},
+      Engine::RegisterCheck{      "device-id", 0x3F, 2, true, 0xFEF0, 0x2280},
+    };
+
+    /// The part that passed the identity is an INA228 (DIEID 228h), not an INA238.
+    [[nodiscard]] static constexpr bool isIna228(State const& state) {
+        return (state.deviceId & 0xFFF0U) == 0x2280U;
+    }
+
+    /// Every bring-up starts with CONFIG.RST, "a system reset that is the same as power-on
+    /// reset" (INA228 Table 7-5, INA238 the same bit), before the write groups configure the
+    /// part. A part only gets its own power-on reset when VS falls below 1.26 V (INA228 7.4.2),
+    /// and a board can keep VS from getting there: an ALERT pulled up to an always-on rail
+    /// while VS is switched off (ALERT is held to VS + 0.3 V, INA228 6.1) feeds
+    /// the part through that pin, half powered, until VS comes on again. An INA228 came out of
+    /// that with a failed trim load (DIAG_ALRT MEMSTAT 0, every result register 0, the ADC never
+    /// converting) that no write of the configuration cures; the reset reloads the trim once VS
+    /// is up, which the bring-up waits for (the devices' gate).
+    /// mayNak: the part may let go of the bus inside the byte that resets it. 2 ms covers the
+    /// ~300 us the oscillator and the ADC take after a reset (INA228 7.3.6).
+    static constexpr std::array init{
+      Engine::Step::write({.reg     = 0x00,
+                           .payload = {0x80, 0x00},
+                           .delay   = std::chrono::milliseconds{2},
+                           .mayNak  = true}
+      ),
+    };
+
+    struct Power {
+        static constexpr auto period = Base::readPeriod;
+
+        /// DIAG_ALRT first (its CNVRF says whether the rest is new), then the results at the
+        /// INA228's widths; count() narrows 0x04, 0x05 and 0x07 to the INA238's two bytes.
+        static constexpr std::array steps{
+          Engine::Step::read({.reg = 0x0B, .count = 2, .offset = 0}),    // DIAG_ALRT
+          Engine::Step::read({.reg = 0x04, .count = 3, .offset = 2}),    // shunt voltage
+          Engine::Step::read({.reg = 0x05, .count = 3, .offset = 5}),    // bus voltage
+          Engine::Step::read({.reg = 0x06, .count = 2, .offset = 8}),    // die temperature
+          Engine::Step::read({.reg = 0x07, .count = 3, .offset = 10}),   // current
+          Engine::Step::read({.reg = 0x08, .count = 3, .offset = 13}),   // power, 24 bit on both
+        };
+
+        /// The three registers that are 16 bits on the INA238 and 24 on the INA228.
+        [[nodiscard]] static constexpr std::uint8_t count(State const& state,
+                                                          std::size_t  step) {
+            bool const widened = step == 1 || step == 2 || step == 4;
+            return widened && !isIna228(state) ? std::uint8_t{2} : std::uint8_t{0};
+        }
+
+        using Sample = typename Base::Power::Sample;
+
+        [[nodiscard]] static constexpr Engine::Outcome<Sample> decode(Bytes        data,
+                                                                      State const& state) {
+            if((data.be16(0) & 0x0002U) == 0) {   // CNVRF: no average finished since the last frame
+                return Engine::Outcome<Sample>::unchanged();
+            }
+            auto const at = [&](std::size_t i) { return std::byte{data.u8(i)}; };
+            if(isIna228(state)) {
+                // Ina228::Power: shunt 0, bus 3, die 6, current 8, power 11 (3 each but die),
+                // DIAG_ALRT 14.
+                std::array<std::byte, 16> const wide{at(2),
+                                                     at(3),
+                                                     at(4),
+                                                     at(5),
+                                                     at(6),
+                                                     at(7),
+                                                     at(8),
+                                                     at(9),
+                                                     at(10),
+                                                     at(11),
+                                                     at(12),
+                                                     at(13),
+                                                     at(14),
+                                                     at(15),
+                                                     at(0),
+                                                     at(1)};
+                auto const r = Wide::Power::decode(Bytes{std::span<std::byte const>{wide}});
+                if(r.kind != Engine::DecodeKind::ok) { return Engine::Outcome<Sample>::reject(); }
+                Sample s{};
+                s.shuntVoltage   = r.value.shuntVoltage;
+                s.busVoltage     = r.value.busVoltage;
+                s.dieTemperature = r.value.dieTemperature;
+                s.current        = r.value.current;
+                s.power          = r.value.power;
+                s.diagnostics    = r.value.diagnostics;
+                return Engine::Outcome<Sample>::ok(s);
+            }
+            // Ina238::Power: shunt 0, bus 2, die 4, current 6 (2 each), power 8 (3), DIAG_ALRT 11;
+            // the third byte of each widened slot was not read.
+            std::array<std::byte, 13> const narrow{at(2),
+                                                   at(3),
+                                                   at(5),
+                                                   at(6),
+                                                   at(8),
+                                                   at(9),
+                                                   at(10),
+                                                   at(11),
+                                                   at(13),
+                                                   at(14),
+                                                   at(15),
+                                                   at(0),
+                                                   at(1)};
+            return Base::Power::decode(Bytes{std::span<std::byte const>{narrow}});
+        }
+    };
+
+    using Reads = Engine::List<Power>;
 };
 
 }   // namespace Kvasir::I2C::Chips

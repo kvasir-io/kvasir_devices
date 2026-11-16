@@ -882,6 +882,168 @@ void ina238() {
     }());
 }
 
+/// ADC_CONFIG knobs for ina238Or228(): long conversions, 128 averages.
+struct Quiet {
+    static constexpr std::chrono::microseconds busConversion{4120};
+    static constexpr std::chrono::microseconds shuntConversion{4120};
+    static constexpr std::chrono::microseconds temperatureConversion{540};
+    static constexpr unsigned                  averages = 128;
+};
+
+/// The INA238 / INA228 description: either part at 0x40, each at its own width, the averaging
+/// knobs in ADC_CONFIG, and no sample until CNVRF says an average finished.
+void ina238Or228() {
+    I2cCase testcase{"INA238/INA228: an INA228 is read at 24 bits"};
+
+    static_assert(Chips::Ina2xxDetail::adcConfig<Quiet>() == 0xFFE4,
+                  "4120/4120/540 us, 128 averages: VBUSCT 7, VSHCT 7, VTCT 4, AVG 4");
+    using Both = Chips::Ina238Or228<Units::microOhm(2000),
+                                    Units::milliAmp(10000),
+                                    Chips::Ina238Detail::Range::mV160,
+                                    Quiet>;
+    checkEq(Both::calibration, std::uint16_t{500}, "one SHUNT_CAL for both parts");
+
+    // Registers of any width; a read gets the register's bytes and 0xFF past them, so a read
+    // wider than the register would show in the value. Every read's length is kept.
+    // Static, so the lambdas below name them without capturing them: clang's lifetime analysis takes a map captured
+    // by reference and assigned anew between the cases for a dangling one.
+    static std::map<std::uint8_t, std::vector<std::uint8_t>> regs;
+    static std::map<std::uint8_t, std::vector<std::size_t>>  readLengths;
+    static std::vector<unsigned>                             configWrites;   // CONFIG, in order
+    regs.clear();
+    readLengths.clear();
+    configWrites.clear();
+    // installed again after every next(): a case's start clears the bus and its responder
+    auto const answer
+      = [&](std::uint8_t addr, std::span<std::byte const> sent, std::span<std::byte> recv) {
+            if(addr != 0x40 || sent.empty()) { return FakeBus::Result::nack; }
+            auto const reg = static_cast<std::uint8_t>(sent[0]);
+            if(reg == 0x00 && sent.size() == 3) {
+                configWrites.push_back((static_cast<unsigned>(sent[1]) << 8U)
+                                       | static_cast<unsigned>(sent[2]));
+            }
+            if(sent.size() > 1) {
+                regs[reg].clear();
+                for(auto const b : sent.subspan(1)) {
+                    regs[reg].push_back(static_cast<std::uint8_t>(b));
+                }
+            }
+            if(!recv.empty()) {
+                readLengths[reg].push_back(recv.size());
+                auto const& r = regs[reg];
+                for(std::size_t i = 0; i < recv.size(); ++i) {
+                    recv[i] = std::byte{i < r.size() ? r[i] : std::uint8_t{0xFF}};
+                }
+            }
+            return FakeBus::Result::ok;
+        };
+    ScopedHook const answering{FakeBus::respond, answer};
+    auto const       allOf = [&](std::uint8_t reg, std::size_t n) {
+        auto const l = readLengths.find(reg);
+        return l != readLengths.end() && !l->second.empty()
+            && std::ranges::all_of(l->second, [&](std::size_t x) { return x == n; });
+    };
+    auto const word = [&](std::uint8_t reg) {
+        auto const r = regs.find(reg);
+        return r != regs.end() && r->second.size() == 2
+               ? static_cast<unsigned>((r->second[0] << 8U) | r->second[1])
+               : 0x10000U;
+    };
+
+    regs = {
+      {0x3E,       {0x54, 0x49}},
+      {0x3F,       {0x22, 0x81}}, // INA228
+      {0x04, {0x10, 0x00, 0x00}}, // 20.48 mV
+      {0x05, {0x20, 0x00, 0x00}}, // 25.6 V
+      {0x06,       {0x0C, 0x80}}, // 25 degC at 7.8125 m degC
+      {0x07, {0x08, 0x00, 0x00}}, // 0.625 A
+      {0x08, {0x03, 0x00, 0x00}}, // 12 W
+      {0x0B,       {0x00, 0x01}}, // DIAG_ALRT: MEMSTAT, no average finished yet
+    };
+    readLengths.clear();
+    {
+        Dev<Both> d{};
+        runFor(d, 1500ms);
+        check(d.identified(), "manufacturer 0x5449, device 0x2281");
+        check(Both::isIna228(d.state()), "and known for an INA228");
+        check(configWrites.size() == 2 && configWrites[0] == 0x8000U && configWrites[1] == 0x0000U,
+              "CONFIG.RST first, then CONFIG");
+        checkEq(word(0x01), 0xFFE4U, "ADC_CONFIG from the knobs");
+        checkEq(word(0x02), 500U, "SHUNT_CAL");
+        check(!d.valid(), "no sample while CNVRF is clear");
+        check(readLengths[0x0B].size() >= 2 && d.rejected<Both::Power>() == 0,
+              "frames were read, and are unchanged, not rejected");
+
+        regs[0x0B] = {0x00, 0x03};   // CNVRF: an average finished
+        check(runUntil(d, [&] { return d.valid(); }, 800ms), "then the first sample");
+        check(allOf(0x04, 3) && allOf(0x05, 3) && allOf(0x07, 3),
+              "24-bit reads of 0x04, 0x05, 0x07");
+        check(allOf(0x08, 3) && allOf(0x06, 2) && allOf(0x0B, 2), "power 3, die and DIAG_ALRT 2");
+        checkEq(d.latest().shuntVoltage, 20480000, "shunt at 312.5 nV/LSB");
+        checkEq(d.latest().busVoltage, 25600000U, "bus at 195.3125 uV/LSB");
+        checkEq(d.latest().dieTemperature, 25000, "die at 7.8125 m degC/LSB");
+        checkEq(d.latest().current, 624984, "current at MaxCurrent / 2^19");
+        checkEq(d.latest().power, 11999694U, "power at 3.2 x that");
+        checkEq(d.latest().diagnostics, 0x0003U, "DIAG_ALRT as read");
+
+        regs[0x05]   = {0x20, 0x00, 0x70};   // 7 more counts in the low bits the INA238 lacks
+        auto const n = d.seq();
+        check(runUntil(d, [&] { return d.seq() > n; }, 800ms), "the next average");
+        checkEq(d.latest().busVoltage,
+                25601367U,
+                "the low four bits count: 25.6 V + 7 x 195.3125 uV");
+
+        regs[0x0B]          = {0x02, 0x03};   // MATHOF
+        auto const rejected = d.rejected<Both::Power>();
+        check(runUntil(
+                d,
+                [&] { return d.rejected<Both::Power>() > rejected; },
+                800ms),
+              "a frame with MATHOF is rejected");
+    }
+
+    testcase.next("INA238/INA228: an INA238 is read at 16 bits, as Ina238 reads it");
+    ScopedHook const answering2{FakeBus::respond, answer};
+    regs = {
+      {0x3E,       {0x54, 0x49}},
+      {0x3F,       {0x23, 0x81}}, // INA238
+      {0x04,       {0x10, 0x00}}, // 4096 x 5 uV = 20.48 mV
+      {0x05,       {0x20, 0x00}}, // 8192 x 3.125 mV = 25.6 V
+      {0x06,       {0x0C, 0x80}}, // 200 x 125 m degC = 25 degC
+      {0x07,       {0x08, 0x00}}, // 2048 x CURRENT_LSB = 0.625 A
+      {0x08, {0x00, 0x30, 0x00}}, // 12288 x 0.2 x CURRENT_LSB = 0.75 W
+      {0x0B,       {0x00, 0x03}}, // CNVRF and MEMSTAT
+    };
+    readLengths.clear();
+    {
+        Dev<Both> d{};
+        check(runUntil(d, [&] { return d.valid(); }, 1500ms), "first sample");
+        check(!Both::isIna228(d.state()), "known for an INA238");
+        checkEq(word(0x01), 0xFFE4U, "the same ADC_CONFIG");
+        checkEq(word(0x02), 500U, "the same SHUNT_CAL");
+        check(allOf(0x04, 2) && allOf(0x05, 2) && allOf(0x07, 2),
+              "16-bit reads of 0x04, 0x05, 0x07: what Ina238 sends");
+        check(allOf(0x08, 3) && allOf(0x06, 2) && allOf(0x0B, 2), "power 3, die and DIAG_ALRT 2");
+        checkEq(d.latest().shuntVoltage, 20480000, "shunt at 5 uV/LSB");
+        checkEq(d.latest().busVoltage, 25600000U, "bus at 3.125 mV/LSB");
+        checkEq(d.latest().dieTemperature, 25000, "die at 125 m degC/LSB");
+        checkEq(d.latest().current, 624998, "current at MaxCurrent / 2^15");
+        checkEq(d.latest().power, 749998U, "power at 0.2 x that");
+    }
+
+    testcase.next("INA238/INA228: another die of the family is not taken");
+    ScopedHook const answering3{FakeBus::respond, answer};
+    for(std::uint8_t const hi : {std::uint8_t{0x22}, std::uint8_t{0x23}}) {
+        regs[0x3F] = {hi, 0x91};   // 229h, 239h
+        regs.erase(0x01);
+        regs.erase(0x02);
+        Dev<Both> d{};
+        runFor(d, 500ms);
+        check(!d.identified(), "turned down");
+        check(regs.count(0x02) == 0, "and not configured");
+    }
+}
+
 void ad5665() {
     I2cCase const                          testcase{"AD5665R"};
     std::vector<std::vector<std::uint8_t>> dacWrites;
@@ -1529,6 +1691,7 @@ int main() {
     eeprom24aa025e48();
     ad7291();
     ina238();
+    ina238Or228();
     ad5665();
     lmk1d1208i();
     lmk1d1208iSecondAddress();

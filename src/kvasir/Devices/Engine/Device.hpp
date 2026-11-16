@@ -70,6 +70,11 @@
 ///   prepare()     -- may return a std::size_t instead of void: how many bytes this run
 ///                    reads, so one description serves a four-byte and a sixty-four-byte
 ///                    read. Such a group has exactly one read step.
+///   count(State const&, std::size_t step) -- how many bytes read step `step` takes from the
+///                    part that answered, at most the script's count: one description for a
+///                    family whose members hold a register at two widths (Ina238Or228: the
+///                    INA238's 16-bit results, the INA228's 24-bit ones). Not with a sized
+///                    prepare().
 ///   Step::readCounted / receiveCounted -- a read whose length an earlier read of the same
 ///                    run put in the buffer (one or two bytes, big-endian), clamped to the
 ///                    step's most: a GNSS receiver's "bytes available", then that many of

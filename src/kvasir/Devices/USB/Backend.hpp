@@ -89,6 +89,9 @@
 ///     static void stall();  static void clearStall();
 ///     static void resetDataToggle();             // next packet DATA0
 ///     static void reset();                       // bus reset: toggle and buffer selection
+///     static bool wipeBuffers();                 // optional, OUT: the controller's buffers zeroed,
+///                                                // false (nothing done) while a packet waits unread
+///                                                // (BulkDataAdapter::wipeReceived)
 ///
 /// More than a packet per arm. A controller that splits an IN transfer into packets by itself
 /// says how much one arm may carry, and takes the bytes where they are instead of copying them:

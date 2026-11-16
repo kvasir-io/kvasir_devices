@@ -318,7 +318,9 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
                 // a prepare() that returns a count sizes THE read of the group, so there
                 // has to be exactly one for the count to be unambiguous
                 &&(!Detail::HasSizedPrepare<G>
-                   || Detail::readSteps(std::span<Step const>{G::steps}) == 1);
+                   || Detail::readSteps(std::span<Step const>{G::steps}) == 1)
+                // one way to size a run: the Request's or the part's
+                && !(Detail::HasSizedPrepare<G> && Detail::HasStateCount<G, State>);
         } else {
             // Transient says "not a state, do not replay"; Initial says "a state, restore it
             // after every bring-up". A group cannot mean both.
@@ -563,9 +565,9 @@ struct DeviceCore : Detail::EngineState<Port, Clock> {
         return any;
     }
 
-    static constexpr bool needsWake = wakeRetries > 0;
-    static constexpr bool needsSizedRead
-      = anyRead_([]<typename G>() { return Detail::HasSizedPrepare<G>; });
+    static constexpr bool needsWake      = wakeRetries > 0;
+    static constexpr bool needsSizedRead = anyRead_(
+      []<typename G>() { return Detail::HasSizedPrepare<G> || Detail::HasStateCount<G, State>; });
     static constexpr bool needsReady = anyRead_([]<typename G>() { return Detail::HasReady<G>; });
     static constexpr bool needsDynamicPeriod
       = anyRead_([]<typename G>() { return Detail::HasDynamicPeriod<G>; });
@@ -627,7 +629,8 @@ private:
 
         /// A group whose prepare() returned a count reads that many bytes instead of the
         /// script's. Such a group has exactly one read step (static_asserted), so the count is
-        /// simply what was asked for.
+        /// simply what was asked for. A group with count(State, step) reads what the part that
+        /// answered holds at this step, never more than the script's count (HasStateCount).
         static void sizeRead(EngineStateT& e) {
             auto& d = self_(e);
             Detail::withIndex(
@@ -636,6 +639,10 @@ private:
                   using G = typename Detail::Nth<Reads>::template type<decltype(i)::value>;
                   if constexpr(Detail::HasSizedPrepare<G>) {
                       d.current_.count = std::get<decltype(i)::value>(d.reads_).len;
+                  } else if constexpr(Detail::HasStateCount<G, State>) {
+                      State const& state = d.state_;
+                      auto const   n     = static_cast<std::uint8_t>(G::count(state, d.step_));
+                      if(n != 0 && n < d.current_.count) { d.current_.count = n; }
                   }
               },
               std::make_index_sequence<Reads::size>{});

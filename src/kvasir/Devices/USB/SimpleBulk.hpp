@@ -155,6 +155,15 @@ public:
 
     /// Where the IN side stands, for a test or a log that wants to report it.
     static auto sendDiagnostics() { return DataEndpointHandler::sendDiagnostics(); }
+
+    /// Zero what this interface received and the application has read (BulkDataAdapter::wipeReceived, BulkEndpoints.hpp):
+    /// for requests that carry secrets, called once one is read, before its answer goes out. False while a packet waits
+    /// in the controller unread: call it again later.
+    static bool wipeReceived()
+        requires Bidirectional
+    {
+        return DataEndpointHandler::wipeReceived();
+    }
 };
 
 /// A byte stream in both directions.

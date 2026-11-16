@@ -10,9 +10,9 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -260,7 +260,7 @@ namespace ACM {
                     Derived::stallControlRequest();
                     return true;
                 }
-                std::memcpy(std::addressof(lineCoding), tempBuffer.data(), tempBuffer.size());
+                lineCoding = std::bit_cast<USB::CDC::LineCoding>(tempBuffer);
                 Derived::acknowledgeSetupRequest();
                 UC_LOG_D(
                   "CDC-ACM: Line coding set - {} baud, {} data bits, parity={}, stop "
@@ -313,6 +313,11 @@ namespace ACM {
         static bool isSendReady() { return DataEndpointHandler::isSendReady() && isConnected(); }
 
         static auto& getRecvBuffer() { return DataEndpointHandler::getRecvBuffer(); }
+
+        /// Zero what came in and the application has read (BulkDataAdapter::wipeReceived, BulkEndpoints.hpp): for
+        /// requests that carry secrets, once one is read, before its answer goes out. False while a packet waits in
+        /// the controller unread: call it again later.
+        static bool wipeReceived() { return DataEndpointHandler::wipeReceived(); }
 
         static bool send(std::span<std::byte const> data) {
             return DataEndpointHandler::send(data);
