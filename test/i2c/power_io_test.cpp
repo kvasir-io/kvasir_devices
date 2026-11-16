@@ -1040,7 +1040,7 @@ void ina238Or228() {
         Dev<Both> d{};
         runFor(d, 500ms);
         check(!d.identified(), "turned down");
-        check(regs.count(0x02) == 0, "and not configured");
+        check(!regs.contains(0x02), "and not configured");
     }
 }
 
